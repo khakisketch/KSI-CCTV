@@ -1,0 +1,34 @@
+[Unit]
+Description=KSI-CCTV Streamlit dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Site-specific values: create this user/group and install the project at
+# WorkingDirectory, or adjust all three values for the target deployment.
+User=ksi-cctv
+Group=ksi-cctv
+WorkingDirectory=/opt/ksi-cctv
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TZ=Asia/Seoul
+# Site-specific secrets/env file. Keep owner-readable only, do not commit it.
+EnvironmentFile=-/etc/ksi-cctv/ksi-cctv.env
+ExecStart=/bin/bash scripts/run_dashboard.sh
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+# Minimal hardening while preserving required runtime write paths.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+# Writable paths required by logs/captures, user-uploaded ONNX files, and the
+# existing Phase 6 uploaded-model registration path. Keep config writable only
+# for model_profiles.yaml, not the whole config directory.
+ReadWritePaths=/opt/ksi-cctv/logs /opt/ksi-cctv/data /opt/ksi-cctv/models/uploaded /opt/ksi-cctv/config/model_profiles.yaml
+
+[Install]
+WantedBy=multi-user.target

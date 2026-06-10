@@ -1,0 +1,101 @@
+# 기본 설정
+app:
+  name: "KSI-CCTV"
+  version: "0.1.0"
+  debug: true
+  log_level: "DEBUG"
+  log_dir: "./logs"
+  timezone: "Asia/Seoul"
+
+# 대시보드 설정
+ui:
+  dashboard_port: 8080
+  dashboard_title: "KSI-CCTV 안전 관리 대시보드"
+  refresh_interval_ms: 1000
+  max_display_alerts: 50
+
+# CCTV 채널 설정
+# 실제 운영에서는 config/cameras.yaml에서 관리
+cameras:
+  default_fps: 30
+  max_channels: 16
+  reconnect_interval_sec: 5
+  timeout_sec: 10
+
+# 모델 설정
+models:
+  yolo:
+    model_path: "./models/yolo26.onnx"
+    input_size: [640, 640]
+    conf_threshold: 0.25
+    iou_threshold: 0.45
+    postprocess_mode: "auto"  # auto, nms, nms_free
+    class_profile: "coco"  # coco(pretrained yolo26n) 또는 safety_custom(커스텀 안전 모델)
+    # YOLO26은 end-to-end NMS-free 구조로 추론 속도가 더 빠름
+    # Ultralytics: yolo export model=yolo26n.pt format=onnx imgsz=640 half=True device=0
+    # safety_custom 모델을 사용할 때만 classes를 모델 학습 순서와 동일하게 지정하세요.
+    # classes: [person, helmet, vest, fire, smoke, fall]
+  vlm:
+    provider: "ollama"
+    model_name: "qwen3-vl:latest"
+    base_url: "http://localhost:11434"
+    enabled: true
+    timeout_sec: 60
+    max_retries: 2
+    prompt_template: "./config/prompts/construction.yaml"
+
+# 감지 설정
+detection:
+  # YOLO 필터링 프레임 간격 (1 = 모든 프레임, 5 = 5프레임마다)
+  skip_frames: 5
+  # 알람 발송 최소 간격 (초)
+  alert_cooldown_sec: 30
+  # 관심 클래스 (쉼표 구분)
+  # COCO pretrained 모델은 fire/smoke/fall/helmet/vest 직접 탐지가 어렵습니다.
+  # 해당 이벤트는 VLM 분석 또는 safety_custom YOLO 모델로 보강하세요.
+  target_classes: "person,fire,smoke,fall"
+  # COCO pretrained 모델에서도 person 탐지 프레임을 VLM 분석 후보로 보냅니다.
+  # 이 이벤트는 AlertManager로 전달하지 않아 이메일/캡처 알람 폭주를 방지합니다.
+  vlm_trigger_classes: "person"
+  vlm_cooldown_sec: 60
+  # 참고: 안전모/조끼 판정은 class_profile=safety_custom 모델 또는 VLM에서 수행합니다.
+
+# 디바이스 설정
+device:
+  # auto, cpu, cuda
+  primary: "cuda"
+  # GPU 할당 비율 (0.8 = 80%)
+  gpu_memory_fraction: 0.8
+  # FP16 추론
+  fp16: true
+
+# 알람 설정
+alerts:
+  enabled: true
+  # 로그 파일 경로
+  log_file: "./logs/alerts.log"
+  # 콘솔 출력
+  console_output: true
+  # 이미지 캡처 저장
+  save_images: true
+  image_dir: "./data/captures"
+  # 이미지 보관 기간 (일)
+  image_retention_days: 30
+  # 저장 전 얼굴 블러링(개인정보 보호)
+  blur_faces: true
+  face_blur_strength: 35
+  # 알람 로그 로테이션
+  log_max_bytes: 10485760
+  log_backup_count: 5
+
+# RTSP 설정
+rtsp:
+  # FFmpeg 사용 여부 (성능 우선시)
+  use_ffmpeg: true
+  # 버퍼 크기 (초)
+  buffer_size_sec: 2
+  # 해상도 (0 = 원본)
+  width: 0
+  height: 0
+  # 프레임 드롭 허용
+  allow_frame_drop: true

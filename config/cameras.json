@@ -1,0 +1,32 @@
+[
+  {
+    "id": "cam_001",
+    "name": "정문 입구",
+    "location": "1층 정문",
+    "stream_url": "${CCTV_CAM_001_URL}",
+    "fps": 30,
+    "resolution": [1920, 1080],
+    "enabled": true,
+    "detection_type": "construction"
+  },
+  {
+    "id": "cam_002",
+    "name": "작업 현장 A",
+    "location": "지하 2층 A구역",
+    "stream_url": "${CCTV_CAM_002_URL}",
+    "fps": 25,
+    "resolution": [1280, 720],
+    "enabled": false,
+    "detection_type": "construction"
+  },
+  {
+    "id": "cam_003",
+    "name": "복도",
+    "location": "1층 서쪽 복도",
+    "stream_url": "${CCTV_CAM_003_URL}",
+    "fps": 30,
+    "resolution": [1920, 1080],
+    "enabled": false,
+    "detection_type": "school"
+  }
+]

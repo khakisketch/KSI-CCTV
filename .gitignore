@@ -1,0 +1,51 @@
+# KSI-CCTV
+# Model files are tracked via Git LFS (see .gitattributes)
+# *.onnx
+# *.pt
+# *.pth
+# *.weights
+data/captures/
+logs/
+models/uploaded/
+reports/
+cache/
+weights/
+dist/
+__pycache__/
+**/__pycache__/
+**/*.pyc
+*.egg-info/
+**/*.egg-info/
+build/
+.env
+.env.*
+!.env.example
+cameras.local.json
+config/cameras.local.json
+docker-compose.override.yml
+.vscode/
+.idea/
+.iml
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+*.m4v
+*.webm
+*.ogv
+*.mpg
+*.mpeg
+*.3gp
+*.3g2
+*.h264
+*.hevc
+*.y4m
+*.nut

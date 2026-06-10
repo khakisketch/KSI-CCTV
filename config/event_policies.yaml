@@ -1,0 +1,155 @@
+# Event policies for KSI-CCTV.
+# Policies map model detections to safety events.
+
+profiles:
+  construction:
+    policies:
+      person_detected:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.25
+        rule:
+          type: direct_detection
+        vlm: never
+        alert_level: low
+        cooldown_sec: 60
+        description: "사람 감지"
+
+      no_helmet:
+        enabled: true
+        trigger:
+          models: [ppe_yolo]
+          classes: [person, helmet]
+        rule:
+          type: safety_gear_overlap
+          gear: helmet
+          person_zone: head
+          min_overlap: 0.15
+        vlm: on_ambiguous
+        alert_level: medium
+        cooldown_sec: 30
+        description: "안전모 미착용"
+
+      no_vest:
+        enabled: true
+        trigger:
+          models: [ppe_yolo]
+          classes: [person, vest]
+        rule:
+          type: safety_gear_overlap
+          gear: vest
+          person_zone: torso
+          min_overlap: 0.20
+        vlm: on_ambiguous
+        alert_level: medium
+        cooldown_sec: 30
+        description: "안전조끼 미착용"
+
+      fire:
+        enabled: true
+        trigger:
+          models: [fire_smoke_yolo]
+          classes: [fire]
+          min_confidence: 0.40
+        rule:
+          type: direct_detection
+        vlm: always
+        alert_level: critical
+        cooldown_sec: 15
+        description: "화재 감지"
+
+      smoke:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [fire, smoke]
+          min_confidence: 0.30
+        rule:
+          type: direct_detection
+        vlm: on_high_confidence
+        alert_level: high
+        cooldown_sec: 20
+        description: "연기 감지 (화재 모델이 smoke을 탐지하지 않아 general_yolo + VLM으로 fallback)"
+
+      fall:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+        rule:
+          type: pose_anomaly
+          aspect_ratio_threshold: 2.0
+        vlm: always
+        alert_level: high
+        cooldown_sec: 20
+        description: "쓰러짐 의심"
+
+      restricted_area:
+        enabled: false
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+        rule:
+          type: zone_intrusion
+          zone_id: restricted
+        vlm: never
+        alert_level: medium
+        cooldown_sec: 30
+        description: "제한구역 침입"
+
+  school:
+    policies:
+      person_detected:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.25
+        rule:
+          type: direct_detection
+        vlm: never
+        alert_level: low
+        cooldown_sec: 60
+        description: "사람 감지"
+
+      fall:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+        rule:
+          type: pose_anomaly
+          aspect_ratio_threshold: 2.0
+        vlm: always
+        alert_level: high
+        cooldown_sec: 20
+        description: "쓰러짐 의심"
+
+      fight:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+        rule:
+          type: person_proximity
+          min_persons: 2
+          max_distance_px: 50
+        vlm: always
+        alert_level: critical
+        cooldown_sec: 20
+        description: "싸움/폭력 의심"
+
+      crowding:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+        rule:
+          type: count_threshold
+          min_count: 20
+        vlm: never
+        alert_level: low
+        cooldown_sec: 60
+        description: "혼잡 감지"

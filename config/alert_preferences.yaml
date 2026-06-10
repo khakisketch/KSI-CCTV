@@ -1,0 +1,13 @@
+# KSI-CCTV 알림 환경설정
+# 대시보드 "🔔 알림 설정" 탭에서 변경 가능
+# AlertManager는 파이프라인 시작 시 이 파일을 읽어 적용
+
+# 이메일 발송 alert_level 임계값
+# 이 임계값 이상의 alert_level을 가진 이벤트만 이메일을 발송합니다.
+# 허용 값: low, medium, high, critical
+email_alert_level_threshold: medium
+
+# 이벤트 타입별 이메일 발송 on/off
+# 키: 이벤트 타입 (event_policies.yaml의 policy name)
+# 값: true (발송) / false (차단)
+per_event_email_enabled: {}

@@ -1,0 +1,23 @@
+# Runtime dependencies
+numpy==2.2.4
+onnx==1.17.0
+onnxruntime-gpu==1.20.1
+opencv-python-headless==4.11.0.86
+pillow==11.1.0
+PyYAML==6.0.2
+streamlit==1.45.2
+ultralytics==8.3.111
+
+# Hugging Face Hub — Phase 9 M4: 사전학습 모델 다운로드에 필요
+huggingface_hub>=0.20.0
+
+# Torch stack required by Ultralytics export/training workflows.
+# If DGX Spark needs a CUDA-specific wheel, install the matching PyTorch build first.
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+
+# Utility dependencies
+requests==2.32.3
+tqdm==4.67.1
+pynvml==12.0.0

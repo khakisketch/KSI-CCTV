@@ -1,0 +1,70 @@
+# Camera-level detection profile draft.
+# In Phase 1 this is documentation/config foundation only.
+
+cameras:
+  cam_001:
+    domain: construction
+    enabled: true
+    enabled_events:
+      - person_detected
+      - no_helmet
+      - no_vest
+      - fire
+      - smoke
+      - fall
+    models:
+      - general_yolo
+      - ppe_yolo
+      - fire_smoke_yolo
+    zones: {}
+
+  cam_002:
+    domain: construction
+    enabled: false
+    enabled_events:
+      - no_helmet
+      - no_vest
+      - fire
+      - smoke
+      - restricted_area
+    models:
+      - general_yolo
+      - ppe_yolo
+      - fire_smoke_yolo
+    zones:
+      restricted:
+        type: polygon
+        points: []
+
+  cam_003:
+    domain: school
+    enabled: false
+    enabled_events:
+      - person_detected
+      - fall
+      - fight
+      - crowding
+    models:
+      - general_yolo
+    zones: {}
+
+domains:
+  construction:
+    label: "건설현장"
+    default_events: [person_detected, no_helmet, no_vest, fire, smoke, fall]
+    default_models: [general_yolo, ppe_yolo, fire_smoke_yolo]
+
+  school:
+    label: "학교"
+    default_events: [person_detected, fall, fight, crowding]
+    default_models: [general_yolo]
+
+  factory:
+    label: "공장"
+    default_events: [person_detected, no_helmet, restricted_area, fire, smoke]
+    default_models: [general_yolo, ppe_yolo, fire_smoke_yolo]
+
+  parking:
+    label: "주차장/빌딩"
+    default_events: [person_detected, restricted_area, fire, smoke]
+    default_models: [general_yolo, fire_smoke_yolo]

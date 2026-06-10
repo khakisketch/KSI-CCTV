@@ -1,0 +1,77 @@
+# KSI-CCTV model profiles
+# Phase 1 draft. Only general_yolo is currently expected to exist.
+
+models:
+  general_yolo:
+    enabled: true
+    type: yolo_onnx
+    source: built_in
+    model_path: "./models/yolo26.onnx"
+    class_profile: coco
+    classes: null
+    input_size: [640, 640]
+    conf_threshold: 0.25
+    iou_threshold: 0.45
+    postprocess_mode: auto
+    device: cuda
+    fp16: true
+    description: "COCO pretrained model for person, vehicle, and general objects."
+
+  ppe_yolo:
+    enabled: true
+    type: yolo_onnx
+    source: pre_trained
+    model_path: "./models/yolo26_ppe.onnx"
+    class_profile: safety_custom
+    classes: [person, helmet, vest]
+    input_size: [640, 640]
+    conf_threshold: 0.30
+    iou_threshold: 0.45
+    postprocess_mode: auto
+    device: cuda
+    fp16: true
+    description: "Pre-trained hard-hat detection model (keremberke/yolov8n-hard-hat-detection). Class-mapped to helmet/no_helmet."
+    class_map:
+      Hardhat: helmet
+      NO-Hardhat: no_helmet
+      Helmet: helmet
+      NO-Helmet: no_helmet
+      person: person
+
+  fire_smoke_yolo:
+    enabled: true
+    type: yolo_onnx
+    source: pre_trained
+    model_path: "./models/yolo26_fire_smoke.onnx"
+    class_profile: custom
+    classes: [fire, smoke]
+    input_size: [640, 640]
+    conf_threshold: 0.20
+    iou_threshold: 0.40
+    postprocess_mode: auto
+    device: cuda
+    fp16: true
+    description: "Pre-trained fire detection model (keremberke/yolov8n-fire-detection). Fire class only; smoke detection via VLM fallback."
+    class_map:
+      fire: fire
+      Fire: fire
+      smoke: smoke
+      Smoke: smoke
+
+  pose_fall_model:
+    enabled: false
+    type: future_pose_or_yolo
+    source: built_in
+    model_path: "./models/pose_fall.onnx"
+    classes: [person, fall]
+    description: "Future pose/fall model. Disabled until implemented."
+
+vlm:
+  enabled: true
+  provider: ollama
+  model_name: "qwen3-vl:latest"
+  base_url: "http://localhost:11434"
+  timeout_sec: 60
+  max_retries: 2
+  cooldown_sec: 60
+  max_concurrent: 2
