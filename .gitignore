@@ -11,6 +11,13 @@ reports/
 cache/
 weights/
 dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
 __pycache__/
 **/__pycache__/
 **/*.pyc

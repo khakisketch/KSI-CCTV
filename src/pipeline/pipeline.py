@@ -3,21 +3,22 @@
 
 캡처 → 탐지 → 알람 연결
 """
+from __future__ import annotations
+
 import logging
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
 
-from typing import TYPE_CHECKING
-
-from src.capture.rtsp_capture import RTSPCapture, CameraManager
-from src.detection.yolo_detector import YOLODetector, Detection
+from src.capture.rtsp_capture import CameraManager
+from src.detection.yolo_detector import Detection, YOLODetector
 
 if TYPE_CHECKING:
     from src.detection.model_registry import MultiModelRegistry  # noqa: F401
@@ -33,8 +34,8 @@ class SafetyEvent:
     event_type: str  # e.g. "no_helmet", "fire", "fall", "person"
     timestamp: datetime
     confidence: float
-    detections: List[Detection] = field(default_factory=list)
-    image: Optional[np.ndarray] = None
+    detections: list[Detection] = field(default_factory=list)
+    image: np.ndarray | None = None
     description: str = ""
     # VLM analysis fields
     vlm_risk_level: str = ""
@@ -44,7 +45,7 @@ class SafetyEvent:
     alert_level: str = "low"
     cooldown_sec: float = 30.0
     vlm_needed: bool = False
-    source_models: List[str] = field(default_factory=list)
+    source_models: list[str] = field(default_factory=list)
     rule_name: str = ""
 
     def to_dict(self):
@@ -74,15 +75,15 @@ class SafetyPipeline:
     
     카메라 캡처 → YOLO 탐지 → 이벤트 생성 → 알람 발송
     """
-    
+
     def __init__(
         self,
-        detector: Optional[YOLODetector] = None,
+        detector: YOLODetector | None = None,
         skip_frames: int = 5,
         alert_cooldown: float = 30.0,
-        target_classes: Optional[List[str]] = None,
-        vlm_trigger_classes: Optional[List[str]] = None,
-        vlm_cooldown: Optional[float] = None,
+        target_classes: list[str] | None = None,
+        vlm_trigger_classes: list[str] | None = None,
+        vlm_cooldown: float | None = None,
         # Phase 4 policy-based injection (optional)
         model_registry=None,  # MultiModelRegistry | None
         policy_engine=None,   # EventPolicyEngine | None
@@ -92,7 +93,7 @@ class SafetyPipeline:
         static_skip_multiplier: int = 4,
         # Phase 9: VLM timestamp cache
         vlm_cache_ttl_sec: float = 30.0,
-        vlm_cache_bypass_levels: Optional[List[str]] = None,
+        vlm_cache_bypass_levels: list[str] | None = None,
     ):
         self.detector = detector
         self.skip_frames = skip_frames
@@ -107,42 +108,49 @@ class SafetyPipeline:
         self.use_policy_mode = (model_registry is not None and policy_engine is not None)
 
         # Camera profile for policy evaluation (set via set_camera_profile)
-        self._camera_profiles: Dict[str, dict] = {}
+        self._camera_profiles: dict[str, dict] = {}
 
         self.camera_manager = CameraManager()
         self.is_running = False
-        self.threads: Dict[str, threading.Thread] = {}
+        self.threads: dict[str, threading.Thread] = {}
 
         # 알람 콜백
-        self.alert_callbacks: List[Callable[[SafetyEvent], None]] = []
-        self.analysis_callbacks: List[Callable[[SafetyEvent], None]] = []
+        self.alert_callbacks: list[Callable[[SafetyEvent], None]] = []
+        self.analysis_callbacks: list[Callable[[SafetyEvent], None]] = []
 
         # 프레임 카운터
-        self.frame_counters: Dict[str, int] = {}
+        self.frame_counters: dict[str, int] = {}
 
         # 알람 쿨다운 관리
-        self.last_alerts: Dict[str, float] = {}
-        self.last_vlm_observations: Dict[str, float] = {}
+        self.last_alerts: dict[str, float] = {}
+        self.last_vlm_observations: dict[str, float] = {}
 
         # 이벤트 히스토리
-        self.event_history: List[SafetyEvent] = []
+        self.event_history: list[SafetyEvent] = []
         self.max_history = 1000
-        self.latest_detections: Dict[str, List[Detection]] = {}
+        self.latest_detections: dict[str, list[Detection]] = {}
         self.latest_result_lock = threading.Lock()
+
+        # 공유 상태(event_history, last_alerts, last_vlm_observations, _vlm_cache 등)를
+        # 카메라별 스레드 간 동시 접근으로부터 보호한다.
+        self._state_lock = threading.Lock()
+        # 메모리 보호: 히스토리 메타데이터는 max_history까지 유지하되, 원본 프레임
+        # 이미지는 최근 _history_image_keep건만 보존(이후 해제)해 누적 메모리를 제한한다.
+        self._history_image_keep = 50
 
         # Phase 8 M5.3: Dynamic frame skip
         self.dynamic_skip = dynamic_skip
         self.motion_threshold = motion_threshold
         self.static_skip_multiplier = static_skip_multiplier
-        self._last_frame_gray: Dict[str, np.ndarray] = {}
-        self._motion_detected: Dict[str, bool] = {}
+        self._last_frame_gray: dict[str, np.ndarray] = {}
+        self._motion_detected: dict[str, bool] = {}
 
         # Phase 9: VLM timestamp cache (camera_id, event_type) → last_analyzed_ts
         self.vlm_cache_ttl_sec = float(vlm_cache_ttl_sec)
         self.vlm_cache_bypass_levels = set(
             vlm_cache_bypass_levels or ["critical", "high"]
         )
-        self._vlm_cache: Dict[tuple, float] = {}
+        self._vlm_cache: dict[tuple, float] = {}
         self._vlm_cache_stats = {
             "hits": 0,
             "misses": 0,
@@ -152,21 +160,25 @@ class SafetyPipeline:
         # VLM 분석
         self.vlm_provider = None
         self.context_builder = None
-        self._vlm_executor: Optional[ThreadPoolExecutor] = None
+        self._vlm_executor: ThreadPoolExecutor | None = None
 
         logger.info("SafetyPipeline 초기화 완료")
 
     def enable_vlm(self, provider, prompt_template_path: str):
         """VLM 분석 활성화"""
-        from src.vlm.ollama_provider import OllamaProvider
         from src.vlm.context_builder import ContextBuilder
+        from src.vlm.ollama_provider import OllamaProvider
+        from src.vlm.prompt_selector import PromptSelector
 
         if not isinstance(provider, OllamaProvider):
             logger.error("지원하지 않는 VLM 제공자입니다")
             return
 
         self.vlm_provider = provider
+        # 기본 컨텍스트 빌더 (하위 호환성)
         self.context_builder = ContextBuilder(prompt_template_path)
+        # 프롬프트 선택기 초기화
+        self.prompt_selector = PromptSelector()
         self._vlm_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vlm")
         available = provider.is_available()
         logger.info(f"VLM 활성화 완료 (provider={provider.model}, available={available})")
@@ -176,48 +188,30 @@ class SafetyPipeline:
         self._camera_profiles[camera_id] = profile
 
     def _analyze_with_vlm(self, event: SafetyEvent):
-        """별도 스레드에서 VLM 분석 수행
-
-        Phase 9 timestamp cache:
-        - 동일 (camera_id, event_type)가 TTL 내면 VLM 호출 생략
-        - critical/high 이벤트는 bypass_levels에 있으면 즉시 호출
-        """
+        """별도 스레드에서 VLM 분석 수행"""
         from src.vlm.context_builder import ContextBuilder
 
         if self.vlm_provider is None or event.image is None:
             return
-
-        # Cache 검사
-        event_type = getattr(event, "event_type", "unknown")
-        alert_level = getattr(event, "alert_level", "low")
-        cache_key = (event.camera_id, event_type)
-        now_ts = time.time()
-
-        if alert_level in self.vlm_cache_bypass_levels:
-            self._vlm_cache_stats["bypasses"] += 1
-        else:
-            last_ts = self._vlm_cache.get(cache_key)
-            if last_ts is not None and (now_ts - last_ts) < self.vlm_cache_ttl_sec:
-                self._vlm_cache_stats["hits"] += 1
-                event.description = f"VLM 캐시 (TTL {self.vlm_cache_ttl_sec}s)"
-                event.vlm_risk_level = "low"
-                event.vlm_confidence = 0.0
-                event.vlm_inference_ms = 0.0
-                logger.debug(
-                    f"[{event.camera_id}] VLM cache hit: {event_type}"
-                )
-                return
-            self._vlm_cache_stats["misses"] += 1
 
         try:
             # BGR → JPEG bytes
             _, buf = cv2.imencode(".jpg", event.image)
             image_bytes = buf.tobytes()
 
+            # 카메라의 detection_type에 따라 프롬프트 자동 선택
+            camera_config = self._camera_profiles.get(event.camera_id, {})
+            detection_type = camera_config.get("detection_type", "default") if isinstance(camera_config, dict) else "default"
+
             # 컨텍스트 구성
             det_summary = ContextBuilder.format_detections(event.detections)
             recent_events = ContextBuilder.format_events(self.event_history, max_count=5)
-            prompt = self.context_builder.build(det_summary, recent_events)
+
+            # 프롬프트 선택기 사용 (있으면), 없으면 기본 빌더
+            if hasattr(self, 'prompt_selector') and self.prompt_selector is not None:
+                prompt = self.prompt_selector.build_prompt(detection_type, det_summary, recent_events)
+            else:
+                prompt = self.context_builder.build(det_summary, recent_events)
 
             result = self.vlm_provider.analyze(image_bytes, prompt)
 
@@ -226,8 +220,17 @@ class SafetyPipeline:
             event.vlm_confidence = result.confidence
             event.vlm_inference_ms = result.inference_time_ms
 
-            # Cache 갱신
-            self._vlm_cache[cache_key] = now_ts
+            # VLM 결과의 risk_level이 event의 alert_level보다 높으면 업데이트
+            risk_priority = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+            if risk_priority.get(result.risk_level, 0) > risk_priority.get(event.alert_level, 0):
+                event.alert_level = result.risk_level
+
+            # 파싱 실패 시 원본 응답 저장
+            if hasattr(result, 'parse_success') and not result.parse_success:
+                logger.warning(
+                    f"[{event.camera_id}] VLM JSON 파싱 실패. 원본 응답 일부: "
+                    f"{(result.raw_response or '')[:200]}"
+                )
 
             logger.info(
                 f"[{event.camera_id}] VLM 분석: {result.description[:80]} "
@@ -237,16 +240,76 @@ class SafetyPipeline:
             logger.error(f"VLM 분석 실패 [{event.camera_id}]: {e}")
             event.description = "VLM 분석 불가"
 
-    def get_vlm_cache_stats(self) -> Dict[str, Any]:
+    def get_vlm_cache_stats(self) -> dict[str, Any]:
         """VLM cache 통계 반환."""
-        return dict(self._vlm_cache_stats)
+        with self._state_lock:
+            return dict(self._vlm_cache_stats)
 
     def reset_vlm_cache(self) -> None:
         """VLM cache와 통계 초기화 (공개 메서드)."""
-        self._vlm_cache.clear()
-        for k in self._vlm_cache_stats:
-            self._vlm_cache_stats[k] = 0
+        with self._state_lock:
+            self._vlm_cache.clear()
+            for k in self._vlm_cache_stats:
+                self._vlm_cache_stats[k] = 0
         logger.info("VLM cache 및 통계 초기화됨")
+
+    def _record_event(self, event: SafetyEvent) -> None:
+        """이벤트를 히스토리에 스레드-안전하게 기록하고 오래된 이미지를 해제한다.
+
+        - 카메라 스레드 간 동시 append/pop으로 인한 race를 _state_lock으로 방지.
+        - 메타데이터는 max_history까지 유지하되, 원본 프레임 이미지는 최근
+          _history_image_keep건만 보존(이후 None)해 누적 메모리(1080p×수백건 → 수 GB)를 제한한다.
+        """
+        with self._state_lock:
+            self.event_history.append(event)
+            if len(self.event_history) > self.max_history:
+                self.event_history.pop(0)
+            if len(self.event_history) > self._history_image_keep:
+                stale = self.event_history[-(self._history_image_keep + 1)]
+                stale.image = None
+
+    def _should_submit_vlm(self, event: SafetyEvent) -> bool:
+        """VLM TTL cache에 따라 분석 제출 여부를 결정한다.
+
+        `critical/high` 등 bypass level은 안전 이벤트 설명 누락을 피하기 위해
+        cache를 무시하고 항상 제출한다. 그 외 이벤트는 `(camera_id, event_type)`
+        기준 TTL 내 중복 제출을 막는다.
+        """
+        alert_level = (event.alert_level or "low").strip().lower()
+        with self._state_lock:
+            if alert_level in self.vlm_cache_bypass_levels:
+                self._vlm_cache_stats["bypasses"] += 1
+                return True
+
+            cache_key = (event.camera_id, event.event_type)
+            now = time.time()
+            last_ts = self._vlm_cache.get(cache_key)
+            if last_ts is not None and now - last_ts < self.vlm_cache_ttl_sec:
+                self._vlm_cache_stats["hits"] += 1
+                return False
+
+            self._vlm_cache[cache_key] = now
+            self._vlm_cache_stats["misses"] += 1
+            return True
+
+    def _submit_vlm_analysis(self, event: SafetyEvent) -> bool:
+        """VLM 분석을 cache 정책에 따라 제출한다."""
+        if self._vlm_executor is None or event.image is None:
+            return False
+        if not self._should_submit_vlm(event):
+            logger.debug(
+                "[%s] VLM cache hit: event_type=%s alert_level=%s",
+                event.camera_id,
+                event.event_type,
+                event.alert_level,
+            )
+            return False
+        try:
+            self._vlm_executor.submit(self._analyze_with_vlm, event)
+            return True
+        except Exception as e:
+            logger.error(f"VLM 제출 실패 [{event.camera_id}]: {e}")
+            return False
 
     def stop(self):
         """파이프라인 중지"""
@@ -258,11 +321,11 @@ class SafetyPipeline:
             self._vlm_executor.shutdown(wait=False)
             self._vlm_executor = None
         logger.info("SafetyPipeline 중지")
-    
+
     def add_camera(self, camera_id: str, stream_url: str, **kwargs):
         """카메라 추가"""
         return self.camera_manager.add_camera(camera_id, stream_url, **kwargs)
-    
+
     def add_alert_callback(self, callback: Callable[[SafetyEvent], None]):
         """알람 콜백 등록"""
         self.alert_callbacks.append(callback)
@@ -275,12 +338,12 @@ class SafetyPipeline:
         AlertManager에는 전달하지 않아 이메일/캡처 저장 알람 폭주를 방지한다.
         """
         self.analysis_callbacks.append(callback)
-    
+
     def start(self):
         """파이프라인 시작"""
         self.is_running = True
         self.camera_manager.start_all()
-        
+
         # 각 카메라별 처리 스레드
         for camera_id in self.camera_manager.cameras.keys():
             self.frame_counters[camera_id] = 0
@@ -292,7 +355,7 @@ class SafetyPipeline:
             thread.start()
             self.threads[camera_id] = thread
             logger.info(f"[{camera_id}] 처리 스레드 시작")
-    
+
     def _process_camera(self, camera_id: str):
         """카메라별 처리 루프"""
         capture = self.camera_manager.get_camera(camera_id)
@@ -370,11 +433,13 @@ class SafetyPipeline:
             return
 
         with self.latest_result_lock:
-            # 각 모델별 탐지 결과를 최신 결과에 병합
-            for model_name, detections in all_detections.items():
-                if model_name not in self.latest_detections:
-                    self.latest_detections[model_name] = []
-                self.latest_detections[model_name].extend(detections)
+            # 대시보드 실시간 스트림은 camera_id 기준으로 최신 결과를 조회한다.
+            # policy-mode에서는 여러 모델 결과를 flatten하여 해당 카메라의 최신 결과로 저장한다.
+            self.latest_detections[camera_id] = [
+                detection
+                for detections in all_detections.values()
+                for detection in detections
+            ]
 
         # 카메라 프로필 확인
         profile = self._camera_profiles.get(camera_id, {})
@@ -404,23 +469,18 @@ class SafetyPipeline:
             now = time.time()
             cooldown = float(event.cooldown_sec)
 
-            if cooldown_key in self.last_alerts:
-                if now - self.last_alerts[cooldown_key] < cooldown:
+            with self._state_lock:
+                last = self.last_alerts.get(cooldown_key)
+                if last is not None and now - last < cooldown:
                     continue
-            self.last_alerts[cooldown_key] = now
+                self.last_alerts[cooldown_key] = now
 
-            # VLM 필요 여부 확인
-            vlm_needed = event.vlm_needed
-            if vlm_needed and self._vlm_executor is not None and event.image is not None:
-                try:
-                    self._vlm_executor.submit(self._analyze_with_vlm, event)
-                except Exception as e:
-                    logger.error(f"VLM 제출 실패 [{camera_id}]: {e}")
+            # VLM 필요 여부 확인 (TTL cache 적용)
+            if event.vlm_needed:
+                self._submit_vlm_analysis(event)
 
             # 콜백 호출 (alert_level 기반 필터링은 AlertManager에서 처리)
-            self.event_history.append(event)
-            if len(self.event_history) > self.max_history:
-                self.event_history.pop(0)
+            self._record_event(event)
 
             logger.info(
                 f"[{event.camera_id}] 정책 이벤트 발생: {event.event_type} "
@@ -492,7 +552,7 @@ class SafetyPipeline:
         self,
         camera_id: str,
         timestamp: datetime,
-        detections: List[Detection],
+        detections: list[Detection],
         image: np.ndarray
     ):
         """VLM 후보 프레임을 알람 없이 이벤트 히스토리/대시보드로 전달."""
@@ -508,10 +568,11 @@ class SafetyPipeline:
 
         cooldown_key = f"{camera_id}_vlm_observation"
         now = time.time()
-        if cooldown_key in self.last_vlm_observations:
-            if now - self.last_vlm_observations[cooldown_key] < self.vlm_cooldown:
+        with self._state_lock:
+            last = self.last_vlm_observations.get(cooldown_key)
+            if last is not None and now - last < self.vlm_cooldown:
                 return
-        self.last_vlm_observations[cooldown_key] = now
+            self.last_vlm_observations[cooldown_key] = now
 
         event = SafetyEvent(
             event_id=f"{camera_id}_vlm_observation_{int(now)}",
@@ -524,8 +585,8 @@ class SafetyPipeline:
             description="VLM 분석 대기"
         )
         self._handle_event(event, notify_alerts=False, notify_analysis=True)
-    
-    def _determine_event_type(self, class_name: str, detections: List[Detection]) -> Optional[str]:
+
+    def _determine_event_type(self, class_name: str, detections: list[Detection]) -> str | None:
         """클래스 이름으로 이벤트 타입 결정"""
         event_type_map = {
             "person": "person_detected",
@@ -533,7 +594,7 @@ class SafetyPipeline:
             "smoke": "smoke_detected",
             "fall": "fall_detected"
         }
-        
+
         return event_type_map.get(class_name)
 
     def _emit_event(
@@ -541,17 +602,17 @@ class SafetyPipeline:
         camera_id: str,
         event_type: str,
         timestamp: datetime,
-        detections: List[Detection],
+        detections: list[Detection],
         image: np.ndarray
     ):
         """쿨다운 확인 후 이벤트 생성"""
         cooldown_key = f"{camera_id}_{event_type}"
         now = time.time()
-        if cooldown_key in self.last_alerts:
-            if now - self.last_alerts[cooldown_key] < self.alert_cooldown:
+        with self._state_lock:
+            last = self.last_alerts.get(cooldown_key)
+            if last is not None and now - last < self.alert_cooldown:
                 return
-
-        self.last_alerts[cooldown_key] = now
+            self.last_alerts[cooldown_key] = now
 
         event = SafetyEvent(
             event_id=f"{camera_id}_{event_type}_{int(now)}",
@@ -564,7 +625,7 @@ class SafetyPipeline:
         )
 
         self._handle_event(event)
-    
+
     def _handle_event(
         self,
         event: SafetyEvent,
@@ -572,9 +633,7 @@ class SafetyPipeline:
         notify_analysis: bool = False
     ):
         """이벤트 처리 및 알람 발송"""
-        self.event_history.append(event)
-        if len(self.event_history) > self.max_history:
-            self.event_history.pop(0)
+        self._record_event(event)
 
         log_label = "이벤트" if notify_alerts else "VLM 관찰"
         logger.info(
@@ -582,12 +641,8 @@ class SafetyPipeline:
             f"(신뢰도: {event.confidence:.2f})"
         )
 
-        # VLM 분석 제출 (비동기)
-        if self._vlm_executor is not None and event.image is not None:
-            try:
-                self._vlm_executor.submit(self._analyze_with_vlm, event)
-            except Exception as e:
-                logger.error(f"VLM 제출 실패: {e}")
+        # VLM 분석 제출 (비동기, TTL cache 적용)
+        self._submit_vlm_analysis(event)
 
         # 콜백 호출
         if notify_analysis:
@@ -603,17 +658,20 @@ class SafetyPipeline:
                     callback(event)
                 except Exception as e:
                     logger.error(f"알람 콜백 오류: {e}")
-    
-    def get_status(self) -> Dict:
+
+    def get_status(self) -> dict:
         """파이프라인 상태"""
+        with self._state_lock:
+            total = len(self.event_history)
+            recent = [e.to_dict() for e in self.event_history[-10:]]
         return {
             "running": self.is_running,
             "cameras": self.camera_manager.get_status(),
-            "total_events": len(self.event_history),
-            "recent_events": [e.to_dict() for e in self.event_history[-10:]]
+            "total_events": total,
+            "recent_events": recent,
         }
 
-    def get_latest_detections(self, camera_id: str) -> List[Detection]:
+    def get_latest_detections(self, camera_id: str) -> list[Detection]:
         """카메라별 최신 탐지 결과 조회"""
         with self.latest_result_lock:
             return list(self.latest_detections.get(camera_id, []))

@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -23,7 +23,7 @@ class PolicyDecision:
     cooldown_sec: float
     vlm_needed: bool
     rule_name: str
-    source_models: List[str]
+    source_models: list[str]
 
 
 class EventPolicyEngine:
@@ -31,14 +31,14 @@ class EventPolicyEngine:
 
     def __init__(
         self,
-        policies: Dict[str, Any],
-        rule_evaluators: Optional[RuleEvaluatorRegistry] = None,
+        policies: dict[str, Any],
+        rule_evaluators: RuleEvaluatorRegistry | None = None,
     ):
         self.policies = policies or {}
         self.rule_evaluators = rule_evaluators or RuleEvaluatorRegistry()
 
     @classmethod
-    def from_config(cls, path: str = "./config/event_policies.yaml") -> "EventPolicyEngine":
+    def from_config(cls, path: str = "./config/event_policies.yaml") -> EventPolicyEngine:
         return cls(ConfigLoader.load(path))
 
     def evaluate(
@@ -47,31 +47,42 @@ class EventPolicyEngine:
         model_detections: ModelDetections,
         frame: np.ndarray,
         camera_id: str,
-        timestamp: Optional[datetime] = None,
-        zones: Optional[dict] = None,
-        enabled_events: Optional[List[str]] = None,
-    ) -> List[PolicyDecision]:
+        timestamp: datetime | None = None,
+        zones: dict | None = None,
+        enabled_events: list[str] | None = None,
+    ) -> list[PolicyDecision]:
         profile = self.policies.get("profiles", {}).get(profile_name, {})
         policy_map = profile.get("policies", {}) if isinstance(profile, dict) else {}
         if not isinstance(policy_map, dict):
             return []
 
-        allowed = set(enabled_events) if enabled_events else None
-        decisions: List[PolicyDecision] = []
+        # enabled_events가 빈 리스트([])면 "아무 이벤트도 허용 안 함"이어야 한다.
+        # (이전 `if enabled_events`는 []를 falsy로 처리해 필터를 해제하는 논리 반전 버그였다.)
+        allowed = set(enabled_events) if enabled_events is not None else None
+        decisions: list[PolicyDecision] = []
 
         for policy_name, policy in policy_map.items():
             if not isinstance(policy, dict) or not policy.get("enabled", True):
                 continue
             if allowed is not None and policy_name not in allowed:
                 continue
-            if not self._trigger_matches(policy.get("trigger", {}), model_detections):
+            trigger = dict(policy.get("trigger", {}) or {})
+            if not self._trigger_matches(trigger, model_detections):
                 continue
 
+            # 룰 평가는 trigger.models 범위의 탐지만 사용한다.
+            # 여러 모델이 같은 객체를 탐지해 위반이 중복 카운트되는 것을 막고,
+            # 정책이 의도한 모델 출력만 보도록 한다.
+            trigger_models = trigger.get("models") or []
+            scoped_detections = (
+                {m: model_detections.get(m, []) for m in trigger_models}
+                if trigger_models else model_detections
+            )
+
             rule = dict(policy.get("rule", {}) or {})
-            trigger = dict(policy.get("trigger", {}) or {})
             rule.setdefault("classes", trigger.get("classes", []))
             rule.setdefault("min_confidence", trigger.get("min_confidence", 0.0))
-            rule_result = self.rule_evaluators.evaluate(rule, model_detections, frame, zones)
+            rule_result = self.rule_evaluators.evaluate(rule, scoped_detections, frame, zones)
             if not rule_result.get("triggered", False):
                 continue
 
@@ -132,7 +143,7 @@ class EventPolicyEngine:
         return True
 
     @staticmethod
-    def _determine_vlm_needed(vlm_policy: str, confidence: float, rule_result: Dict[str, Any]) -> bool:
+    def _determine_vlm_needed(vlm_policy: str, confidence: float, rule_result: dict[str, Any]) -> bool:
         policy = (vlm_policy or "never").strip().lower()
         if policy == "never":
             return False

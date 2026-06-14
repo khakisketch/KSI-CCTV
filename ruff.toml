@@ -1,0 +1,31 @@
+# ruff (linter/formatter) 설정 (Phase 5)
+line-length = 100
+
+[lint]
+# 핵심 규칙 + 보안 관련 규칙
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long (포매터에서 처리)
+    "B008",  # function call in default argument (FastAPI Depends 등에서 필요)
+    "E402",  # module level import not at top of file (sys.path 설정 후 import)
+]
+
+# 프로젝트별 예외
+[lint.per-file-ignores]
+"tests/*" = ["B011"]  # assert 사용
+"scripts/*" = ["E402", "B006"]  # 스크립트는 import 순서 자유
+
+[format]
+# black 호환 포매팅
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

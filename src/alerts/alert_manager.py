@@ -3,19 +3,21 @@
 
 이벤트 수신 → 로깅 → 이미지 저장 → 알람 발송 (SMTP)
 """
-import logging
+from __future__ import annotations
+
 import json
+import logging
+import os
 import shutil
 import smtplib
-import os
 import time
+from dataclasses import dataclass
 from datetime import datetime
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import List, Optional, Dict, Any
-from dataclasses import dataclass
+from typing import Any
 
 import cv2
 
@@ -23,6 +25,24 @@ from src.pipeline.pipeline import SafetyEvent
 from src.utils.config import mask_text  # Phase 8 M5.3 S3: URL 마스킹
 
 logger = logging.getLogger(__name__)
+
+
+def parse_alert_log_line(line: str) -> dict | None:
+    """`alerts.log` 한 줄에서 EVENT JSON payload를 파싱한다.
+
+    실제 formatter 출력은 `timestamp | level | EVENT | {json}` 형태이며,
+    과거 파서는 split index가 맞지 않아 JSON payload를 읽지 못했다.
+    """
+    if not line or "EVENT |" not in line:
+        return None
+    try:
+        payload = line.split("EVENT |", 1)[1].strip()
+        if not payload:
+            return None
+        return json.loads(payload)
+    except Exception:
+        return None
+
 
 @dataclass
 class AlertConfig:
@@ -52,38 +72,42 @@ class AlertManager:
     3. 콘솔 출력
     4. SMTP 이메일 발송 (설정 시)
     """
-    
+
     def __init__(self, config: AlertConfig):
         self.config = config
         self.event_count = 0
-        
+
         # Batch processing buffer (Phase 8 M5.2)
-        self._batch_buffer: List[SafetyEvent] = []
+        self._batch_buffer: list[SafetyEvent] = []
         self._batch_timer = None
         self.batch_flush_interval = config.batch_flush_interval
         self.batch_max_size = config.batch_max_size
-        
+
         # 디렉토리 생성
         Path(config.log_file).parent.mkdir(parents=True, exist_ok=True)
         Path(config.image_dir).mkdir(parents=True, exist_ok=True)
-        
+
         # 로그 핸들러 설정
         self._setup_logging()
-        
+
         # 캡처 디렉토리
         self.capture_dir = Path(config.image_dir)
         self.capture_dir.mkdir(parents=True, exist_ok=True)
         self.face_cascade = self._load_face_cascade() if config.blur_faces else None
-        
+
         # SMTP 설정 로드
         self.smtp_config = self._load_smtp_config()
 
         # 알림 환경설정 로드 (Phase 8 M5.2)
         self._alert_prefs = self._load_alert_preferences()
 
+        # 오래된 캡처 이미지 주기적 정리 throttle (handle_event에서 호출)
+        self._last_image_cleanup = 0.0
+        self._image_cleanup_interval_sec = 6 * 3600  # 6시간마다 최대 1회
+
         logger.info("AlertManager 초기화 완료")
-    
-    def _load_smtp_config(self) -> Optional[dict]:
+
+    def _load_smtp_config(self) -> dict | None:
         """SMTP 환경변수에서 설정 로드"""
         host = os.environ.get("KSI_CCTV_SMTP_HOST", "").strip()
         if not host:
@@ -99,14 +123,14 @@ class AlertManager:
                 if r.strip()
             ],
         }
-    
+
     def _setup_logging(self):
         """로깅 설정"""
         formatter = logging.Formatter(
             '%(asctime)s | %(levelname)s | %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-        
+
         # 파일 핸들러
         file_handler = RotatingFileHandler(
             self.config.log_file,
@@ -116,21 +140,23 @@ class AlertManager:
         )
         file_handler.setFormatter(formatter)
         file_handler.setLevel(logging.INFO)
-        
+
         # 콘솔 핸들러
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
         console_handler.setLevel(logging.INFO)
-        
+
         # 루트 로거에 추가
         alert_logger = logging.getLogger('alerts')
         alert_logger.setLevel(logging.INFO)
+        for handler in list(alert_logger.handlers):
+            handler.close()
         alert_logger.handlers.clear()
         alert_logger.addHandler(file_handler)
         alert_logger.addHandler(console_handler)
-        
+
         self.alert_logger = alert_logger
-    
+
     def handle_event(self, event: SafetyEvent):
         """이벤트 처리 (배치 모드 시 일정 간격/크기로 flush)"""
         if not self.config.enabled:
@@ -150,6 +176,26 @@ class AlertManager:
             # 즉시 모드 (기존 동작)
             self._log_event(event)
             self._send_email(event)
+
+        # 오래된 캡처 이미지 주기적 정리 (디스크 풀 방지)
+        self._maybe_cleanup_images()
+
+    def _maybe_cleanup_images(self) -> None:
+        """오래된 캡처 이미지를 주기적으로 정리한다(throttle).
+
+        handle_event마다 호출되지만 _image_cleanup_interval_sec 간격으로만 실제
+        cleanup_old_images()를 실행해 매 이벤트 디스크 스캔 비용을 피한다.
+        """
+        if self.config.image_retention_days <= 0:
+            return
+        now = time.time()
+        if now - self._last_image_cleanup < self._image_cleanup_interval_sec:
+            return
+        self._last_image_cleanup = now
+        try:
+            self.cleanup_old_images()
+        except Exception as exc:
+            logger.debug("이미지 정리 실패: %s", exc)
 
     def _maybe_flush_batch(self) -> None:
         """배치 flush 조건 확인 — 크기 또는 시간 도달 시 flush"""
@@ -177,7 +223,7 @@ class AlertManager:
         # 배치 이메일 발송 (medium+)
         self._send_batch_email(events)
 
-    def _log_batch(self, events: List[SafetyEvent]) -> None:
+    def _log_batch(self, events: list[SafetyEvent]) -> None:
         """배치 이벤트 일괄 로깅 (URL 마스킹 적용)"""
         for event in events:
             log_data = event.to_dict()
@@ -188,7 +234,7 @@ class AlertManager:
         if self.config.console_output:
             print(f"\n📦 배치 알람: {len(events)}건 처리 완료")
 
-    def _send_batch_email(self, events: List[SafetyEvent]) -> None:
+    def _send_batch_email(self, events: list[SafetyEvent]) -> None:
         """배치 이벤트 일괄 이메일 발송 (alert_level 임계값 + per-event 설정 적용)"""
         if not self.smtp_config or not self.smtp_config["recipients"]:
             return
@@ -235,8 +281,8 @@ class AlertManager:
             logger.info(f"배치 SMTP 알람 발송 완료: {len(sendable)}건")
         except Exception as exc:
             logger.error(f"배치 SMTP 알람 발송 실패: {exc}")
-    
-    def _load_alert_preferences(self) -> Dict[str, Any]:
+
+    def _load_alert_preferences(self) -> dict[str, Any]:
         """`config/alert_preferences.yaml` 로드 — 실패 시 기본값"""
         prefs_path = Path("./config/alert_preferences.yaml")
         if not prefs_path.exists():
@@ -272,13 +318,13 @@ class AlertManager:
             return
 
         alert_level = getattr(event, "alert_level", "low")
-        
+
         try:
             msg = MIMEMultipart("alternative")
             msg["From"] = self.smtp_config["user"]
             msg["To"] = ", ".join(self.smtp_config["recipients"])
             msg["Subject"] = f"[KSI-CCTV] {event.event_type} - {event.camera_id}"
-            
+
             # Plain text
             body_plain = (
                 f"이벤트: {event.event_type}\n"
@@ -287,7 +333,7 @@ class AlertManager:
                 f"신뢰도: {event.confidence:.2f}\n"
                 f"alert_level: {alert_level}\n"
             )
-            
+
             # HTML with alert_level badge
             level_colors = {
                 "low": "#2ca02c",
@@ -296,7 +342,7 @@ class AlertManager:
                 "critical": "#8c0000",
             }
             level_color = level_colors.get(alert_level, "#2ca02c")
-            
+
             body_html = f"""
             <html>
             <body style="font-family: sans-serif; padding: 20px;">
@@ -323,10 +369,10 @@ class AlertManager:
             </body>
             </html>
             """
-            
+
             msg.attach(MIMEText(body_plain, "plain", "utf-8"))
             msg.attach(MIMEText(body_html, "html", "utf-8"))
-            
+
             with smtplib.SMTP(
                 self.smtp_config["host"], self.smtp_config["port"]
             ) as server:
@@ -337,7 +383,7 @@ class AlertManager:
             logger.info(f"SMTP 알람 발송 완료: {event.event_type} ({alert_level})")
         except Exception as e:
             logger.error(f"SMTP 알람 발송 실패: {e}")
-    
+
     def _log_event(self, event: SafetyEvent):
         """이벤트 로깅 (URL 마스킹 적용)"""
         log_data = event.to_dict()
@@ -350,21 +396,21 @@ class AlertManager:
         if self.config.console_output:
             print(f"\n🚨 알람! [{event.camera_id}] {event.event_type} "
                   f"(신뢰도: {event.confidence:.2f})")
-    
+
     def _save_image(self, event: SafetyEvent):
         """이벤트 이미지 저장"""
         if event.image is None:
             return
-        
+
         # 날짜별 디렉토리
         date_str = event.timestamp.strftime('%Y%m%d')
         event_dir = self.capture_dir / date_str / event.camera_id
         event_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # 파일명
         filename = f"{event.event_type}_{event.timestamp.strftime('%H%M%S')}.jpg"
         filepath = event_dir / filename
-        
+
         # 이미지 저장
         try:
             image = self._prepare_image_for_storage(event.image)
@@ -402,59 +448,53 @@ class AlertManager:
             protected[y:y + h, x:x + w] = cv2.GaussianBlur(roi, (kernel, kernel), 0)
 
         return protected
-    
-    def get_event_log(self, limit: int = 100) -> List[dict]:
+
+    def get_event_log(self, limit: int = 100) -> list[dict]:
         """최근 이벤트 로그 조회"""
         events = []
         try:
-            with open(self.config.log_file, 'r', encoding='utf-8') as f:
+            with open(self.config.log_file, encoding='utf-8') as f:
                 lines = f.readlines()
-            
-            # JSON 파싱
+
             for line in lines[-limit:]:
-                try:
-                    parts = line.split(' | ')
-                    if len(parts) >= 3 and 'EVENT' in parts[2]:
-                        json_part = parts[2].split(' | ', 1)[1] if ' | ' in parts[2] else parts[2]
-                        event = json.loads(json_part)
-                        events.append(event)
-                except Exception:
-                    continue
-            
+                event = parse_alert_log_line(line)
+                if event is not None:
+                    events.append(event)
+
         except FileNotFoundError:
             pass
-        
+
         return events
-    
-    def get_captured_images(self, date: Optional[str] = None) -> List[Path]:
+
+    def get_captured_images(self, date: str | None = None) -> list[Path]:
         """캡처된 이미지 목록"""
         if date:
             target_dir = self.capture_dir / date
         else:
             target_dir = self.capture_dir
-        
+
         if not target_dir.exists():
             return []
-        
+
         images = []
         for dirpath in target_dir.rglob('*'):
             if dirpath.is_file() and dirpath.suffix.lower() in {'.jpg', '.jpeg', '.png'}:
                 images.append(dirpath)
-        
+
         return sorted(images, reverse=True)
-    
+
     def cleanup_old_images(self):
         """오래된 이미지 정리"""
         if self.config.image_retention_days <= 0:
             return
-        
+
         cutoff = datetime.now().timestamp() - (self.config.image_retention_days * 86400)
         deleted = 0
-        
+
         for date_dir in self.capture_dir.iterdir():
             if not date_dir.is_dir():
                 continue
-            
+
             # 디렉토리의 최근 수정 시간 확인
             try:
                 mtime = date_dir.stat().st_mtime
@@ -463,6 +503,6 @@ class AlertManager:
                     deleted += 1
             except Exception as e:
                 logger.error(f"정리 실패: {e}")
-        
+
         if deleted > 0:
             logger.info(f"{deleted}개 오래된 디렉토리 정리 완료")

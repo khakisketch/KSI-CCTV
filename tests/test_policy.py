@@ -1,6 +1,7 @@
 """Event policy engine tests."""
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent))
 
 import unittest
@@ -202,6 +203,36 @@ class TestEventPolicyEngine(unittest.TestCase):
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0].event.event_type, "crowding")
         self.assertFalse(decisions[0].vlm_needed)
+
+    def test_enabled_events_empty_list_allows_nothing(self):
+        # 빈 리스트는 "아무 이벤트도 허용 안 함"이어야 한다(논리 반전 버그 회귀 방지).
+        engine = EventPolicyEngine(self.policies)
+        decisions = engine.evaluate(
+            profile_name="construction",
+            model_detections={"fire_smoke_yolo": [Detection(0, "fire", 0.9, (0, 0, 20, 20))]},
+            frame=self.frame,
+            camera_id="cam_001",
+            enabled_events=[],
+        )
+        self.assertEqual(decisions, [])
+
+    def test_rule_evaluation_scoped_to_trigger_models(self):
+        # crowding(trigger=general_yolo, person>=2)은 general_yolo 범위만 세야 한다.
+        # 다른 모델(fire_smoke_yolo)이 우연히 'person'을 내도 합산되면 안 된다(중복 카운트 방지).
+        engine = EventPolicyEngine(self.policies)
+        decisions = engine.evaluate(
+            profile_name="construction",
+            model_detections={
+                "general_yolo": [Detection(0, "person", 0.9, (0, 0, 10, 20))],
+                "fire_smoke_yolo": [Detection(0, "person", 0.9, (30, 0, 40, 20))],
+            },
+            frame=self.frame,
+            camera_id="cam_001",
+            enabled_events=["crowding"],
+        )
+        # general_yolo에는 person 1명뿐 → min_count=2 미달 → 미발생
+        # (스코핑이 없으면 flatten으로 2명이 되어 잘못 트리거됨)
+        self.assertEqual(decisions, [])
 
     def test_project_event_policy_yaml_loads(self):
         engine = EventPolicyEngine.from_config("./config/event_policies.yaml")

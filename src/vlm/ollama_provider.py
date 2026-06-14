@@ -194,6 +194,8 @@ class OllamaProvider(VLMProvider):
                         detected_events=data.get("detected_events", []),
                         recommended_action=data.get("recommended_action", ""),
                         confidence=float(data.get("confidence", 0.5)),
+                        raw_response=content[:1000],
+                        parse_success=True,
                     )
                 except json.JSONDecodeError:
                     continue
@@ -207,10 +209,14 @@ class OllamaProvider(VLMProvider):
                 detected_events=data.get("detected_events", []),
                 recommended_action=data.get("recommended_action", ""),
                 confidence=float(data.get("confidence", 0.5)),
+                raw_response=content[:1000],
+                parse_success=True,
             )
         except json.JSONDecodeError:
             # JSON 파싱 실패 시 전체 응답을 설명으로 사용
             return VLMAnalysisResult(
                 description=content[:500],
                 risk_level="medium",
+                raw_response=content[:1000],
+                parse_success=False,
             )

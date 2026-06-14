@@ -7,8 +7,10 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./config:/app/config:ro
-      - ./models:/app/models:ro
+      # 런타임 모델 업로드 기능이 config/model_profiles.yaml과 models/uploaded/에 쓰므로 rw 필요.
+      # (업로드 기능을 쓰지 않는 배포에서는 :ro로 되돌려 하드닝 가능)
+      - ./config:/app/config
+      - ./models:/app/models
       - ./logs:/app/logs
       - ./data:/app/data
     environment:

@@ -1,0 +1,20 @@
+# Development dependencies (테스트 및 개발 도구)
+# 런타임 requirements.txt에 포함되지 않음
+
+# 테스트
+pytest==9.0.3
+pytest-cov==6.0.0
+pytest-mock==3.14.0
+
+# 코드 품질
+ruff==0.7.4
+mypy==1.13.0
+black==24.10.0
+isort==5.13.2
+
+# 타입 스텁
+types-PyYAML==6.0.12.20240917
+types-requests==2.32.0.20240914
+
+# 개발 유틸리티
+ipython==8.29.0

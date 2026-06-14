@@ -169,5 +169,101 @@ class TestOllamaIsAvailable(unittest.TestCase):
         self.assertFalse(provider.is_available())
 
 
+class TestVLMAnalysisResultNewFields(unittest.TestCase):
+    """VLMAnalysisResult 신규 필드 테스트 (Phase 2)"""
+
+    def test_parse_success_default(self):
+        from src.vlm.vlm_inference import VLMAnalysisResult
+        result = VLMAnalysisResult()
+        self.assertTrue(result.parse_success)
+        self.assertEqual(result.raw_response, "")
+
+    def test_parse_failure(self):
+        from src.vlm.vlm_inference import VLMAnalysisResult
+        result = VLMAnalysisResult(
+            description="파싱 실패 원본",
+            parse_success=False,
+            raw_response="not a valid json {"
+        )
+        self.assertFalse(result.parse_success)
+        self.assertEqual(result.raw_response, "not a valid json {")
+        self.assertEqual(result.description, "파싱 실패 원본")
+
+    def test_to_dict_includes_new_fields(self):
+        from src.vlm.vlm_inference import VLMAnalysisResult
+        result = VLMAnalysisResult(
+            description="test",
+            risk_level="medium",
+            confidence=0.8,
+            parse_success=True,
+        )
+        d = result.to_dict()
+        self.assertIn("parse_success", d)
+        self.assertIn("description", d)
+        self.assertTrue(d["parse_success"])
+
+
+class TestOllamaParserNewFields(unittest.TestCase):
+    """OllamaProvider 파싱 시 신규 필드 포함 테스트 (Phase 2)"""
+
+    def _make_provider(self):
+        from src.vlm.ollama_provider import OllamaProvider
+        return OllamaProvider(base_url="http://localhost:99999", model="test")
+
+    def test_parse_success_includes_raw_response(self):
+        provider = self._make_provider()
+        content = json.dumps({
+            "description": "test",
+            "risk_level": "low",
+            "detected_events": [],
+        })
+        result = provider._parse_response(content)
+        self.assertTrue(result.parse_success)
+        self.assertIn("test", result.raw_response)
+
+    def test_parse_failure_includes_raw_response(self):
+        provider = self._make_provider()
+        content = "이건 JSON이 아닙니다."
+        result = provider._parse_response(content)
+        self.assertFalse(result.parse_success)
+        self.assertIn("JSON", result.raw_response)
+
+
+class TestPromptSelector(unittest.TestCase):
+    """PromptSelector 자동 프롬프트 선택 테스트 (Phase 2)"""
+
+    def test_get_builder_construction(self):
+        from src.vlm.prompt_selector import PromptSelector
+        selector = PromptSelector(prompts_dir="./config/prompts")
+        builder = selector.get_builder("construction")
+        self.assertIsNotNone(builder)
+
+    def test_get_builder_school(self):
+        from src.vlm.prompt_selector import PromptSelector
+        selector = PromptSelector(prompts_dir="./config/prompts")
+        builder = selector.get_builder("school")
+        self.assertIsNotNone(builder)
+
+    def test_get_builder_caches(self):
+        from src.vlm.prompt_selector import PromptSelector
+        selector = PromptSelector(prompts_dir="./config/prompts")
+        b1 = selector.get_builder("construction")
+        b2 = selector.get_builder("construction")
+        self.assertIs(b1, b2)  # 같은 인스턴스 반환
+
+    def test_get_builder_unknown_type_falls_back(self):
+        from src.vlm.prompt_selector import PromptSelector
+        selector = PromptSelector(prompts_dir="./config/prompts")
+        builder = selector.get_builder("unknown_type_xyz")
+        self.assertIsNotNone(builder)  # default로 fallback
+
+    def test_build_prompt_returns_string(self):
+        from src.vlm.prompt_selector import PromptSelector
+        selector = PromptSelector(prompts_dir="./config/prompts")
+        prompt = selector.build_prompt("construction", "person(0.9)", "no events")
+        self.assertIsInstance(prompt, str)
+        self.assertGreater(len(prompt), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

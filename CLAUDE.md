@@ -18,7 +18,7 @@ DGX Spark 기반 지능형 CCTV 안전 관제 시스템.
 
 ```bash
 pip install pytest        # pytest는 dev 전용 — 런타임 requirements.txt에 없음(최초 1회만)
-python -m pytest tests/
+python3 -m pytest tests/
 ```
 
 **Streamlit 대시보드 변경 시 추가 게이트** (`src/dashboard/` 또는 `scripts/run_dashboard.sh` 수정 포함):

@@ -1,75 +1,114 @@
 #!/usr/bin/env bash
+# KSI-CCTV 설치 스크립트 (Phase 4)
+# Ubuntu/Debian 기반 시스템에서 KSI-CCTV를 설치하고 systemd 서비스로 등록합니다.
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-VENV_DIR="${VENV_DIR:-${ROOT_DIR}/.venv}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.."
 
-info() { printf '[INFO] %s\n' "$*"; }
-warn() { printf '[WARN] %s\n' "$*"; }
-fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+# 색상 정의
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-cd "${ROOT_DIR}"
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-info "KSI-CCTV install scaffold"
-info "Project root: ${ROOT_DIR}"
-
-command -v "${PYTHON_BIN}" >/dev/null 2>&1 || fail "Python not found: ${PYTHON_BIN}"
-
-if [ ! -d "${VENV_DIR}" ]; then
-  info "Creating virtual environment: ${VENV_DIR}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
-else
-  info "Virtual environment already exists: ${VENV_DIR}"
+# Python 버전 확인
+log_info "Python 버전 확인 중..."
+if ! command -v python3 &> /dev/null; then
+    log_error "Python 3가 설치되어 있지 않습니다. Python 3.10+을 설치하세요."
+    exit 1
 fi
 
-# shellcheck disable=SC1091
-source "${VENV_DIR}/bin/activate"
+PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+log_info "Python 버전: $PYTHON_VERSION"
 
-info "Upgrading pip tooling"
-python -m pip install --upgrade pip setuptools wheel
+if [[ "$(echo "$PYTHON_VERSION >= 3.10" | python3 -c "import sys; print(sys.version_info >= (3, 10))")" != "True" ]]; then
+    log_error "Python 3.10 이상이 필요합니다. 현재: $PYTHON_VERSION"
+    exit 1
+fi
 
-info "Installing Python dependencies from requirements.txt"
-python -m pip install -r requirements.txt
+# 시스템 의존성 설치
+log_info "시스템 의존성 설치 중..."
+if command -v apt-get &> /dev/null; then
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq python3-venv python3-pip python3-dev build-essential libopencv-dev
+elif command -v yum &> /dev/null; then
+    sudo yum install -y python3-devel python3-pip gcc gcc-c++ make
+fi
 
-info "Ensuring runtime directories"
-mkdir -p logs data/captures models/uploaded
+# 가상환경 생성
+if [ ! -d ".venv" ]; then
+    log_info "Python 가상환경 생성 중..."
+    python3 -m venv .venv
+fi
 
+# pip 업그레이드 및 의존성 설치
+log_info "Python 의존성 설치 중..."
+source .venv/bin/activate
+pip install --upgrade pip -q
+pip install -r requirements.txt -q
+
+# 모델 디렉토리 확인
+if [ ! -d "models" ] || [ -z "$(ls -A models/*.onnx 2>/dev/null)" ]; then
+    log_warn "ONNX 모델이 없습니다. ./models/ 디렉토리에 모델을 배치하세요."
+    log_info "예: yolo export model=yolo26n.pt format=onnx imgsz=640 half=True device=0"
+fi
+
+# 데이터 디렉토리 생성
+log_info "데이터 디렉토리 생성 중..."
+mkdir -p data/captures logs data/sample
+
+# .env 파일 생성 (없는 경우)
 if [ ! -f ".env" ]; then
-  warn ".env does not exist. Create it from .env.example and replace placeholders before production use:"
-  warn "  cp .env.example .env"
-else
-  info ".env exists; not overwriting."
+    log_info ".env 파일 생성 중..."
+    cp .env.example .env
+    log_warn ".env 파일을 편집하여 RTSP URL과 비밀번호를 설정하세요."
 fi
 
-if [ ! -f "models/yolo26.onnx" ]; then
-  warn "models/yolo26.onnx not found. Prepare the model before running the service:"
-  warn "  python3 scripts/prepare_yolo26.py --model yolo26n.pt"
+# systemd 서비스 설치 (Linux만)
+if [[ "$OSTYPE" == "linux-gnu"* ]] && command -v systemctl &> /dev/null; then
+    SERVICE_NAME="ksi-cctv"
+    SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+    if [ -f "systemd/${SERVICE_NAME}.service" ]; then
+        log_info "systemd 서비스 설치 중..."
+
+        # 서비스 파일에서 경로 치환
+        TEMP_SERVICE=$(mktemp)
+        sed "s|WorkingDirectory=.*|WorkingDirectory=$(pwd)|g" \
+            systemd/${SERVICE_NAME}.service > "$TEMP_SERVICE"
+        sed -i "s|User=.*|User=$(whoami)|g" "$TEMP_SERVICE"
+        sed -i "s|ExecStart=.*|ExecStart=$(pwd)/.venv/bin/streamlit run src/dashboard/app.py --server.port=8080 --server.address=0.0.0.0|g" "$TEMP_SERVICE"
+
+        sudo cp "$TEMP_SERVICE" "$SERVICE_FILE"
+        sudo systemctl daemon-reload
+        sudo systemctl enable ${SERVICE_NAME}.service
+
+        rm -f "$TEMP_SERVICE"
+        log_info "systemd 서비스 등록 완료: $SERVICE_FILE"
+        log_info "시작: sudo systemctl start $SERVICE_NAME"
+        log_info "상태: sudo systemctl status $SERVICE_NAME"
+    else
+        log_warn "systemd/${SERVICE_NAME}.service 파일이 없습니다."
+    fi
 else
-  info "Found models/yolo26.onnx"
+    log_warn "systemd를 사용할 수 없는 환경입니다. 수동으로 실행하세요."
 fi
 
-info "Running local healthcheck"
-python scripts/healthcheck.py || warn "Healthcheck reported issues. Review output above before service rollout."
-
-cat <<'EOF'
-
-Systemd template is available at:
-  systemd/ksi-cctv.service
-
-This installer does not run sudo, install units, or start services.
-For a site deployment, review paths/users in the unit, then install manually, e.g.:
-  sudo install -D -m 0644 systemd/ksi-cctv.service /etc/systemd/system/ksi-cctv.service
-  sudo mkdir -p /etc/ksi-cctv
-  sudo install -m 0600 .env /etc/ksi-cctv/ksi-cctv.env
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now ksi-cctv
-
-Rollback example:
-  sudo systemctl disable --now ksi-cctv
-  sudo rm -f /etc/systemd/system/ksi-cctv.service
-  sudo systemctl daemon-reload
-
-EOF
-
-info "Install scaffold complete"
+# 완료
+log_info "============================================"
+log_info "KSI-CCTV 설치 완료!"
+log_info "============================================"
+log_info ""
+log_info "다음 단계:"
+log_info "  1. .env 파일 편집: nano .env"
+log_info "  2. 카메라 설정 편집: nano config/cameras.json"
+log_info "  3. 대시보드 실행: ./scripts/run_dashboard.sh"
+log_info "  4. 헬스체크 서버: python -c 'from src.utils.health import start_health_server; start_health_server()'"
+log_info ""
+log_info "문서: docs/"
+log_info "============================================"

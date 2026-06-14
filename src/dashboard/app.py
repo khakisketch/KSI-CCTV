@@ -3,32 +3,32 @@
 
 실시간 CCTV 스트림, 탐지 결과, 알람 로그 대시보드
 """
-import sys
-import os
 import hashlib
 import json
+import os
+import sys
 import uuid
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import logging
 import time
 from datetime import datetime
-from queue import Queue, Empty
-from typing import Any, Dict, List
+from queue import Empty, Queue
+from typing import Any
 
-import streamlit as st
 import cv2
 import numpy as np
-from PIL import Image
+import streamlit as st
 
-from src.detection.yolo_detector import YOLODetector
-from src.pipeline.pipeline import SafetyPipeline, SafetyEvent
-from src.alerts.alert_manager import AlertManager, AlertConfig
+from src.alerts.alert_manager import AlertConfig, AlertManager, parse_alert_log_line
+from src.pipeline.pipeline import SafetyEvent, SafetyPipeline
 from src.utils.config import AppConfig, ConfigLoader
 
 try:
     from src.detection.model_registry import MultiModelRegistry  # noqa: F401
+    from src.policy.event_policy_engine import EventPolicyEngine  # noqa: F401
     HAS_MODEL_REGISTRY = True
 except ImportError:
     HAS_MODEL_REGISTRY = False
@@ -38,9 +38,9 @@ try:
     from src.models.upload_validator import (  # noqa: F401
         activate_uploaded_model,
         deactivate_uploaded_model,
-        upload_model,
-        get_uploaded_models,
         delete_uploaded_model,
+        get_uploaded_models,
+        upload_model,
     )
     HAS_UPLOAD_VALIDATOR = True
 except ImportError:
@@ -131,18 +131,18 @@ def _hash_password(password: str, salt: str = "ksi-cctv-dashboard") -> str:
     )
     return h.hex()
 
-def _load_audit_log() -> List[Dict]:
+def _load_audit_log() -> list[dict]:
     """오디트 로그 로드"""
     log_path = Path("./logs/dashboard_audit.jsonl")
     if not log_path.exists():
         return []
     try:
-        with open(log_path, "r", encoding="utf-8") as f:
+        with open(log_path, encoding="utf-8") as f:
             return [json.loads(line) for line in f if line.strip()]
     except Exception:
         return []
 
-def _write_audit_log(entry: Dict):
+def _write_audit_log(entry: dict):
     """오디트 로그 쓰기"""
     log_path = Path("./logs/dashboard_audit.jsonl")
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +152,7 @@ def _write_audit_log(entry: Dict):
 
 # ───────── Phase 5: Camera Settings Helpers ─────────
 
-def load_event_policies() -> Dict[str, Any]:
+def load_event_policies() -> dict[str, Any]:
     """event_policies.yaml 로드 (실패 시 빈 dict 반환)"""
     try:
         return ConfigLoader.load("./config/event_policies.yaml")
@@ -160,13 +160,51 @@ def load_event_policies() -> Dict[str, Any]:
         return {}
 
 
-def get_available_domains(policies: Dict[str, Any]) -> List[str]:
+def load_camera_profiles() -> dict[str, Any]:
+    """camera_profiles.yaml 로드 (실패 시 빈 dict 반환)"""
+    try:
+        return ConfigLoader.load("./config/camera_profiles.yaml")
+    except Exception:
+        return {}
+
+
+def build_camera_policy_profile(camera: dict[str, Any], profiles_config: dict[str, Any]) -> dict[str, Any]:
+    """대시보드 시작 시 SafetyPipeline에 적용할 카메라 정책 profile 생성."""
+    camera_id = camera.get("id", "")
+    session_profile = st.session_state.get("camera_profiles", {}).get(camera_id, {})
+    configured_profile = profiles_config.get("cameras", {}).get(camera_id, {}) if isinstance(profiles_config, dict) else {}
+
+    domain = (
+        session_profile.get("domain")
+        or configured_profile.get("domain")
+        or camera.get("detection_type")
+        or "construction"
+    )
+    events = (
+        session_profile.get("events")
+        or session_profile.get("enabled_events")
+        or st.session_state.get("enabled_events")
+        or configured_profile.get("enabled_events")
+    )
+    zones = session_profile.get("zones") or configured_profile.get("zones") or {}
+    detection_type = session_profile.get("detection_type") or camera.get("detection_type") or domain
+
+    return {
+        "domain": domain,
+        "events": events,
+        "enabled_events": events,
+        "zones": zones,
+        "detection_type": detection_type,
+    }
+
+
+def get_available_domains(policies: dict[str, Any]) -> list[str]:
     """사용 가능한 도메인 목록 추출"""
     profiles = policies.get("profiles", {}) if isinstance(policies, dict) else {}
     return list(profiles.keys()) if isinstance(profiles, dict) else []
 
 
-def get_events_for_domain(policies: Dict[str, Any], domain: str) -> List[Dict]:
+def get_events_for_domain(policies: dict[str, Any], domain: str) -> list[dict]:
     """특정 도메인의 이벤트 목록 추출"""
     profile = policies.get("profiles", {}).get(domain, {}) if isinstance(policies, dict) else {}
     policy_map = profile.get("policies", {}) if isinstance(profile, dict) else {}
@@ -187,7 +225,7 @@ def get_events_for_domain(policies: Dict[str, Any], domain: str) -> List[Dict]:
     return events
 
 
-def get_model_status() -> Dict[str, Any]:
+def get_model_status() -> dict[str, Any]:
     """MultiModelRegistry 상태 조회 (없으면 config 기반 fallback)"""
     if not HAS_MODEL_REGISTRY:
         # config/model_profiles.yaml 기반 fallback
@@ -208,9 +246,16 @@ def get_model_status() -> Dict[str, Any]:
     try:
         registry = MultiModelRegistry.from_config("./config/model_profiles.yaml")
         status_dict = registry.to_status_dict()
+        active_models = [name for name, info in status_dict.items() if info.get("loaded")]
+        failed_models = {
+            name: info.get("error", "")
+            for name, info in status_dict.items()
+            if info.get("enabled") and not info.get("loaded") and info.get("error")
+        }
         return {
-            "active_models": list(status_dict.get("active_model_names", [])),
-            "failed_models": dict(status_dict.get("failed_models", {})),
+            "active_models": active_models,
+            "failed_models": failed_models,
+            "models": status_dict,
             "source": "registry",
         }
     except Exception:
@@ -356,7 +401,7 @@ def get_status_color(status: bool) -> str:
     """연결 상태 색상"""
     return "🟢 연결됨" if status else "🔴 연결 끊김"
 
-def load_enabled_cameras(config: AppConfig) -> List[Dict]:
+def load_enabled_cameras(config: AppConfig) -> list[dict]:
     """활성화된 카메라 설정 로드"""
     cameras = config.load_cameras()
     return [camera for camera in cameras if camera.get("enabled")]
@@ -365,23 +410,23 @@ def render_sidebar():
     """사이드바 렌더링"""
     with st.sidebar:
         st.title("📊 관리 메뉴")
-        
+
         # 연결 제어
         st.subheader("시스템 제어")
         col1, col2 = st.columns(2)
-        
+
         with col1:
             if st.button("▶️ 시작", use_container_width=True):
                 start_pipeline()
-        
+
         with col2:
             if st.button("⏹️ 중지", use_container_width=True):
                 stop_pipeline()
-        
+
         # 상태 표시
         st.divider()
         st.subheader("시스템 상태")
-        
+
         if st.session_state.get('is_running'):
             st.markdown("🔴 <span class='status-online'>실행 중</span>", unsafe_allow_html=True)
         else:
@@ -404,11 +449,11 @@ def render_sidebar():
             ])
             st.metric("총 이벤트 수", len(st.session_state.events))
             st.caption(f"알람 이벤트: {alert_count} / VLM 분석 후보: {len(st.session_state.events) - alert_count}")
-        
+
         # 설정
         st.divider()
         st.subheader("설정")
-        
+
         # 모델 설정
         st.session_state.conf_threshold = st.slider(
             "신뢰도 임계값", 0.0, 1.0, 0.25, 0.05
@@ -438,31 +483,33 @@ def start_pipeline():
         if st.session_state.get('is_running'):
             st.warning("이미 실행 중입니다")
             return
-        
+
         # 설정
         config = load_config()
         if not config:
             st.error("설정을 로드할 수 없습니다")
             return
-        
-        # 디텍터 설정
-        yolo_config = config.get('models', 'yolo', default={})
-        model_path = yolo_config.get('model_path', './models/yolo26.onnx')
-        input_size = tuple(yolo_config.get('input_size', [640, 640]))
-        class_profile = yolo_config.get('class_profile', 'coco')
-        configured_classes = yolo_config.get('classes')
-        detector = YOLODetector(
-            model_path=model_path,
-            input_size=input_size,
-            conf_threshold=st.session_state.get('conf_threshold', 0.25),
-            iou_threshold=st.session_state.get('iou_threshold', 0.45),
-            device=config.get('device', 'primary', default='cuda'),
-            fp16=bool(config.get('device', 'fp16', default=True)),
-            postprocess_mode=yolo_config.get('postprocess_mode', 'auto'),
-            class_profile=class_profile,
-            classes=configured_classes or None
+
+        if not HAS_MODEL_REGISTRY:
+            st.error("policy-mode 구성요소를 로드할 수 없습니다. MultiModelRegistry/EventPolicyEngine import를 확인하세요.")
+            return
+
+        # Phase 10 M0: 기본 실행 경로는 policy-mode
+        model_registry = MultiModelRegistry.from_config("./config/model_profiles.yaml")
+        policy_engine = EventPolicyEngine.from_config("./config/event_policies.yaml")
+        if not model_registry.active_model_names:
+            st.error(
+                "로드된 활성 모델이 없어 policy-mode를 시작할 수 없습니다. "
+                f"failed_models={model_registry.failed_models}"
+            )
+            return
+        if model_registry.failed_models:
+            st.warning(f"일부 모델 로드 실패: {model_registry.failed_models}")
+        primary_detector = (
+            model_registry.get_model("general_yolo")
+            or next(iter(model_registry.models.values()), None)
         )
-        
+
         # 파이프라인 설정
         detection_config = config.get_detection_config()
         target_classes = detection_config.get('target_classes', 'person,fire,smoke,fall')
@@ -473,14 +520,16 @@ def start_pipeline():
             vlm_trigger_classes = [item.strip() for item in vlm_trigger_classes.split(',') if item.strip()]
 
         pipeline = SafetyPipeline(
-            detector=detector,
+            detector=primary_detector,
             skip_frames=st.session_state.get('skip_frames', 5),
             alert_cooldown=float(detection_config.get('alert_cooldown_sec', 30.0)),
             target_classes=target_classes,
             vlm_trigger_classes=vlm_trigger_classes,
-            vlm_cooldown=float(detection_config.get('vlm_cooldown_sec', 60.0))
+            vlm_cooldown=float(detection_config.get('vlm_cooldown_sec', 60.0)),
+            model_registry=model_registry,
+            policy_engine=policy_engine,
         )
-        
+
         # 알람 관리자
         alerts_cfg = config.get_alert_config()
         alert_config = AlertConfig(
@@ -496,7 +545,7 @@ def start_pipeline():
             log_backup_count=int(alerts_cfg.get("log_backup_count", 5))
         )
         alert_manager = AlertManager(alert_config)
-        
+
         # 콜백 등록
         event_queue = st.session_state.event_queue
 
@@ -506,7 +555,7 @@ def start_pipeline():
 
         def on_analysis_event(event: SafetyEvent):
             event_queue.put(event)
-        
+
         pipeline.add_alert_callback(on_event)
         pipeline.add_analysis_callback(on_analysis_event)
 
@@ -530,28 +579,31 @@ def start_pipeline():
             st.error("활성화된 카메라가 없습니다. config/cameras.json에서 enabled=true와 stream_url을 설정하세요.")
             return
 
+        camera_profiles_config = load_camera_profiles()
         for cam in cameras_config:
             stream_url = cam.get("stream_url", "")
             if not stream_url or "${" in stream_url:
                 st.error(f"{cam.get('id', 'unknown')}의 stream_url 환경변수가 설정되지 않았습니다.")
                 return
+            policy_profile = build_camera_policy_profile(cam, camera_profiles_config)
+            pipeline.set_camera_profile(cam["id"], policy_profile)
             pipeline.add_camera(
                 cam["id"],
                 stream_url,
                 target_fps=int(cam.get("fps", 30))
             )
-        
+
         # 시작
         pipeline.start()
-        
+
         st.session_state.pipeline = pipeline
         st.session_state.alert_manager = alert_manager
         st.session_state.camera_configs = cameras_config
         st.session_state.is_running = True
-        
+
         st.success("파이프라인 시작 완료!")
         logger.info("파이프라인 시작 완료")
-        
+
     except Exception as e:
         st.error(f"시작 실패: {e}")
         logger.error(f"시작 실패: {e}")
@@ -561,11 +613,11 @@ def stop_pipeline():
     try:
         if st.session_state.get('pipeline'):
             st.session_state.pipeline.stop()
-        
+
         st.session_state.is_running = False
         st.success("파이프라인 중지 완료")
         logger.info("파이프라인 중지 완료")
-        
+
     except Exception as e:
         st.error(f"중지 실패: {e}")
         logger.error(f"중지 실패: {e}")
@@ -579,10 +631,10 @@ def render_dashboard():
     camera_count = len(status.get("cameras", {})) or len(st.session_state.get('camera_configs', []))
     connected_count = sum(1 for item in status.get("cameras", {}).values() if item.get("connected"))
     running_label = "실행 중" if status.get("running") else "대기"
-    
+
     # KPI 메트릭
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         st.markdown(f"""
         <div class='metric-card'>
@@ -591,7 +643,7 @@ def render_dashboard():
             <p>연결: <span class='status-online'>{connected_count}대</span></p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col2:
         total_events = len(st.session_state.get('events', []))
         st.markdown(f"""
@@ -601,16 +653,16 @@ def render_dashboard():
             <p>오늘 이벤트 수</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col3:
-        st.markdown(f"""
+        st.markdown("""
         <div class='metric-card'>
             <h3>🤖 탐지 모델</h3>
             <h2>YOLO26</h2>
             <p>ONNX Runtime</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col4:
         st.markdown(f"""
         <div class='metric-card'>
@@ -619,73 +671,89 @@ def render_dashboard():
             <p>파이프라인 상태</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     st.divider()
-    
+
     # 메인 컨텐츠
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
         "📹 실시간 스트림",
         "🔔 알람 로그",
+        "🔍 고급 검색",
         "📝 이벤트 로그",
         "📊 통계",
+        "📸 이미지 갤러리",
         "⚙️ 카메라 설정",
         "📦 모델 업로드",
         "🔍 감사 로그",
-        "🔧 시스템 상태",
+        "🖥️ 시스템 메트릭",
+        "🏥 헬스체크",
         "🔔 알림 설정",
+        "🩺 시스템 상태",
     ])
-    
+
     with tab1:
         render_stream_view()
-    
+
     with tab2:
         render_alert_log()
-    
+
     with tab3:
-        render_event_log()
-    
+        render_enhanced_event_search()
+
     with tab4:
-        render_statistics()
-    
+        render_event_log()
+
     with tab5:
-        render_camera_settings()
+        render_statistics()
 
     with tab6:
-        render_model_upload()
-    
+        render_image_gallery()
+
     with tab7:
-        render_audit_log()
-    
+        render_camera_settings()
+
     with tab8:
-        render_system_status()
-    
+        render_model_upload()
+
     with tab9:
+        render_audit_log()
+
+    with tab10:
+        render_system_metrics()
+
+    with tab11:
+        render_health_check()
+
+    with tab12:
         render_alert_settings()
+
+    with tab13:
+        render_system_status()
 
 def render_stream_view():
     """실시간 스트림 뷰"""
     st.subheader("실시간 CCTV 스트림")
-    
+
     if not st.session_state.get('is_running'):
         st.info("📢 왼쪽 사이드바에서 '시작' 버튼을 눌러 파이프라인을 실행하세요")
-        
+
         # 카메라 설정 안내
         st.markdown("""
         ### 카메라 설정 방법
-        
+
         1. `config/cameras.yaml` 또는 `config/cameras.json` 파일에 카메라 정보를 입력하세요
         2. RTSP URL 형식: `rtsp://[user]:[pw]@[ip]:[port]/[path]`
         3. '시작' 버튼을 눌러 실시간 감지를 시작하세요
-        
+
         **지원 형식:**
         - RTSP (실시간 스트리밍)
         - HTTP/HTTPS 스트림
         - 로컬 비디오 파일 (.mp4, .avi 등)
-        
+
         **참고:** 카메라가 연결되지 않은 경우 샘플 이미지로 대시보드를 테스트할 수 있습니다.
         """)
         return
-    
+
     cameras = st.session_state.get('camera_configs', [])
     pipeline = st.session_state.get('pipeline')
     camera_status = pipeline.get_status().get("cameras", {}) if pipeline else {}
@@ -693,18 +761,18 @@ def render_stream_view():
     if not cameras:
         st.warning("표시할 카메라 설정이 없습니다.")
         return
-    
+
     # 2x2 또는 3열 그리드
     cols = st.columns(min(len(cameras), 3))
-    
+
     for idx, cam in enumerate(cameras):
         with cols[idx % 3]:
             st.markdown(f"**{cam['name']}** | {cam['location']}")
-            
+
             # 플레이스홀더 이미지 (실제 스트림 연결 시 대체)
             placeholder = np.zeros((240, 320, 3), dtype=np.uint8)
             placeholder[:] = [40, 40, 40]  # Dark gray
-            
+
             # 상태 표시
             status = get_status_color(camera_status.get(cam['id'], {}).get("connected", False))
             st.caption(f"상태: {status}")
@@ -719,7 +787,11 @@ def render_stream_view():
                 display_frame = frame.image
                 detections = pipeline.get_latest_detections(cam['id']) if pipeline else []
                 if detections and pipeline:
-                    display_frame = pipeline.detector.draw_detections(display_frame, detections)
+                    if getattr(pipeline, "detector", None) is not None:
+                        display_frame = pipeline.detector.draw_detections(display_frame, detections)
+                    elif getattr(pipeline, "model_registry", None) is not None and pipeline.model_registry.models:
+                        drawer = next(iter(pipeline.model_registry.models.values()))
+                        display_frame = drawer.draw_detections(display_frame, detections)
                 image = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
                 st.image(image, use_container_width=True)
                 st.caption(f"최근 프레임: #{frame.frame_number} / {frame.timestamp:%H:%M:%S}")
@@ -727,7 +799,7 @@ def render_stream_view():
                     st.caption("탐지: " + ", ".join(f"{d.class_name}({d.confidence:.2f})" for d in detections[:5]))
             else:
                 st.image(placeholder, use_container_width=True)
-            
+
             # 탐지 결과 요약
             if st.session_state.get('detection_results'):
                 results = st.session_state.detection_results.get(cam['id'])
@@ -737,14 +809,14 @@ def render_stream_view():
 def render_alert_log():
     """알람 로그"""
     st.subheader("🔔 이벤트 / VLM 분석 로그")
-    
+
     events = st.session_state.get('events', [])
-    
+
     if not events:
         st.info("📭 아직 이벤트가 없습니다")
         st.markdown("""
         알람 이벤트 또는 VLM 분석 후보가 발생하면 이곳에 자동으로 기록됩니다.
-        
+
         **감지 가능한 이벤트:**
         - 사람 감지 (person_detected)
         - 안전장비 미착용 (safety_gear_violation)
@@ -754,26 +826,24 @@ def render_alert_log():
         - VLM 분석 후보 (vlm_analysis_candidate)
         """)
         return
-    
+
     # 이벤트 필터
     col1, col2 = st.columns(2)
     with col1:
-        event_types = list(set(e.event_type for e in events))
+        event_types = list({e.event_type for e in events})
         selected_types = st.multiselect("이벤트 유형 필터", event_types, default=event_types)
     with col2:
-        alert_levels = sorted(set(getattr(e, "alert_level", "low") for e in events))
+        alert_levels = sorted({getattr(e, "alert_level", "low") for e in events})
         selected_levels = st.multiselect("alert_level 필터", alert_levels, default=alert_levels)
-    
+
     # 시간 범위 필터
     if len(events) > 1:
         timestamps = [e.timestamp for e in events if hasattr(e, "timestamp")]
         if timestamps:
-            min_ts = min(timestamps)
-            max_ts = max(timestamps)
             from datetime import timedelta
             time_options = ["전체", "최근 1시간", "최근 24시간", "최근 7일"]
             selected_time = st.selectbox("시간 범위", time_options, index=0)
-            
+
             if selected_time != "전체":
                 now = datetime.now()
                 if selected_time == "최근 1시간":
@@ -790,16 +860,16 @@ def render_alert_log():
             cutoff = None
     else:
         cutoff = None
-    
+
     # 이벤트 표시 (필터 적용)
-    filtered_events = [e for e in events 
-                       if e.event_type in selected_types 
+    filtered_events = [e for e in events
+                       if e.event_type in selected_types
                        and getattr(e, "alert_level", "low") in selected_levels]
-    
+
     if cutoff:
-        filtered_events = [e for e in filtered_events 
+        filtered_events = [e for e in filtered_events
                            if hasattr(e, "timestamp") and e.timestamp >= cutoff]
-    
+
     # 이벤트 내보내기
     if filtered_events:
         col_exp1, col_exp2, col_exp3 = st.columns(3)
@@ -851,9 +921,9 @@ def render_alert_log():
                 )
         with col_exp3:
             st.caption(f"총 {len(filtered_events)}개 이벤트")
-    
+
     st.divider()
-    
+
     for event in filtered_events[-50:]:  # 최신 50개
         with st.container():
             is_vlm_candidate = event.event_type == "vlm_analysis_candidate"
@@ -861,7 +931,7 @@ def render_alert_log():
             vlm_desc = getattr(event, "description", "") or ""
             vlm_risk = getattr(event, "vlm_risk_level", None)
             vlm_conf = getattr(event, "vlm_confidence", None)
-            
+
             # Phase 5: alert_level 표시
             alert_level = getattr(event, "alert_level", "low")
             alert_icon = get_alert_level_icon(alert_level)
@@ -908,9 +978,9 @@ def render_alert_log():
 def render_event_log():
     """이벤트 로그 뷰어 — alerts.log 파일 기반 히스토리"""
     st.subheader("📝 이벤트 로그")
-    
+
     log_path = Path("./logs/alerts.log")
-    
+
     if not log_path.exists():
         st.info("📭 이벤트 로그 파일이 없습니다")
         st.markdown("""
@@ -919,43 +989,40 @@ def render_event_log():
         - 카메라 이미지는 `data/captures/`에 저장
         """)
         return
-    
+
     # 로그 파싱
     events = []
     try:
-        with open(log_path, "r", encoding="utf-8") as f:
+        with open(log_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    # Format: "timestamp | level | EVENT | {json}"
-                    parts = line.split(" | ")
-                    if len(parts) >= 3 and "EVENT" in parts[2]:
-                        json_str = parts[2].split("EVENT | ", 1)[1] if "EVENT | " in parts[2] else parts[2]
-                        event = json.loads(json_str)
+                    event = parse_alert_log_line(line)
+                    if event is not None:
                         events.append(event)
                 except Exception:
                     continue
     except Exception as exc:
         st.error(f"로그 파일 읽기 실패: {exc}")
         return
-    
+
     if not events:
         st.info("📭 파싱된 이벤트가 없습니다")
         return
-    
+
     st.success(f"총 {len(events)}개 이벤트 로드")
-    
+
     # 필터
     col1, col2 = st.columns(2)
     with col1:
-        event_types = sorted(set(e.get("event_type", "unknown") for e in events))
+        event_types = sorted({e.get("event_type", "unknown") for e in events})
         selected_types = st.multiselect("이벤트 유형", event_types, default=event_types)
     with col2:
-        cameras = sorted(set(e.get("camera_id", "unknown") for e in events))
+        cameras = sorted({e.get("camera_id", "unknown") for e in events})
         selected_cameras = st.multiselect("카메라", cameras, default=cameras)
-    
+
     # 시간 범위
     try:
         timestamps = [datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")) for e in events if "timestamp" in e]
@@ -976,9 +1043,9 @@ def render_event_log():
             filtered = [e for e in events if e.get("event_type") in selected_types and e.get("camera_id") in selected_cameras]
     except Exception:
         filtered = [e for e in events if e.get("event_type") in selected_types and e.get("camera_id") in selected_cameras]
-    
+
     st.caption(f"필터링 결과: {len(filtered)}개 이벤트")
-    
+
     # 표시
     for event in reversed(filtered[-100:]):  # 최신 100개
         with st.expander(f"🚨 {event.get('event_type', 'unknown')} | {event.get('camera_id', 'unknown')} | {event.get('timestamp', 'N/A')[:19]}"):
@@ -1000,7 +1067,7 @@ def render_statistics():
 
     # 전체 요약 메트릭
     total_events = len(events)
-    cameras_seen = set(e.camera_id for e in events)
+    cameras_seen = {e.camera_id for e in events}
     alert_level_counts = Counter(getattr(e, "alert_level", "low") for e in events)
     critical_high = alert_level_counts.get("critical", 0) + alert_level_counts.get("high", 0)
 
@@ -1202,14 +1269,27 @@ def render_camera_settings():
     # 카메라별 프로필 적용 안내
     st.divider()
     pipeline = st.session_state.get('pipeline')
+    cameras_for_profile = st.session_state.get('camera_configs', [])
+    if not cameras_for_profile:
+        try:
+            cfg = load_config()
+            cameras_for_profile = load_enabled_cameras(cfg) if cfg else []
+        except Exception:
+            cameras_for_profile = []
+
+    profiles_config = load_camera_profiles()
+    for cam in cameras_for_profile:
+        cam_id = cam.get("id", "unknown")
+        profile = build_camera_policy_profile(cam, profiles_config)
+        profile["domain"] = selected_domain
+        profile["events"] = enabled_events if enabled_events else None
+        profile["enabled_events"] = profile["events"]
+        st.session_state.camera_profiles[cam_id] = profile
+
     if pipeline and hasattr(pipeline, 'set_camera_profile'):
-        for cam in st.session_state.get('camera_configs', []):
+        for cam in cameras_for_profile:
             cam_id = cam.get("id", "unknown")
-            profile = {
-                "domain": selected_domain,
-                "events": enabled_events if enabled_events else None,
-            }
-            pipeline.set_camera_profile(cam_id, profile)
+            pipeline.set_camera_profile(cam_id, st.session_state.camera_profiles[cam_id])
 
         st.success(f"✅ 카메라 프로필 적용 완료: 도메인='{selected_domain}', 이벤트={len(enabled_events)}개")
     elif not st.session_state.get('is_running'):
@@ -1323,9 +1403,9 @@ def render_model_upload():
 def render_audit_log():
     """감사 로그 뷰어 — 로그인/모델 관리/시스템 이벤트 조회"""
     st.subheader("🔍 감사 로그")
-    
+
     logs = _load_audit_log()
-    
+
     if not logs:
         st.info("📭 감사 로그가 없습니다")
         st.markdown("""
@@ -1335,15 +1415,15 @@ def render_audit_log():
         - 설정 변경
         """)
         return
-    
+
     # 필터
-    event_types = sorted(set(log.get("event", "unknown") for log in logs))
+    event_types = sorted({log.get("event", "unknown") for log in logs})
     selected_types = st.multiselect("이벤트 유형 필터", event_types, default=event_types)
-    
+
     filtered = [log for log in logs if log.get("event", "") in selected_types]
-    
+
     st.caption(f"총 {len(filtered)}개 이벤트 (전체 {len(logs)}개)")
-    
+
     # 테이블 형태로 표시
     import pandas as pd
     try:
@@ -1356,7 +1436,7 @@ def render_audit_log():
         for log in reversed(filtered[-100:]):  # 최신 100개
             ts = log.get("timestamp", "N/A")
             event = log.get("event", "unknown")
-            
+
             # 이벤트별 아이콘
             icons = {
                 "login_success": "✅",
@@ -1368,7 +1448,7 @@ def render_audit_log():
                 "model_delete": "🗑️",
             }
             icon = icons.get(event, "📝")
-            
+
             with st.expander(f"{icon} {event} — {ts}"):
                 st.json(log)
 
@@ -1378,14 +1458,14 @@ def render_audit_log():
 def render_system_status():
     """시스템 상태 위젯 — CPU/메모리/디스크, ONNX Runtime 정보"""
     st.subheader("🔧 시스템 상태")
-    
+
     # ONNX Runtime 정보
     st.markdown("**🧠 ONNX Runtime**")
     try:
         import onnxruntime as ort
         providers = ort.get_available_providers()
         st.success(f"사용 가능한 Provider: {', '.join(providers)}")
-        
+
         # 현재 로드된 모델의 provider
         pipeline = st.session_state.get('pipeline')
         if pipeline and hasattr(pipeline, 'detector') and pipeline.detector:
@@ -1393,34 +1473,34 @@ def render_system_status():
             st.info(f"현재 사용 중인 Provider: {', '.join(used_providers)}")
     except Exception as exc:
         st.error(f"ONNX Runtime 정보 조회 실패: {exc}")
-    
+
     st.divider()
-    
+
     # 시스템 리소스 (psutil 사용)
     st.markdown("**💻 시스템 리소스**")
     try:
         import psutil
-        
+
         col1, col2, col3 = st.columns(3)
-        
+
         with col1:
             cpu_percent = psutil.cpu_percent(interval=1)
             st.metric("CPU 사용량", f"{cpu_percent:.1f}%")
             st.progress(min(cpu_percent / 100, 1.0))
-        
+
         with col2:
             memory = psutil.virtual_memory()
             st.metric("메모리 사용량", f"{memory.percent:.1f}%")
             st.progress(memory.percent / 100)
             st.caption(f"{memory.used / (1024**3):.1f} GB / {memory.total / (1024**3):.1f} GB")
-        
+
         with col3:
             disk = psutil.disk_usage("/")
             disk_percent = disk.percent
             st.metric("디스크 사용량", f"{disk_percent:.1f}%")
             st.progress(disk_percent / 100)
             st.caption(f"{disk.used / (1024**3):.1f} GB / {disk.total / (1024**3):.1f} GB")
-        
+
         # 추가 정보
         st.divider()
         col4, col5 = st.columns(2)
@@ -1433,19 +1513,19 @@ def render_system_status():
             net_io = psutil.net_io_counters()
             st.caption(f"수신: {net_io.bytes_recv / (1024**2):.1f} MB")
             st.caption(f"송신: {net_io.bytes_sent / (1024**2):.1f} MB")
-            
+
     except ImportError:
         st.info("💡 상세 시스템 정보를 보려면 `pip install psutil`을 실행하세요.")
-        st.markdown("""
+        st.markdown(f"""
         **기본 정보:**
-        - PID: {}
-        - 작업 디렉토리: {}
-        """.format(os.getpid(), os.getcwd()))
+        - PID: {os.getpid()}
+        - 작업 디렉토리: {os.getcwd()}
+        """)
     except Exception as exc:
         st.error(f"시스템 정보 조회 실패: {exc}")
-    
+
     st.divider()
-    
+
     # VLM 상태 (Phase 9 M1)
     st.markdown("**🧠 VLM (Ollama) 상태**")
     try:
@@ -1496,7 +1576,7 @@ def render_system_status():
         st.error(f"VLM 상태 조회 실패: {exc}")
 
     st.divider()
-    
+
     # SMTP 상태 및 테스트
     st.markdown("**📧 SMTP 알림**")
     try:
@@ -1507,18 +1587,18 @@ def render_system_status():
             recipients = os.environ.get("KSI_CCTV_SMTP_RECIPIENTS", "")
             st.caption(f"사용자: {smtp_user}")
             st.caption(f"수신자: {recipients}")
-            
+
             if st.button("📧 SMTP 테스트 발송", key="smtp_test"):
                 with st.spinner("SMTP 테스트 중..."):
                     try:
                         import smtplib
                         from email.mime.text import MIMEText
-                        
+
                         msg = MIMEText("KSI-CCTV SMTP 연결 테스트입니다.", "plain", "utf-8")
                         msg["Subject"] = "[KSI-CCTV] SMTP 테스트"
                         msg["From"] = smtp_user
                         msg["To"] = recipients
-                        
+
                         with smtplib.SMTP(smtp_host, int(os.environ.get("KSI_CCTV_SMTP_PORT", "587"))) as server:
                             server.starttls()
                             password = os.environ.get("KSI_CCTV_SMTP_PASSWORD", "")
@@ -1532,16 +1612,26 @@ def render_system_status():
             st.info("SMTP 미설정 — `.env`에 `KSI_CCTV_SMTP_HOST`를 설정하세요")
     except Exception as exc:
         st.error(f"SMTP 설정 확인 실패: {exc}")
-    
+
     st.divider()
-    
+
     # 모델 상세 상태
     st.markdown("**📦 모델 상세 상태**")
     try:
-        if HAS_MODEL_REGISTRY:
-            registry = MultiModelRegistry.from_config("./config/model_profiles.yaml")
-            status = registry.to_status_dict()
-            
+        # 실행 중인 파이프라인의 레지스트리를 우선 사용한다.
+        # (자동 새로고침마다 ONNX 모델을 디스크에서 재로딩하지 않도록)
+        pipeline = st.session_state.get('pipeline')
+        live_registry = getattr(pipeline, "model_registry", None) if pipeline else None
+        if live_registry is not None:
+            status = live_registry.to_status_dict()
+        elif HAS_MODEL_REGISTRY:
+            status = MultiModelRegistry.from_config("./config/model_profiles.yaml").to_status_dict()
+        else:
+            status = None
+
+        if status is None:
+            st.info("Model registry not available")
+        else:
             for name, info in status.items():
                 col1, col2 = st.columns([1, 3])
                 with col1:
@@ -1558,13 +1648,11 @@ def render_system_status():
                         st.caption(f"Class Map: {info['class_map']}")
                     if info.get("error"):
                         st.error(f"오류: {info['error']}")
-        else:
-            st.info("Model registry not available")
     except Exception as exc:
         st.error(f"모델 상태 조회 실패: {exc}")
 
 
-def _load_alert_preferences() -> Dict[str, Any]:
+def _load_alert_preferences() -> dict[str, Any]:
     """`config/alert_preferences.yaml` 로드 — 실패 시 기본값 반환"""
     prefs_path = Path("./config/alert_preferences.yaml")
     if not prefs_path.exists():
@@ -1575,7 +1663,7 @@ def _load_alert_preferences() -> Dict[str, Any]:
         return {"email_alert_level_threshold": "medium", "per_event_email_enabled": {}}
 
 
-def _save_alert_preferences(prefs: Dict[str, Any]) -> None:
+def _save_alert_preferences(prefs: dict[str, Any]) -> None:
     """`config/alert_preferences.yaml` 저장"""
     prefs_path = Path("./config/alert_preferences.yaml")
     prefs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1681,12 +1769,265 @@ def main():
         return
     render_sidebar()
     render_dashboard()
-    
+
     # Phase 8 M5.1: Auto-refresh at end of main loop
     if st.session_state.get("auto_refresh_enabled", True):
         interval = st.session_state.get("auto_refresh_interval", 5)
         time.sleep(interval)
         st.rerun()
+
+
+# ───────── Phase 3-4: System Metrics, Image Gallery, Enhanced Event Search ─────────
+
+def render_system_metrics():
+    """시스템 리소스 메트릭 표시 (Phase 3-4)"""
+    st.subheader("🖥️ 시스템 리소스 모니터링")
+
+    try:
+        from src.utils.system_metrics import collect_metrics
+        metrics = collect_metrics()
+        d = metrics.to_dict()
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            cpu_color = "🟢" if d["cpu_percent"] < 70 else ("🟡" if d["cpu_percent"] < 90 else "🔴")
+            st.metric(f"{cpu_color} CPU", f"{d['cpu_percent']:.1f}%")
+        with col2:
+            mem_color = "🟢" if d["memory_percent"] < 70 else ("🟡" if d["memory_percent"] < 90 else "🔴")
+            st.metric(
+                f"{mem_color} 메모리",
+                f"{d['memory_percent']:.1f}%",
+                delta=f"{d['memory_used_mb']:.0f}/{d['memory_total_mb']:.0f} MB"
+            )
+        with col3:
+            disk_color = "🟢" if d["disk_percent"] < 70 else ("🟡" if d["disk_percent"] < 90 else "🔴")
+            st.metric(
+                f"{disk_color} 디스크",
+                f"{d['disk_percent']:.1f}%",
+                delta=f"{d['disk_used_gb']:.1f}/{d['disk_total_gb']:.1f} GB"
+            )
+        with col4:
+            if d["gpu_percent"] is not None:
+                gpu_color = "🟢" if d["gpu_percent"] < 70 else ("🟡" if d["gpu_percent"] < 90 else "🔴")
+                st.metric(
+                    f"{gpu_color} GPU",
+                    f"{d['gpu_percent']:.1f}%",
+                    delta=f"VRAM {d['gpu_memory_percent']:.0f}%" if d["gpu_memory_percent"] else None
+                )
+            else:
+                st.metric("⚪ GPU", "N/A", delta="감지 안 됨")
+
+        # 추가 정보
+        st.divider()
+        st.markdown("**상세 정보**")
+        info_col1, info_col2 = st.columns(2)
+        with info_col1:
+            st.json({
+                "CPU 사용률": f"{d['cpu_percent']:.1f}%",
+                "메모리 사용률": f"{d['memory_percent']:.1f}%",
+                "메모리 사용": f"{d['memory_used_mb']:.0f} MB / {d['memory_total_mb']:.0f} MB",
+            })
+        with info_col2:
+            st.json({
+                "디스크 사용률": f"{d['disk_percent']:.1f}%",
+                "디스크 사용": f"{d['disk_used_gb']:.2f} GB / {d['disk_total_gb']:.2f} GB",
+                "GPU 온도": f"{d['gpu_temperature']:.0f}°C" if d['gpu_temperature'] else "N/A",
+            })
+
+    except Exception as e:
+        st.error(f"메트릭 수집 실패: {e}")
+
+
+def render_image_gallery():
+    """캡처 이미지 갤러리 (Phase 3)"""
+    st.subheader("📸 캡처 이미지 갤러리")
+
+    from pathlib import Path
+    image_dir = Path("./data/captures")
+
+    if not image_dir.exists():
+        st.info("캡처 디렉토리가 없습니다. 알람이 발생하면 여기에 이미지가 저장됩니다.")
+        return
+
+    # 날짜 선택
+    date_dirs = sorted([d for d in image_dir.iterdir() if d.is_dir()], reverse=True)
+    if not date_dirs:
+        st.info("저장된 캡처 이미지가 없습니다.")
+        return
+
+    selected_date = st.selectbox(
+        "날짜 선택",
+        [d.name for d in date_dirs],
+        index=0
+    )
+
+    date_path = image_dir / selected_date
+    if not date_path.exists():
+        st.info(f"{selected_date}에 저장된 이미지가 없습니다.")
+        return
+
+    # 카메라별 그룹화
+    camera_dirs = sorted([d for d in date_path.iterdir() if d.is_dir()])
+
+    for cam_dir in camera_dirs:
+        with st.expander(f"📷 {cam_dir.name} ({len(list(cam_dir.glob('*.jpg')))}장)"):
+            images = sorted(cam_dir.glob("*.jpg"), reverse=True)
+            # 그리드 레이아웃으로 표시
+            cols = st.columns(4)
+            for i, img_path in enumerate(images[:20]):  # 최대 20장
+                with cols[i % 4]:
+                    st.image(str(img_path), caption=img_path.name, use_container_width=True)
+
+
+def render_enhanced_event_search():
+    """향상된 이벤트 검색/필터 (Phase 3)"""
+    st.subheader("🔍 고급 이벤트 검색")
+
+    events = st.session_state.get('events', [])
+
+    if not events:
+        st.info("검색할 이벤트가 없습니다.")
+        return
+
+    st.markdown(f"**전체 이벤트 수: {len(events)}건**")
+
+    # 필터 옵션
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        # 카메라 필터
+        cameras = sorted({e.camera_id for e in events})
+        selected_cameras = st.multiselect("📷 카메라", cameras, default=cameras)
+
+    with col2:
+        # 이벤트 타입 필터
+        event_types = sorted({e.event_type for e in events})
+        selected_types = st.multiselect("📋 이벤트 타입", event_types, default=event_types)
+
+    with col3:
+        # 위험도 필터
+        alert_levels = sorted({getattr(e, "alert_level", "low") for e in events})
+        selected_levels = st.multiselect("⚠️ 위험도", alert_levels, default=alert_levels)
+
+    with col4:
+        # 최소 신뢰도
+        min_confidence = st.slider("🎯 최소 신뢰도", 0.0, 1.0, 0.0, 0.05)
+
+    # 시간 범위
+    from datetime import timedelta
+    time_options = ["전체", "최근 1시간", "최근 24시간", "최근 7일", "최근 30일"]
+    selected_time = st.selectbox("⏰ 시간 범위", time_options, index=0)
+
+    cutoff = None
+    if selected_time != "전체":
+        now = datetime.now()
+        if selected_time == "최근 1시간":
+            cutoff = now - timedelta(hours=1)
+        elif selected_time == "최근 24시간":
+            cutoff = now - timedelta(days=1)
+        elif selected_time == "최근 7일":
+            cutoff = now - timedelta(days=7)
+        elif selected_time == "최근 30일":
+            cutoff = now - timedelta(days=30)
+
+    # 검색어
+    search_text = st.text_input("🔎 설명/규칙 검색", "")
+
+    # 필터링
+    filtered = []
+    for event in events:
+        if event.camera_id not in selected_cameras:
+            continue
+        if event.event_type not in selected_types:
+            continue
+        if getattr(event, "alert_level", "low") not in selected_levels:
+            continue
+        if event.confidence < min_confidence:
+            continue
+        if cutoff and hasattr(event, "timestamp") and event.timestamp < cutoff:
+            continue
+        if search_text:
+            desc = getattr(event, "description", "") or ""
+            rule = getattr(event, "rule_name", "") or ""
+            if search_text.lower() not in desc.lower() and search_text.lower() not in rule.lower():
+                continue
+        filtered.append(event)
+
+    st.caption(f"**필터링 결과: {len(filtered)}건**")
+
+    # 결과 표시
+    for event in filtered[-30:]:  # 최신 30개
+        is_vlm = event.event_type == "vlm_analysis_candidate"
+        icon = "🤖" if is_vlm else "🚨"
+        alert_level = getattr(event, "alert_level", "low")
+        alert_icon = get_alert_level_icon(alert_level)
+
+        with st.expander(
+            f"{icon} [{event.timestamp.strftime('%m-%d %H:%M:%S')}] "
+            f"{event.camera_id} - {event.event_type} {alert_icon}"
+        ):
+            st.json(event.to_dict() if hasattr(event, 'to_dict') else {
+                "event_type": event.event_type,
+                "camera_id": event.camera_id,
+                "timestamp": event.timestamp.isoformat(),
+                "confidence": event.confidence,
+                "alert_level": alert_level,
+            })
+            if hasattr(event, 'image') and event.image is not None:
+                st.image(event.image, caption=f"{event.camera_id} - {event.timestamp}")
+
+
+def render_health_check():
+    """헬스체크 대시보드 (Phase 4)"""
+    st.subheader("🏥 시스템 헬스체크")
+
+    try:
+        from src.utils.health import (
+            HealthChecker,
+            check_disk_space,
+            check_memory_usage,
+            check_ollama_available,
+        )
+
+        checker = HealthChecker()
+        checker.register("disk_space", check_disk_space)
+        checker.register("memory_usage", check_memory_usage)
+        checker.register("ollama", check_ollama_available)
+
+        report = checker.run_checks()
+
+        # 전체 상태
+        if report.overall_healthy:
+            st.success("✅ 모든 컴포넌트 정상")
+        else:
+            st.error("⚠️ 일부 컴포넌트에 문제가 있습니다")
+
+        # 컴포넌트별 상태
+        st.markdown("**컴포넌트별 상태**")
+        for comp in report.components:
+            icon = "✅" if comp.healthy else "❌"
+            st.markdown(f"- {icon} **{comp.name}**: {comp.message}")
+
+        # 시스템 메트릭
+        st.divider()
+        st.markdown("**시스템 메트릭**")
+        d = report.system_metrics.to_dict()
+        st.json(d)
+
+        # 헬스체크 엔드포인트 안내
+        st.divider()
+        st.info(
+            "💡 **헬스체크 HTTP 엔드포인트**\n\n"
+            "- `GET /health` - 전체 상태 및 컴포넌트별 헬스체크\n"
+            "- `GET /health/live` - Liveness 체크 (프로세스 생존)\n"
+            "- `GET /health/ready` - Readiness 체크 (의존성 준비)\n\n"
+            "기본 포트: 8081 (대시보드와 분리)\n\n"
+            "시작 명령: `python -c \"from src.utils.health import start_health_server; start_health_server()\"`"
+        )
+
+    except Exception as e:
+        st.error(f"헬스체크 실패: {e}")
+
 
 if __name__ == "__main__":
     main()

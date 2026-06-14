@@ -286,6 +286,48 @@ class TestSafetyPipeline(unittest.TestCase):
         self.assertEqual(len(analyses), 1)
         pipeline._vlm_executor.submit.assert_called_once()
 
+    def test_vlm_cache_skips_duplicate_non_critical_events(self):
+        pipeline = SafetyPipeline(detector=Mock(), vlm_cache_ttl_sec=60)
+        pipeline._vlm_executor = Mock()
+        event = SafetyEvent(
+            event_id="evt_1",
+            camera_id="cam_001",
+            event_type="no_helmet",
+            timestamp=__import__('datetime').datetime.now(),
+            confidence=0.8,
+            image=np.zeros((10, 10, 3), dtype=np.uint8),
+            alert_level="medium",
+        )
+
+        self.assertTrue(pipeline._submit_vlm_analysis(event))
+        self.assertFalse(pipeline._submit_vlm_analysis(event))
+
+        pipeline._vlm_executor.submit.assert_called_once()
+        stats = pipeline.get_vlm_cache_stats()
+        self.assertEqual(stats["misses"], 1)
+        self.assertEqual(stats["hits"], 1)
+        self.assertEqual(stats["bypasses"], 0)
+
+    def test_vlm_cache_bypasses_high_priority_events(self):
+        pipeline = SafetyPipeline(detector=Mock(), vlm_cache_ttl_sec=60)
+        pipeline._vlm_executor = Mock()
+        event = SafetyEvent(
+            event_id="evt_2",
+            camera_id="cam_001",
+            event_type="fire",
+            timestamp=__import__('datetime').datetime.now(),
+            confidence=0.95,
+            image=np.zeros((10, 10, 3), dtype=np.uint8),
+            alert_level="critical",
+        )
+
+        self.assertTrue(pipeline._submit_vlm_analysis(event))
+        self.assertTrue(pipeline._submit_vlm_analysis(event))
+
+        self.assertEqual(pipeline._vlm_executor.submit.call_count, 2)
+        stats = pipeline.get_vlm_cache_stats()
+        self.assertEqual(stats["bypasses"], 2)
+
 
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requirements.txt 의존성 설치 후 실행 가능")
 class TestAlertManager(unittest.TestCase):
@@ -310,6 +352,37 @@ class TestAlertManager(unittest.TestCase):
         )
         manager.handle_event(event)
         self.assertEqual(manager.event_count, 1)
+
+    def test_alert_log_parser_reads_actual_formatter_line(self):
+        from src.alerts.alert_manager import parse_alert_log_line
+
+        line = '2026-06-10 12:00:00 | INFO | EVENT | {"event_type": "fire", "camera_id": "cam_001"}'
+
+        parsed = parse_alert_log_line(line)
+
+        self.assertEqual(parsed["event_type"], "fire")
+        self.assertEqual(parsed["camera_id"], "cam_001")
+
+    def test_get_event_log_reads_written_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_file = str(Path(tmp) / "alerts.log")
+            manager = AlertManager(AlertConfig(enabled=True, save_images=False, console_output=False, log_file=log_file))
+            event = SafetyEvent(
+                event_id="test_evt_log",
+                camera_id="cam_001",
+                event_type="person_detected",
+                timestamp=__import__('datetime').datetime.now(),
+                confidence=0.95,
+            )
+
+            manager.handle_event(event)
+            for handler in manager.alert_logger.handlers:
+                handler.flush()
+
+            events = manager.get_event_log(limit=10)
+
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["event_type"], "person_detected")
 
 
 if __name__ == '__main__':
