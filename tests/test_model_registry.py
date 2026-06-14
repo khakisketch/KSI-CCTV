@@ -75,6 +75,23 @@ class TestMultiModelRegistry(unittest.TestCase):
         self.assertEqual(list(results.keys()), ["general_yolo"])
         self.assertEqual(results["general_yolo"][0].class_name, "general_object")
 
+    def test_detect_all_applies_class_map(self):
+        profiles = {
+            "models": {
+                "ppe_yolo": {
+                    "enabled": True,
+                    "type": "yolo_onnx",
+                    "model_path": "./models/ppe.onnx",
+                    "class_map": {"ppe_object": "helmet"},
+                }
+            }
+        }
+        registry = MultiModelRegistry(profiles, detector_cls=FakeDetector)
+
+        results = registry.detect_all(np.zeros((20, 20, 3), dtype=np.uint8))
+
+        self.assertEqual(results["ppe_yolo"][0].class_name, "helmet")
+
     def test_failed_model_does_not_crash_when_not_strict(self):
         profiles = {
             "models": {

@@ -23,20 +23,21 @@ models:
     source: pre_trained
     model_path: "./models/yolo26_ppe.onnx"
     class_profile: safety_custom
-    classes: [person, helmet, vest]
+    # classes는 ONNX 모델에 내장된 names 메타데이터에서 자동 인식한다(null 권장).
+    # 실측 메타데이터: {0: Hardhat, 1: NO-Hardhat} — 2 classes, output [1,6,8400]. vest 미지원.
+    # 아래 class_map이 모델 클래스명 → KSI-CCTV 표준명으로 변환한다.
+    classes: null
     input_size: [640, 640]
     conf_threshold: 0.30
     iou_threshold: 0.45
     postprocess_mode: auto
     device: cuda
     fp16: true
-    description: "Pre-trained hard-hat detection model (keremberke/yolov8n-hard-hat-detection). Class-mapped to helmet/no_helmet."
+    description: "Pre-trained hard-hat model (keremberke/yolov8n-hard-hat-detection). 2-class Hardhat/NO-Hardhat → helmet/no_helmet. 조끼는 미지원(커스텀 모델 필요)."
+    # 모델 실제 클래스명 → KSI-CCTV 표준 클래스명
     class_map:
       Hardhat: helmet
       NO-Hardhat: no_helmet
-      Helmet: helmet
-      NO-Helmet: no_helmet
-      person: person
 
   fire_smoke_yolo:
     enabled: true
@@ -44,19 +45,23 @@ models:
     source: pre_trained
     model_path: "./models/yolo26_fire_smoke.onnx"
     class_profile: custom
-    classes: [fire, smoke]
+    # classes는 ONNX 모델에 내장된 names 메타데이터에서 자동 인식한다(null 권장).
+    # 실측 메타데이터: {0: fire-smoke, 1: fog, 2: sol, 3: fire, 4: factory-smoke}
+    #   — 5 classes, output [1,9,8400]. (touati-kamel/yolov8s-forest-fire-detection)
+    # 아래 class_map이 fire-smoke/fire → fire, factory-smoke → smoke로 변환(fog/sol은 미매핑).
+    classes: null
     input_size: [640, 640]
     conf_threshold: 0.20
     iou_threshold: 0.40
     postprocess_mode: auto
     device: cuda
     fp16: true
-    description: "Pre-trained fire detection model (keremberke/yolov8n-fire-detection). Fire class only; smoke detection via VLM fallback."
+    description: "Pre-trained forest-fire model (touati-kamel/yolov8s-forest-fire-detection), 5-class. fire-smoke/fire → fire, factory-smoke → smoke. fog/sol은 무관(미매핑)."
+    # 모델 실제 클래스명 → KSI-CCTV 표준 클래스명 (fog, sol은 의도적으로 미매핑 = 어떤 정책도 트리거 안 함)
     class_map:
+      fire-smoke: fire
       fire: fire
-      Fire: fire
-      smoke: smoke
-      Smoke: smoke
+      factory-smoke: smoke
 
   pose_fall_model:
     enabled: false

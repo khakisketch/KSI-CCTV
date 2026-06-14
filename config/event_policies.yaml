@@ -19,33 +19,34 @@ profiles:
 
       no_helmet:
         enabled: true
+        # ppe_yolo가 NO-Hardhat(=no_helmet)을 직접 탐지하므로 person+helmet overlap 룰이 아니라
+        # direct_detection을 사용한다. (이 모델은 person 클래스를 출력하지 않아 overlap 룰은 영구 미발생)
         trigger:
           models: [ppe_yolo]
-          classes: [person, helmet]
+          classes: [no_helmet]
+          min_confidence: 0.30
         rule:
-          type: safety_gear_overlap
-          gear: helmet
-          person_zone: head
-          min_overlap: 0.15
+          type: direct_detection
         vlm: on_ambiguous
         alert_level: medium
         cooldown_sec: 30
         description: "안전모 미착용"
 
       no_vest:
-        enabled: true
+        # 현재 ppe_yolo 모델(Hardhat/NO-Hardhat 2클래스)은 조끼를 탐지하지 못하므로 비활성화.
+        # vest/no_vest 클래스를 가진 커스텀 safety 모델 도입(로드맵 Track B) 후 enabled: true로 전환.
+        # 그 전까지 조끼 미착용은 person_detected → VLM 분석 경로로만 설명된다.
+        enabled: false
         trigger:
           models: [ppe_yolo]
-          classes: [person, vest]
+          classes: [no_vest]
+          min_confidence: 0.30
         rule:
-          type: safety_gear_overlap
-          gear: vest
-          person_zone: torso
-          min_overlap: 0.20
+          type: direct_detection
         vlm: on_ambiguous
         alert_level: medium
         cooldown_sec: 30
-        description: "안전조끼 미착용"
+        description: "안전조끼 미착용 (커스텀 모델 필요 — 현재 비활성)"
 
       fire:
         enabled: true
@@ -62,16 +63,18 @@ profiles:
 
       smoke:
         enabled: true
+        # fire_smoke_yolo의 factory-smoke 클래스를 smoke로 매핑(model_profiles.yaml class_map) → 직접 탐지.
+        # (이전에는 smoke 클래스가 없는 general_yolo(COCO)로 라우팅되어 영구 미발생하는 dead config였음)
         trigger:
-          models: [general_yolo]
-          classes: [fire, smoke]
+          models: [fire_smoke_yolo]
+          classes: [smoke]
           min_confidence: 0.30
         rule:
           type: direct_detection
         vlm: on_high_confidence
         alert_level: high
         cooldown_sec: 20
-        description: "연기 감지 (화재 모델이 smoke을 탐지하지 않아 general_yolo + VLM으로 fallback)"
+        description: "연기 감지 (fire_smoke_yolo의 factory-smoke → smoke 매핑)"
 
       fall:
         enabled: true

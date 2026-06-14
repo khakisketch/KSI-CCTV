@@ -5,6 +5,8 @@ ONNX 기반 실시간 객체 탐지 (안전장비, 사람, 화재 등).
 YOLO26처럼 end-to-end/NMS-free 출력이 가능한 모델과 기존 YOLOv8/YOLO11
 형식의 raw 출력 모두를 처리할 수 있도록 후처리를 분리한다.
 """
+import ast
+import json
 import logging
 import time
 from typing import List, Tuple, Dict, Optional, Sequence, Union
@@ -94,52 +96,129 @@ class YOLODetector:
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self.class_profile = class_profile
-        self.classes = self._resolve_classes(classes, class_profile)
         self.device = device
         self.fp16 = fp16
         self.postprocess_mode = postprocess_mode
-        
+
         self.session: Optional[ort.InferenceSession] = None
         self.input_name: str = ""
         self.input_dtype = np.float32
         self.output_names: List[str] = []
         self._logged_output_shapes = False
-        
+        self._onnx_class_names: Optional[Dict[int, str]] = None
+
         self._init_session()
+        # 클래스 매핑은 ONNX 모델에 내장된 메타데이터(names)를 1차 출처로 사용한다.
+        # config의 classes는 명시적 override로만 쓰이며, 개수가 모델과 다르면
+        # 메타데이터를 신뢰해 silent 오라벨을 방지한다. (_resolve_classes 참고)
+        self.classes = self._resolve_classes(classes, class_profile, self._onnx_class_names)
         logger.info(f"YOLODetector 초기화 완료: {model_path}")
 
     @classmethod
     def _resolve_classes(
         cls,
         classes: Optional[Union[Dict[int, str], Sequence[str]]],
-        class_profile: str = "coco"
+        class_profile: str = "coco",
+        onnx_names: Optional[Dict[int, str]] = None,
     ) -> Dict[int, str]:
-        """설정값을 클래스 id → 이름 매핑으로 변환한다.
+        """클래스 id → 이름 매핑을 결정한다.
 
-        기본 배포 모델(`yolo26n.pt`)은 COCO 80 클래스 기반이므로 기본값은
-        COCO로 둔다. 안전모/조끼/화재/연기/쓰러짐을 직접 탐지하는 커스텀
-        모델을 사용할 때만 `class_profile: safety_custom` 또는 명시적
-        `classes` 목록을 사용한다.
+        우선순위(근본 수정):
+        1. ONNX 모델에 내장된 `names` 메타데이터(`onnx_names`)를 1차 출처로 사용한다.
+           대부분의 ultralytics export는 정확한 클래스 이름/순서를 내장하므로,
+           이것이 가장 신뢰할 수 있는 ground truth다.
+        2. config의 명시적 `classes`는 override로만 사용한다. 단, ONNX 메타데이터가
+           있는데 개수가 다르면(=config가 잘못됨) 메타데이터를 신뢰하고 경고한다.
+           이렇게 해서 "config가 모델 출력과 어긋나 silent 오라벨"되는 버그 클래스를
+           구조적으로 제거한다.
+        3. 메타데이터도 명시적 classes도 없으면 `class_profile`(COCO/safety)로 폴백한다.
         """
-        if classes:
-            if isinstance(classes, dict):
-                return {int(k): str(v) for k, v in classes.items()}
-            if isinstance(classes, str):
-                return {
-                    idx: name.strip()
-                    for idx, name in enumerate(classes.split(','))
-                    if name.strip()
-                }
-            return {idx: str(name) for idx, name in enumerate(classes)}
+        explicit = cls._normalize_classes(classes)
+        meta = {int(k): str(v) for k, v in onnx_names.items()} if onnx_names else None
+
+        if explicit:
+            if meta and len(explicit) != len(meta):
+                logger.warning(
+                    "config classes 개수(%d)가 ONNX 모델 실제 클래스 개수(%d)와 불일치합니다. "
+                    "오라벨 방지를 위해 ONNX 메타데이터(names)를 사용합니다: %s",
+                    len(explicit), len(meta), meta,
+                )
+                return dict(meta)
+            return explicit
+
+        if meta:
+            logger.info("ONNX 메타데이터에서 클래스 %d개를 자동 인식했습니다.", len(meta))
+            return dict(meta)
 
         profile = (class_profile or "coco").strip().lower()
         if profile in {"coco", "pretrained", "yolo26_coco", "yolo26-coco"}:
+            logger.info(
+                "COCO 클래스 프로파일 사용: 안전모/조끼/화재/연기/쓰러짐을 직접 탐지할 수 없습니다. "
+                "VLM 분석 또는 safety_custom 모델 필요."
+            )
             return dict(cls.COCO_CLASSES)
         if profile in {"safety", "safety_custom", "custom"}:
+            logger.warning(
+                "ONNX 메타데이터 없이 class_profile=%s 폴백을 사용합니다. "
+                "모델 출력과 클래스 이름이 어긋날 수 있으니 config의 classes를 명시하세요.",
+                class_profile,
+            )
             return dict(cls.DEFAULT_CLASSES)
 
         logger.warning("알 수 없는 class_profile=%s, COCO 클래스를 사용합니다", class_profile)
         return dict(cls.COCO_CLASSES)
+
+    @staticmethod
+    def _normalize_classes(
+        classes: Optional[Union[Dict[int, str], Sequence[str]]],
+    ) -> Optional[Dict[int, str]]:
+        """config classes 값(dict/list/CSV str)을 {id: name}으로 정규화. 비어 있으면 None."""
+        if not classes:
+            return None
+        if isinstance(classes, dict):
+            return {int(k): str(v) for k, v in classes.items()}
+        if isinstance(classes, str):
+            normalized = {
+                idx: name.strip()
+                for idx, name in enumerate(classes.split(','))
+                if name.strip()
+            }
+            return normalized or None
+        normalized = {idx: str(name) for idx, name in enumerate(classes)}
+        return normalized or None
+
+    @staticmethod
+    def _extract_onnx_class_names(session: ort.InferenceSession) -> Optional[Dict[int, str]]:
+        """ONNX 모델 메타데이터에서 클래스 이름 맵을 추출한다.
+
+        ultralytics export는 `names`를 stringified dict("{0: 'person', ...}")로
+        custom_metadata_map에 저장한다. 파싱 실패/부재 시 None을 반환해
+        호출부가 config/class_profile로 폴백하게 한다.
+        """
+        try:
+            metadata = session.get_modelmeta().custom_metadata_map or {}
+        except Exception as exc:  # 메타데이터 접근 실패는 치명적이지 않음
+            logger.debug("ONNX 메타데이터 접근 실패: %s", exc)
+            return None
+
+        raw = metadata.get("names")
+        if not raw:
+            return None
+
+        parsed = None
+        for loader in (ast.literal_eval, json.loads):
+            try:
+                parsed = loader(raw)
+                break
+            except (ValueError, SyntaxError, TypeError):
+                continue
+
+        if not isinstance(parsed, dict) or not parsed:
+            return None
+        try:
+            return {int(k): str(v) for k, v in parsed.items()}
+        except (ValueError, TypeError):
+            return None
     
     def _init_session(self):
         """ONNX 세션 초기화"""
@@ -169,13 +248,17 @@ class YOLODetector:
             self.input_name = input_meta.name
             self.input_dtype = np.float16 if "float16" in input_meta.type else np.float32
             self.output_names = [o.name for o in self.session.get_outputs()]
-            
+
+            # 모델에 내장된 클래스 이름(ultralytics export의 `names` 메타데이터) 추출
+            self._onnx_class_names = self._extract_onnx_class_names(self.session)
+
             output_shapes = [getattr(o, "shape", None) for o in self.session.get_outputs()]
             logger.info(
                 "ONNX 세션 생성 완료 "
                 f"(Providers: {self.session.get_providers()}, "
                 f"Input: name={self.input_name}, type={input_meta.type}, "
-                f"shape={input_meta.shape}, Outputs: {output_shapes})"
+                f"shape={input_meta.shape}, Outputs: {output_shapes}, "
+                f"ONNX names: {self._onnx_class_names})"
             )
             
         except Exception as e:
@@ -487,7 +570,6 @@ class YOLODetector:
         
         for person in persons:
             px1, py1, px2, py2 = person.bbox
-            pw = px2 - px1
             ph = py2 - py1
             
             # Person bbox 영역 계산
@@ -498,10 +580,6 @@ class YOLODetector:
             has_vest = False
             
             for g in gear:
-                gx1, gy1, gx2, gy2 = g.bbox
-                gear_center_x = (gx1 + gx2) / 2
-                gear_center_y = (gy1 + gy2) / 2
-                
                 # 헬멧: person 상단 30% 영역과 overlap
                 if g.class_name == "helmet":
                     if self._check_overlap(g.bbox, helmet_zone, min_overlap=0.15):

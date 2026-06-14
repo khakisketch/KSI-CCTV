@@ -160,7 +160,14 @@ class MultiModelRegistry:
                 logger.warning("로드되지 않은 모델 탐지 생략: %s", name)
                 continue
             try:
-                results[name] = model.detect(image)
+                detections = model.detect(image)
+                profile = self.profiles.get(name, {})
+                class_map = get_class_map_for_profile(profile)
+                results[name] = adapt_detections(
+                    detections,
+                    class_map=class_map,
+                    model_name=name,
+                )
             except Exception as exc:
                 logger.error("모델 추론 실패 [%s]: %s", name, exc)
                 if self.strict:
