@@ -1,5 +1,153 @@
 # Latest Build Handoff
 
+## Phase 10 M0 — Policy-mode 실행 경로 복구 + 통합 정확성 정리 (완료 ✅)
+
+## Review Handoff
+- User intent: 실제 대시보드 실행 경로를 policy-mode(`MultiModelRegistry` + `EventPolicyEngine`)로 전환하고, 관련 통합 정확성 결함을 한 번에 닫는다.
+- Plan summary:
+  - 대시보드 `start_pipeline()` 기본 실행 경로를 policy-mode로 전환.
+  - 카메라별 profile(`domain`, `events`/`enabled_events`, `zones`, `detection_type`)을 파이프라인에 적용.
+  - policy-mode 최신 탐지 결과를 camera_id 기준으로 저장/표시.
+  - `detect_all()`에도 class adapter 적용.
+  - VLM TTL cache를 실제 제출 경로에 연결하고 `critical/high` bypass 유지.
+  - 실제 `alerts.log` formatter 기준 event log parser 수정.
+  - `.gitignore`에 개발 산출물 ignore 보강, 모델 파일 LFS tracking 정책 유지.
+- Acceptance criteria:
+  - 대시보드 시작 후 `pipeline.use_policy_mode == True`인 경로가 기본이다.
+  - `detect_all()` 결과에 `class_map`이 반영된다.
+  - VLM cache stats가 실제 hit/miss/bypass로 증가한다.
+  - 대시보드 이벤트 로그/`AlertManager.get_event_log()`가 실제 `EVENT | {json}` 로그를 파싱한다.
+  - `.venv/` 등 개발 산출물이 `git status --short` noise에서 제외된다.
+  - 검증 결과와 blocker가 `.ai/task-state.md`/`.ai/handoff.md`에 기록된다.
+- Persistent artifacts read/updated:
+  - Read: `.ai/plan.md`, `.ai/task-state.md`, `.ai/handoff.md`, `.ai/review-checklist.md`
+  - Updated: `.ai/task-state.md`, `.ai/handoff.md`
+- Changed files:
+  - `.gitignore`
+  - `src/dashboard/app.py`
+  - `src/detection/model_registry.py`
+  - `src/pipeline/pipeline.py`
+  - `src/alerts/alert_manager.py`
+  - `tests/test_model_registry.py`
+  - `tests/test_pipeline.py`
+  - `.ai/task-state.md`
+  - `.ai/handoff.md`
+- Verification run:
+  - `python3 -m compileall -q src tests scripts` — passed
+  - `./.venv/bin/python -m unittest discover tests -v` — **101 tests OK**
+  - `./.venv/bin/python scripts/e2e_smoke_test.py --policy-mode` — passed (`ok: true`, 3 active models, `failed_models={}`)
+  - `./.venv/bin/python scripts/stress_test.py --duration 10 --policy-mode` — passed (`ok: true`, `failed_frames=0`, `events_by_type={fire: 1}`)
+  - `./.venv/bin/python scripts/healthcheck.py --json` — passed (`ok: true`, 12 passes, 1 warning, 0 failures; CUDA unavailable/CPU fallback)
+  - `git status --short && git lfs ls-files` — `.venv/` no longer appears; `git-lfs` command unavailable
+  - `git diff --check -- .gitignore src/alerts/alert_manager.py src/dashboard/app.py src/detection/model_registry.py src/pipeline/pipeline.py tests/test_model_registry.py tests/test_pipeline.py` — passed
+- Known risks:
+  - `git-lfs` is not installed in this environment; build did not install system packages.
+  - CUDA provider remains unavailable; CPU fallback only.
+  - 대시보드 브라우저 수동 확인은 미실행.
+  - 전체 working tree에는 M0 이전의 미커밋 변경/신규 파일이 남아 있어 commit 전 별도 정리가 필요.
+  - policy-mode CPU fallback은 느림(stress avg inference 약 1.68s/frame).
+- Questions for acceptance:
+  - policy-mode를 대시보드 기본 경로로 전환한 방식이 승인 가능한가?
+  - `critical/high` VLM cache bypass와 medium 이하 TTL cache 정책이 승인 가능한가?
+  - `git-lfs` 미설치 blocker를 M2에서 처리하는 순서가 적절한가?
+- Current phase: summarize
+- Completed: Phase 10 M0 build milestone.
+- Blocked: `git-lfs` 미설치, CUDA provider 미사용, 브라우저 수동 UI 확인 미실행.
+- Next recommended phase: review
+- Stop condition: M0만 구현하고 중단. CUDA/데이터셋/학습/RTSP 재연결은 진행하지 않음.
+
+## Suggested review prompt
+Review the current diff for Phase 10 M0 acceptance.
+
+Focus on whether the dashboard now starts the policy-mode path by default, whether `detect_all()` class mapping is correct, whether VLM cache hit/miss/bypass behavior is safe, whether event log parsing matches the actual formatter, and whether `.gitignore` keeps dev artifacts out while preserving model LFS policy.
+
+Separate findings into Must-fix, Should-fix, and Optional. Also state whether the next step should be build, plan, or done.
+
+---
+
+# Previous Planning Handoff
+
+## Phase 10 Rebaseline — M0: Policy-mode 실행 경로 복구 + 통합 정확성 정리
+
+현재 코드 기준 감사 결과, CUDA/데이터셋/학습보다 먼저 닫아야 할 제품 실행 경로 drift가 확인되었습니다. 특히 `src/dashboard/app.py`의 `start_pipeline()`이 `MultiModelRegistry`/`EventPolicyEngine`을 주입하지 않고 legacy `YOLODetector` 기반 `SafetyPipeline`을 시작하므로, Phase 5~9에서 만든 정책 기반 아키텍처가 실제 대시보드 실행 경로에 연결되지 않습니다. Phase 10은 아래 M0를 최우선 build milestone으로 재정렬합니다.
+
+## Build Handoff
+- Goal: 실제 대시보드 실행 경로를 policy-mode(`MultiModelRegistry` + `EventPolicyEngine`)로 전환하고, 관련 통합 정확성 결함을 한 번에 닫는다.
+- Scope:
+  - `src/dashboard/app.py`: `start_pipeline()` 기본 경로를 policy-mode로 전환, registry/engine 생성 및 `SafetyPipeline` 주입, 카메라 profile 적용, policy-mode 탐지 결과 표시 key 정리.
+  - `src/detection/model_registry.py`: `detect_all()`에도 `class_map`/`adapt_detections()` 적용.
+  - `src/pipeline/pipeline.py`: VLM TTL cache hit/miss/bypass 판단을 실제 VLM 제출 경로에 연결.
+  - `src/alerts/alert_manager.py` 및/또는 `src/dashboard/app.py`: 실제 `alerts.log` formatter 출력(`timestamp | level | EVENT | {json}`) 기준으로 이벤트 로그 파싱 수정.
+  - `.gitignore` / `.gitattributes`: `.venv/` 등 개발 산출물 ignore 정리, 모델 파일 LFS tracking 정책 유지.
+- Non-goals:
+  - CUDA provider 설치/빌드/TensorRT 변환.
+  - 데이터셋 다운로드, 커스텀 모델 학습, 모델 교체.
+  - RTSP 재연결 시뮬레이션.
+  - systemd/Docker 구조 변경.
+  - git commit/push.
+- Persistent artifacts read/updated:
+  - Read: `.ai/plan.md`, `.ai/task-state.md`, `.ai/handoff.md`, `.ai/review-checklist.md`.
+  - Updated by plan: `.ai/plan.md`, `.ai/handoff.md`.
+  - Not updated: `.ai/task-state.md`는 build-owned이므로 이번 plan에서는 읽기만 함. build 완료 후 build가 실제 변경/검증 결과로 갱신할 것.
+- Files likely affected:
+  - `src/dashboard/app.py`
+  - `src/detection/model_registry.py`
+  - `src/pipeline/pipeline.py`
+  - `src/alerts/alert_manager.py`
+  - tests: `tests/test_model_registry.py`, `tests/test_pipeline.py`, `tests/test_vlm.py` 또는 새 focused tests
+  - `.gitignore`
+  - `.gitattributes`는 필요 시 확인만, LFS pattern 유지
+- Implementation steps:
+  1. 대시보드 시작 경로에서 `MultiModelRegistry.from_config()`와 `EventPolicyEngine.from_config()`를 생성하고 `SafetyPipeline(model_registry=..., policy_engine=...)`로 시작한다.
+  2. 시작 시 각 카메라에 `domain`, `events`/`enabled_events`, `zones`, `detection_type`을 포함한 profile을 적용한다.
+  3. policy-mode 최신 탐지 결과를 camera_id 기준으로 조회/표시할 수 있게 `latest_detections` 저장/조회 방식을 정리한다.
+  4. `MultiModelRegistry.detect_all()`이 `detect_model()`과 동일하게 class adapter를 통과하게 고친다.
+  5. VLM cache가 실제 VLM 제출 전에 TTL hit/miss/bypass를 판단하도록 연결하고 stats가 실제 값으로 증가하게 한다.
+  6. 실제 alerts log line을 파싱하는 helper를 만들거나 기존 파서를 수정해 대시보드 이벤트 로그와 `AlertManager.get_event_log()`가 정상 JSON을 읽게 한다.
+  7. `.gitignore`에 개발 산출물 ignore를 보강한다. 모델 파일은 ignore하지 않는다.
+  8. focused tests를 추가/수정하고 가장 작은 관련 검증부터 실행한다.
+- Verification:
+  - `python3 -m compileall -q src tests scripts`
+  - `./.venv/bin/python -m unittest discover tests -v` 또는 현재 프로젝트 표준 pytest 명령
+  - `./.venv/bin/python scripts/e2e_smoke_test.py --policy-mode`
+  - 가능하면 `./.venv/bin/python scripts/stress_test.py --duration 10 --policy-mode`
+  - `./.venv/bin/python scripts/healthcheck.py --json`
+  - `git status --short`
+  - `git lfs ls-files`는 시도하되 `git-lfs` 미설치 시 설치하지 말고 blocker로 기록
+- Review focus:
+  - 대시보드가 정말 policy-mode로 실행되는지.
+  - legacy fallback이 실패를 숨기지 않는지.
+  - class_map이 모든 다중 모델 추론 경로에 적용되는지.
+  - VLM cache가 안전 이벤트를 누락시키지 않는지 (`critical/high` bypass 유지).
+  - 로그 파싱이 실제 formatter와 일치하는지.
+  - git ignore/LFS 정책이 모델 파일과 개발 산출물을 구분하는지.
+- Risks:
+  - 대시보드 실행 경로 변경은 사용자-visible behavior change.
+  - policy-mode에서 모델 3개를 모두 실행하면 CPU fallback 환경에서 느릴 수 있음.
+  - VLM cache 적용 위치가 부적절하면 설명/위험도 갱신이 지연될 수 있음.
+  - `git-lfs`는 현재 환경에 없을 수 있으며 build가 system package 설치를 하지 않아야 함.
+- Acceptance criteria:
+  - 대시보드 시작 후 `pipeline.use_policy_mode == True`인 경로가 기본이다.
+  - `detect_all()` 결과에 `class_map`이 반영된다.
+  - VLM cache stats가 실제 hit/miss/bypass로 증가한다.
+  - 대시보드 이벤트 로그/`AlertManager.get_event_log()`가 실제 `EVENT | {json}` 로그를 파싱한다.
+  - `.venv/` 등 개발 산출물이 `git status --short` noise에서 제외된다.
+  - 검증 명령 결과와 남은 blocker가 `.ai/task-state.md`/`.ai/handoff.md`에 기록된다.
+- Current phase: plan
+- Completed: Phase 10 우선순위 재정렬 및 M0 build handoff 작성.
+- Blocked: 없음. 단, `git-lfs` 미설치는 build에서 확인 후 blocker로만 기록.
+- Next recommended phase: build
+- Stop condition: M0 범위만 구현하고 멈춘다. CUDA/데이터셋/학습/RTSP 재연결로 scope 확장하지 않는다.
+
+## Suggested build prompt
+Implement the Build Handoff above as one bounded milestone.
+Do not broaden scope. Run the smallest relevant verification if practical.
+End with Review Handoff and a suggested review prompt.
+
+---
+
+# Previous Build Handoff
+
 ## Phase 9 — M4 + M3 + M1 + M2 + Should-fix: 모든 Phase 9 마일스톤 완료 (완료 ✅)
 
 Phase 8 완료 이후 Phase 9의 핵심 4개 마일스톤(M4, M3, M1, M2)과 review Should-fix를 모두 마쳤다.

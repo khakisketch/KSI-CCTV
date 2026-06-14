@@ -724,3 +724,98 @@ Phase 7 site-specific deployment hardening (완료) → next recommended phase: 
 - 웹캠/RTSP 장비 없음 → 단일 카메라(single-threaded) 시뮬레이션
 - 실제 ONNX GPU provider 검증은 DGX Spark 환경에서 별도
 - `--cameras`는 camera_id 분산일 뿐 실제 멀티스레드 처리 아님
+
+## Phase 10 M0 — Policy-mode 실행 경로 복구 + 통합 정확성 정리 (완료 ✅)
+
+### Completed
+- `src/dashboard/app.py`의 `start_pipeline()` 기본 실행 경로를 legacy single-detector에서 policy-mode로 전환:
+  - `MultiModelRegistry.from_config("./config/model_profiles.yaml")` 생성
+  - `EventPolicyEngine.from_config("./config/event_policies.yaml")` 생성
+  - `SafetyPipeline(model_registry=..., policy_engine=...)` 주입
+  - `pipeline.use_policy_mode == True`가 되도록 구성
+  - 활성 모델이 없으면 조용한 legacy fallback 없이 사용자에게 오류 표시
+  - 일부 모델 로드 실패는 `st.warning()`으로 노출
+- 대시보드 시작 시 카메라별 policy profile 적용:
+  - `load_camera_profiles()` 추가
+  - `build_camera_policy_profile()` 추가
+  - `domain`, `events`/`enabled_events`, `zones`, `detection_type`를 `pipeline.set_camera_profile()`로 적용
+  - 카메라 설정 탭에서 선택한 이벤트/도메인을 session profile에 저장 후 실행 중 파이프라인에도 반영
+- policy-mode 최신 탐지 결과 표시 경로 정리:
+  - `SafetyPipeline._process_frame_with_policy()`가 `latest_detections[camera_id]`에 다중 모델 결과를 flatten 저장
+  - 대시보드 스트림 오버레이가 policy-mode에서도 사용 가능한 detector/model drawer로 bbox 표시 가능
+- `src/detection/model_registry.py`:
+  - `detect_all()`에도 `detect_model()`과 동일하게 `class_map`/`adapt_detections()` 적용
+- `src/pipeline/pipeline.py`:
+  - `_should_submit_vlm()` 추가: `(camera_id, event_type)` TTL cache hit/miss 판단
+  - `_submit_vlm_analysis()` 추가: 실제 VLM 제출 전에 cache 적용
+  - `critical/high` alert level은 cache bypass로 항상 제출
+  - policy-mode와 legacy `_handle_event()` VLM 제출 경로 모두 새 helper 사용
+- `src/alerts/alert_manager.py` / `src/dashboard/app.py`:
+  - `parse_alert_log_line()` 추가
+  - 실제 formatter 출력(`timestamp | level | EVENT | {json}`) 기준으로 이벤트 로그 파싱 수정
+  - `AlertManager.get_event_log()`와 대시보드 이벤트 로그 뷰어가 같은 parser 사용
+  - alert logger handler 교체 시 기존 handler close 처리
+- `.gitignore`:
+  - `.venv/`, `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, `htmlcov/`, `.coverage*` ignore 추가
+  - 모델 파일은 ignore하지 않고 `.gitattributes` LFS tracking 정책 유지
+- Focused tests 추가:
+  - `test_detect_all_applies_class_map`
+  - `test_vlm_cache_skips_duplicate_non_critical_events`
+  - `test_vlm_cache_bypasses_high_priority_events`
+  - `test_alert_log_parser_reads_actual_formatter_line`
+  - `test_get_event_log_reads_written_event`
+
+### Changed files (M0)
+- `.gitignore`
+- `src/dashboard/app.py`
+- `src/detection/model_registry.py`
+- `src/pipeline/pipeline.py`
+- `src/alerts/alert_manager.py`
+- `tests/test_model_registry.py`
+- `tests/test_pipeline.py`
+- `.ai/task-state.md`
+- `.ai/handoff.md`
+
+### Verification (M0)
+- `python3 -m compileall -q src tests scripts` — passed
+- `./.venv/bin/python -m unittest discover tests -v` — **101 tests OK**
+- `./.venv/bin/python scripts/e2e_smoke_test.py --policy-mode` — passed (`ok: true`, active models: `general_yolo`, `ppe_yolo`, `fire_smoke_yolo`, `failed_models={}`)
+- `./.venv/bin/python scripts/stress_test.py --duration 10 --policy-mode` — passed (`ok: true`, `failed_frames=0`, `events_by_type={fire: 1}`)
+- `./.venv/bin/python scripts/healthcheck.py --json` — passed (`ok: true`, 12 passes, 1 warning, 0 failures)
+  - Warning: CUDA provider unavailable; CPU fallback used successfully.
+- `git status --short && git lfs ls-files` — git status checked; `.venv/` no longer appears. `git-lfs` command unavailable.
+- `git diff --check -- .gitignore src/alerts/alert_manager.py src/dashboard/app.py src/detection/model_registry.py src/pipeline/pipeline.py tests/test_model_registry.py tests/test_pipeline.py` — passed
+
+### Blockers / remaining risks
+- `git-lfs` is not installed in the current environment (`git: 'lfs' is not a git command`). Build did not install system packages by design.
+- CUDA provider remains unavailable in ONNX Runtime; CPU fallback works.
+- 대시보드 UI는 코드/테스트/healthcheck 기준으로 검증했지만 `bash scripts/run_dashboard.sh` 브라우저 수동 확인은 이번 milestone에서 실행하지 않음.
+- `git status --short`에는 이번 M0 외에도 이전 미커밋 변경/신규 파일(`Dockerfile`, scripts, utils, models/data 등)이 남아 있음. `.venv/` noise는 제거됨.
+- policy-mode는 CPU fallback 환경에서 3개 모델을 모두 실행하므로 latency가 높음(stress avg inference 약 1.68s/frame).
+
+## Phase 10 M1 — 탐지 클래스 정합성 + Phase A 결함 수정 (완료 ✅, 2026-06-14)
+
+### 탐지 클래스 정합성 (근본 수정)
+- **문제**: detector가 ONNX 메타데이터를 읽지 않고 config `classes`를 인덱스로 사용 → config가 모델 실제 출력과 어긋나 silent 오라벨. 실측: ppe_yolo=`{0:Hardhat,1:NO-Hardhat}`(2), fire_smoke_yolo=`{0:fire-smoke,1:fog,2:sol,3:fire,4:factory-smoke}`(5) — config(각각 3·2개)와 불일치.
+- `src/detection/yolo_detector.py`: `_extract_onnx_class_names()`(onnxruntime get_modelmeta `names` 파싱) 추가, `__init__`에서 `_init_session` 먼저 호출 후 `_resolve_classes(classes, profile, onnx_names)` 우선순위 재설계(메타데이터 1차, config는 override이되 개수 불일치 시 메타데이터 신뢰). 기존 dead code(gear_center_x/y, pw) 제거.
+- `config/model_profiles.yaml`: ppe/fire `classes: null`(메타데이터 자동 인식), class_map 정정.
+- `config/event_policies.yaml`: no_helmet overlap→direct_detection, no_vest 비활성(모델 미지원), smoke를 general_yolo→fire_smoke_yolo로 라우팅(dead config 수정).
+- `tests/test_class_resolution.py`(신규 13건): 우선순위 + 실모델 통합(틀린 config 자동 교정 포함).
+
+### Phase A — 잔여 정확성·안정성 결함
+- `src/policy/event_policy_engine.py`: enabled_events=[] 논리 반전 수정, 룰 평가를 trigger.models 범위로 스코핑(크로스모델 중복 카운트 방지).
+- `src/pipeline/pipeline.py`: `_state_lock` 추가(공유 상태 보호), `_record_event()`로 히스토리 일원화 + 이미지 최근 50건만 보존(메모리 ~6GB→~300MB).
+- `src/alerts/alert_manager.py`: `cleanup_old_images()`를 handle_event에서 6시간 throttle 호출.
+- `src/vlm/vlm_inference.py`: `analyze_with_image_array` RGB→BGR 변환(미사용 헬퍼 계약 정정).
+- `docker-compose.yml`: config/models 볼륨 :ro→rw. `src/dashboard/app.py`: dead code `render_system_status`를 13번째 탭으로 연결(모델 상태는 실행 중 레지스트리 우선). `ruff.toml`: line-length top-level 이동(lint 훅 복구).
+- `tests/test_policy.py`(+2): enabled_events=[] / 스코핑 회귀.
+- 감사 오탐 확인: profile_pipeline.py:187(런타임 버그 아님 — 정리만), VLM 색공간(활성 경로 정상).
+
+### Verification (캐시 클린)
+- `./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q` → **116 passed** / `-B -m unittest discover tests` → **116 OK**
+- 실모델·실영상 종단: sample.mp4 → ONNX detect → policy → 콜백으로 fire/no_helmet 실제 발생, 이미지 해제 확인
+- `scripts/e2e_smoke_test.py --policy-mode` → ok:true, failed_models={}
+- 터치 파일 ruff F/E9 0건
+
+### Remaining (장비/데이터 필요)
+- Phase B(실 ONNX+VLM 종단 자동검증 게이트, 장비 불필요) → Phase C(DGX CUDA·실 RTSP) → Phase D(커스텀 모델 학습).

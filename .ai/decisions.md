@@ -148,3 +148,20 @@
 
 ### Phase 10 병행 트랙
 **Decision**: 생산 준비(Track A: 문서 동기화, Git, CUDA 검증, RTSP 시뮬레이션)와 커스텀 모델 학습(Track B: 데이터셋 준비, 학습, ONNX export, 등록)을 병행 진행.
+
+---
+
+## 2026-06-14 — 탐지 클래스 정합성 + Phase A 결정
+
+### ONNX 메타데이터 기반 클래스 자동 인식 (근본 수정)
+**Decision**: detector가 config `classes` 인덱스를 맹신하던 구조를 바꿔, ONNX 모델 내장 `names` 메타데이터를 1차 출처로 사용한다. config `classes`는 명시적 override이되 모델 클래스 개수와 다르면 메타데이터를 신뢰(경고)한다. 이로써 "config-모델 출력 불일치 → silent 오라벨" 버그 부류를 구조적으로 제거. class_map은 모델 클래스명 → KSI 표준명 변환 역할을 유지한다.
+**Why**: 사전학습/업로드 모델마다 클래스 이름·순서가 달라 수동 config는 반복적으로 어긋난다(ppe·fire 모두 실측에서 불일치).
+
+### ppe/fire 정책 의미 정정
+**Decision**: ppe_yolo는 person/vest를 출력하지 않고 Hardhat/NO-Hardhat만 출력 → no_helmet은 NO-Hardhat 직접 탐지(direct_detection), no_vest는 모델 미지원으로 비활성(커스텀 모델 도입 시 활성). smoke는 forest-fire 모델의 factory-smoke를 매핑해 fire_smoke_yolo로 라우팅(이전 general_yolo는 smoke 클래스가 없어 영구 미발생하는 dead config였음).
+
+### 파이프라인 동시성·메모리
+**Decision**: 다중 카메라 스레드 공유 상태(event_history/last_alerts/last_vlm_observations/_vlm_cache/통계)를 단일 `_state_lock`으로 보호한다. event_history는 메타데이터 1000건 유지하되 원본 이미지는 최근 50건만 보존해 통합메모리 OOM(1080p×수백건≈수 GB)을 방지한다.
+
+### enabled_events 빈 리스트 의미
+**Decision**: `enabled_events=[]`는 "전부 비활성"으로 해석한다(이전 falsy 처리로 전체 허용되던 논리 반전 버그 수정). 룰 평가는 trigger.models 범위 탐지만 사용해 크로스모델 중복 카운트를 방지한다.
