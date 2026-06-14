@@ -4,15 +4,24 @@ KSI-CCTV 파이프라인 통합 테스트 (Phase 5)
 Mock 비디오 소스를 사용하여 전체 파이프라인을 end-to-end로 검증합니다.
 """
 import sys
-import time
 import tempfile
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-import numpy as np
-import cv2
+from unittest.mock import Mock, patch
 
 sys.path.append(str(Path(__file__).parent.parent))
+
+# 런타임 의존성(cv2/onnxruntime)은 모듈 최상단에서 무가드로 import하면 안 된다.
+# 부재 시 import 실패가 pytest collection 전체를 깨뜨리기 때문(각 테스트는 skip되어야 함).
+try:
+    import cv2
+    import numpy as np
+    import onnxruntime  # noqa: F401
+
+    HAS_RUNTIME_DEPS = True
+except ImportError:
+    HAS_RUNTIME_DEPS = False
 
 
 def create_synthetic_video(path: str, num_frames: int = 30, fps: int = 10, width: int = 320, height: int = 240):
@@ -31,10 +40,7 @@ def create_synthetic_video(path: str, num_frames: int = 30, fps: int = 10, width
     writer.release()
 
 
-@unittest.skipUnless(
-    all(__import__("importlib").util.find_spec(m) for m in ["numpy", "cv2", "onnxruntime"]),
-    "런타임 의존성 필요"
-)
+@unittest.skipUnless(HAS_RUNTIME_DEPS, "런타임 의존성(numpy/cv2/onnxruntime) 필요")
 class TestPipelineIntegration(unittest.TestCase):
     """파이프라인 통합 테스트"""
 
@@ -98,10 +104,10 @@ class TestPipelineIntegration(unittest.TestCase):
 
     def test_full_pipeline_end_to_end(self):
         """전체 파이프라인 end-to-end 테스트"""
-        from src.capture.rtsp_capture import RTSPCapture, CameraManager
-        from src.detection.yolo_detector import YOLODetector, Detection
-        from src.pipeline.pipeline import SafetyPipeline
         from concurrent.futures import ThreadPoolExecutor
+
+        from src.detection.yolo_detector import YOLODetector
+        from src.pipeline.pipeline import SafetyPipeline
 
         with patch.object(YOLODetector, '_init_session', return_value=None):
             detector = YOLODetector(
@@ -151,9 +157,10 @@ class TestPipelineIntegration(unittest.TestCase):
 
     def test_alert_manager_handles_event(self):
         """AlertManager가 이벤트를 처리하는지 검증"""
-        from src.alerts.alert_manager import AlertManager, AlertConfig
-        from src.pipeline.pipeline import SafetyEvent
         from datetime import datetime
+
+        from src.alerts.alert_manager import AlertConfig, AlertManager
+        from src.pipeline.pipeline import SafetyEvent
 
         with tempfile.TemporaryDirectory() as tmp:
             log_file = str(Path(tmp) / "alerts.log")
@@ -177,13 +184,14 @@ class TestPipelineIntegration(unittest.TestCase):
             self.assertEqual(manager.event_count, 1)
 
 
+@unittest.skipUnless(HAS_RUNTIME_DEPS, "런타임 의존성(numpy/cv2/onnxruntime) 필요")
 class TestPolicyEngineIntegration(unittest.TestCase):
     """정책 엔진 통합 테스트"""
 
     def test_policy_evaluation_end_to_end(self):
         """정책 평가 end-to-end"""
-        from src.policy.event_policy_engine import EventPolicyEngine
         from src.detection.yolo_detector import Detection
+        from src.policy.event_policy_engine import EventPolicyEngine
 
         policies = {
             "profiles": {
@@ -232,6 +240,7 @@ class TestPolicyEngineIntegration(unittest.TestCase):
         self.assertIn("crowding", event_types)  # 3명 이상
 
 
+@unittest.skipUnless(HAS_RUNTIME_DEPS, "런타임 의존성(numpy/cv2/onnxruntime) 필요")
 class TestMultiModelRegistryIntegration(unittest.TestCase):
     """다중 모델 레지스트리 통합 테스트"""
 
