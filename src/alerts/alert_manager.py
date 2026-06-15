@@ -412,7 +412,10 @@ class AlertManager:
         detected = getattr(event, "vlm_detected_events", None)
 
         if parse_ok is None:
-            # VLM 미실행
+            # VLM 미실행. 정책이 VLM 확인을 요구(vlm_needed)했는데 미실행이면 'AI 미확인'을 명시한다
+            # (provider 미가동/큐 drop 등 — 공개 모델 false positive가 AI 확인 없이 알람될 수 있음).
+            if getattr(event, "vlm_needed", False):
+                return "⚠️ VLM 미확인 — AI 2차 확인 없이 발생(VLM 미가동/지연). 수동 확인 필요."
             return ""
         if not parse_ok:
             lines.append("VLM 분석: 파싱 실패")

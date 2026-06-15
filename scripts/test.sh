@@ -38,14 +38,15 @@ log_info "Ruff lint (차단)..."
 log_info "pytest (차단, 캐시 우회)..."
 python -B -m pytest tests/ -q -p no:cacheprovider
 
-# ── 3) 커버리지 (pytest-cov 있을 때만 리포트) ─────────────────────────────────
+# ── 3) 커버리지 (pytest-cov 있을 때 차단) ─────────────────────────────────────
 if python -c "import pytest_cov" 2>/dev/null; then
-    log_info "커버리지 리포트..."
-    # 임계(--cov-fail-under)는 실제 측정 후 도입한다(미측정 임계로 가짜 게이트 만들지 않음).
+    # 실측 기준 src 전체 ~56%(핵심 로직 모듈은 ~90%, dashboard UI는 13%로 전체를 낮춤 —
+    # UI는 브라우저 검증 영역). 회귀 방지용 보수적 하한 50%를 차단 게이트로 둔다.
+    log_info "커버리지 (차단, 하한 50%)..."
     python -B -m pytest tests/ -q -p no:cacheprovider \
-        --cov=src --cov-report=term-missing
+        --cov=src --cov-report=term-missing --cov-fail-under=50
 else
-    log_warn "pytest-cov 미설치 — 커버리지 미측정 (pip install -r requirements-dev.txt)."
+    log_warn "pytest-cov 미설치 — 커버리지 게이트 미실행 (pip install -r requirements-dev.txt)."
 fi
 
 # ── 4) mypy (advisory, 비차단) ────────────────────────────────────────────────

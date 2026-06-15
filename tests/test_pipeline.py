@@ -746,3 +746,15 @@ class TestPipelineVlmWiringBatch2(unittest.TestCase):
         reg.get_model.assert_called_with("general_yolo")
         self.assertIn("fire", unreachable, "COCO 미산출 클래스(fire)는 unreachable로 경고돼야 한다")
         self.assertNotIn("person", unreachable)
+
+    def test_vlm_unconfirmed_property_and_to_dict(self):
+        """회귀 가드: vlm_needed인데 VLM 미실행(parse_success=None)이면 'AI 미확인'으로 표식."""
+        unconfirmed = self._event(vlm_needed=True)  # parse_success 기본 None
+        self.assertTrue(unconfirmed.vlm_unconfirmed)
+        self.assertTrue(unconfirmed.to_dict()["vlm_unconfirmed"])
+
+        confirmed = self._event(vlm_needed=True, vlm_parse_success=True)
+        self.assertFalse(confirmed.vlm_unconfirmed)
+
+        not_required = self._event(vlm_needed=False)
+        self.assertFalse(not_required.vlm_unconfirmed)

@@ -1141,6 +1141,10 @@ def render_alert_log():
                     st.caption(f"🔍 감지된 이벤트: {events_str}")
                 if vlm_recommended_action:
                     st.info(f"💡 **권고 조치:** {vlm_recommended_action}")
+            elif vlm_parse_success is None and getattr(event, "vlm_needed", False):
+                # 정책상 VLM 확인이 필요했으나 미실행(provider off/큐 drop) — AI 미확인 명시.
+                # 공개 모델 false positive가 AI 확인 없이 알람될 수 있으므로 수동 확인을 유도.
+                st.warning("⚠️ **VLM 미확인** — AI 2차 확인 없이 발생(VLM 미가동/지연). 수동 확인이 필요합니다.")
 
             # 이미지 표시 (있는 경우)
             if event.image is not None:

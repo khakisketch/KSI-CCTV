@@ -556,3 +556,32 @@ class TestSmtpConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_ALERTS, "alert_manager import 불가")
+class TestVlmUnconfirmedAlert(unittest.TestCase):
+    """회귀 가드: vlm_needed인데 VLM 미실행이면 이메일 본문에 'VLM 미확인'을 명시한다."""
+
+    def _manager(self) -> AlertManager:
+        return AlertManager(AlertConfig(enabled=True, save_images=False, console_output=False))
+
+    def test_unconfirmed_event_shows_warning(self):
+        mgr = self._manager()
+        ev = _make_event(vlm_needed=True)  # vlm_parse_success 기본 None → 미확인
+        text = mgr._build_vlm_plain(ev)
+        self.assertIn("VLM 미확인", text)
+
+    def test_non_vlm_event_stays_empty(self):
+        mgr = self._manager()
+        ev = _make_event(vlm_needed=False)  # VLM 불필요 + 미실행 → 빈 문자열
+        self.assertEqual(mgr._build_vlm_plain(ev), "")
+
+    def test_confirmed_event_shows_results(self):
+        mgr = self._manager()
+        ev = _make_event(
+            vlm_needed=True, vlm_parse_success=True,
+            vlm_risk_level="high", vlm_recommended_action="대피",
+        )
+        text = mgr._build_vlm_plain(ev)
+        self.assertIn("high", text)
+        self.assertNotIn("미확인", text)

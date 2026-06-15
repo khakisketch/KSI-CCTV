@@ -54,6 +54,17 @@ class SafetyEvent:
     source_models: list[str] = field(default_factory=list)
     rule_name: str = ""
 
+    @property
+    def vlm_unconfirmed(self) -> bool:
+        """정책상 VLM 2차 확인이 필요했으나(vlm_needed) 결과가 없는 상태.
+
+        provider 미가동/실패/큐 drop으로 VLM이 한 번도 산출하지 못하면 parse_success가 None으로
+        남는다. 이때 이벤트는 'AI 미확인'이며 — 특히 공개 pretrained 모델의 fire/no_helmet
+        false positive가 AI 확인 없이 critical 알람으로 나갈 수 있으므로 — 운영자에게 미확인임을
+        명시해 수동 확인을 유도해야 한다.
+        """
+        return bool(self.vlm_needed) and self.vlm_parse_success is None
+
     def to_dict(self):
         return {
             "event_id": self.event_id,
@@ -70,6 +81,7 @@ class SafetyEvent:
             "vlm_detected_events": list(self.vlm_detected_events),
             "vlm_recommended_action": self.vlm_recommended_action,
             "vlm_parse_success": self.vlm_parse_success,
+            "vlm_unconfirmed": self.vlm_unconfirmed,
             # raw_response는 길 수 있으므로 최대 500자로 잘라 저장
             "vlm_raw_response": (self.vlm_raw_response or "")[:500],
             # Policy engine fields (Phase 4)
