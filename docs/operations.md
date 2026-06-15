@@ -32,8 +32,22 @@ sudo systemctl restart ksi-cctv
 sudo systemctl status ksi-cctv
 ```
 
-서비스 템플릿: `systemd/ksi-cctv.service`.  
-배포 전 `User`, `Group`, `WorkingDirectory`를 현장 환경에 맞게 수정해야 합니다.
+서비스 템플릿: `systemd/ksi-cctv.service`. `scripts/install.sh`가 설치 경로/계정을 자동 치환하며,
+ExecStart는 **무인 탐지 데몬 `src/run.py`**(대시보드 버튼 없이 파이프라인 자동 기동)다.
+설치 경로가 홈 디렉터리(`/home/*`) 하위이면 install.sh가 `ProtectHome=read-only`로 조정한다
+(`ProtectHome=true`면 /home 마스킹으로 ExecStart를 못 찾아 crash-loop). 운영은 `/opt/ksi-cctv` 권장.
+
+### Docker 운영 주의
+
+- 기본 `docker compose up`은 **무인 탐지 데몬(ksi-cctv)** 만 실행한다(24h 탐지·알람·헬스).
+  운영자 대시보드는 옵션: `docker compose --profile dashboard up`.
+- **탐지 데몬과 대시보드의 파이프라인은 분리돼 있다.** 데몬이 탐지를 책임지며, 대시보드에서 "▶️ 시작"을
+  누르면 같은 카메라로 **중복 추론**이 발생할 수 있다 — 대시보드는 모니터링/설정 용도로 쓰고, 데몬이 도는
+  현장에서는 동일 카메라로 대시보드 파이프라인을 별도 기동하지 않는다.
+- **bind-mount 디렉터리 소유권:** 컨테이너는 비root(uid 1000)로 실행되므로, 호스트의 `./logs`,
+  `./data`, `./models/uploaded`가 root 소유면 쓰기에 실패한다. 사전에
+  `mkdir -p ./logs ./data/captures ./models/uploaded && sudo chown -R 1000:1000 ./logs ./data ./models/uploaded`
+  로 권한을 맞추거나 named volume을 사용한다.
 
 ---
 
