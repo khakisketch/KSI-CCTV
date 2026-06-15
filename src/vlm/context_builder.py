@@ -11,7 +11,7 @@ from pathlib import Path
 try:
     import yaml
 except ImportError:
-    yaml = None
+    yaml = None  # type: ignore[assignment]  # yaml 미설치 환경 graceful fallback
 
 logger = logging.getLogger(__name__)
 

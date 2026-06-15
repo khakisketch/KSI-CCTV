@@ -187,9 +187,9 @@ class SafetyPipeline:
             "bypasses": 0,
         }
 
-        # VLM 분석
-        self.vlm_provider = None
-        self.context_builder = None
+        # VLM 분석 (enable_vlm 호출 시 주입 — 선택적 컴포넌트라 Any로 둔다)
+        self.vlm_provider: Any = None
+        self.context_builder: Any = None
         self._vlm_executor: ThreadPoolExecutor | None = None
 
         # VLM 큐 backpressure — in-flight 게이지 및 drop 카운터
@@ -772,7 +772,9 @@ class SafetyPipeline:
                 camera_id=camera_id,
                 event_type="safety_gear_violation",
                 timestamp=timestamp,
-                detections=safety_check["violations"],
+                # detect_safety_gear 반환 dict의 값이 느슨하게 타입되어 mypy가 object로 보지만
+                # "violations"는 list[Detection]임이 보장된다.
+                detections=safety_check["violations"],  # type: ignore[arg-type]
                 image=image
             )
 

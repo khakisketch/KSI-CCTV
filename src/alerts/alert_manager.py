@@ -99,7 +99,7 @@ class AlertManager:
 
         # Batch processing buffer (Phase 8 M5.2)
         self._batch_buffer: list[SafetyEvent] = []
-        self._batch_timer = None
+        self._batch_timer: float | None = None
         self.batch_flush_interval = config.batch_flush_interval
         self.batch_max_size = config.batch_max_size
 
@@ -201,6 +201,9 @@ class AlertManager:
         인증 정보가 있는 경우에만 login().
         """
         cfg = self.smtp_config
+        # 호출처(_send_email/_send_batch_email)가 'if not self.smtp_config: return'으로
+        # 가드하므로 여기 도달 시 cfg는 None이 아니다(불변식 명시 — mypy/방어용).
+        assert cfg is not None
         use_ssl = cfg.get("use_ssl", False)
 
         with self._smtp_connection() as server:
@@ -674,7 +677,9 @@ class AlertManager:
             "haarcascade_profileface.xml",
         ]
         loaded = []
-        data_dir = Path(cv2.data.haarcascades)
+        # cv2.data.haarcascades는 런타임 유효(번들 cascade 경로)이나 cv2 스텁이 불완전해 mypy가
+        # 잘못 플래그한다 — 실동작은 확인됨(얼굴 블러 테스트 통과).
+        data_dir = Path(cv2.data.haarcascades)  # type: ignore[attr-defined]
         for name in cascade_names:
             path = data_dir / name
             cascade = cv2.CascadeClassifier(str(path))
