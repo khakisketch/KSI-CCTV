@@ -145,6 +145,17 @@ class AppConfig:
 _RTSP_PATTERN = re.compile(r'rtsps?://[^\s\'"<>)]+', re.IGNORECASE)
 _HTTP_AUTH_PATTERN = re.compile(r'(https?://)([^\s/@:]+):([^\s/@]+)@([^\s/<>"\')\s]+)')
 
+# PII 마스킹 — VLM 자유서술(description/vlm_raw_response)이 장면 속 연락처·주민번호를
+# 전사할 수 있어, alerts.log 영속화 전에 결정론적·저오탐 패턴만 가린다.
+# (이름·인상착의 같은 자유서술 PII는 정규식으로 가릴 수 없음 — 한계를 명시한다.)
+_EMAIL_PATTERN = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
+# 한국 휴대폰: 010-1234-5678 / 01012345678 / +82-10-1234-5678 (구분자 -, ., 공백 허용).
+# 접두 01[016789] / +82 10에 고정 — Unix timestamp(예: event_id의 1781893381, 17로 시작)나
+# bbox 정수열이 오탐으로 잘려 로그 JSON이 깨지는 것을 막는다.
+_PHONE_PATTERN = re.compile(r'(?<!\d)(?:\+82[-.\s]?1[016789]|01[016789])[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)')
+# 주민등록번호: 6자리-7자리
+_RRN_PATTERN = re.compile(r'(?<!\d)\d{6}[-\s]?\d{7}(?!\d)')
+
 
 def mask_url(url: str) -> str:
     """
@@ -169,8 +180,12 @@ def mask_url(url: str) -> str:
 
 def mask_text(text: str) -> str:
     """
-    임의의 텍스트에서 RTSP/HTTP URL 패턴을 찾아 마스킹합니다.
+    임의의 텍스트에서 RTSP/HTTP URL + 결정론적 PII(이메일·전화·주민번호)를 마스킹합니다.
     로그 메시지나 감사 로그 entry 전체를 안전하게 만드는 용도.
+
+    한계: 이름·인상착의 등 VLM 자유서술 PII는 정규식으로 가릴 수 없다. 그런 텍스트의
+    영속화 자체가 걱정되면 alerts.log를 보호하거나 VLM 원문 저장을 끄는 것이 정답이다.
+    URL 자격증명 → PII(전화·주민번호가 RRN/전화로 중첩 매칭되지 않도록 순서 주의) → 이메일 순.
     """
     if not isinstance(text, str) or not text:
         return text
@@ -183,4 +198,8 @@ def mask_text(text: str) -> str:
 
     text = _RTSP_PATTERN.sub(_replace_rtsp, text)
     text = _HTTP_AUTH_PATTERN.sub(_replace_http, text)
+    # RRN(6-7=13자리)을 전화(11자리)보다 먼저 가려, 전화 패턴이 RRN 앞부분만 부분 매칭하는 것을 막는다.
+    text = _RRN_PATTERN.sub("***-*******", text)
+    text = _PHONE_PATTERN.sub("***-****-****", text)
+    text = _EMAIL_PATTERN.sub("***@***", text)
     return text

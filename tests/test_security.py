@@ -64,5 +64,56 @@ class TestMaskText(unittest.TestCase):
         self.assertEqual(mask_text(""), "")
 
 
+class TestMaskTextPII(unittest.TestCase):
+    """PII 마스킹(#14) — VLM 자유서술이 전사한 연락처·주민번호를 가린다."""
+
+    def test_email_masked(self):
+        masked = mask_text("작업자가 명찰 hong.gildong@example.co.kr 를 착용")
+        self.assertNotIn("hong.gildong@example.co.kr", masked)
+        self.assertIn("작업자", masked)
+
+    def test_korean_phone_masked(self):
+        for raw in ("010-1234-5678", "01012345678", "+82-10-1234-5678"):
+            with self.subTest(raw=raw):
+                self.assertNotIn(raw.replace("+82-", "").replace("+82", ""), mask_text(f"연락처 {raw} 확인"))
+        self.assertNotIn("1234", mask_text("연락처 010-1234-5678 확인"))
+
+    def test_rrn_masked(self):
+        masked = mask_text("신원 900101-1234567 노출")
+        self.assertNotIn("900101-1234567", masked)
+        self.assertNotIn("1234567", masked)
+
+    def test_unix_timestamp_event_id_not_corrupted(self):
+        """event_id의 Unix timestamp(10자리, 17로 시작)는 전화번호로 오탐되면 안 된다."""
+        line = '{"event_id": "cam01_fall_1781893381", "confidence": 0.87}'
+        self.assertEqual(mask_text(line), line)
+
+    def test_log_json_structure_preserved(self):
+        """실제 alerts.log 형태 JSON에서 PII만 가리고 구조·수치 필드는 보존한다."""
+        import json
+
+        payload = {
+            "event_id": "camA_no_helmet_1781893381",
+            "timestamp": "2026-06-15T14:23:01.123456",
+            "confidence": 0.873,
+            "detections": [{"bbox": [101, 2345, 678, 1011], "class_name": "person"}],
+            "vlm_inference_ms": 1234.5,
+            "description": "작업자가 helmet 미착용. 연락처 010-1234-5678, hong@corp.com",
+        }
+        line = json.dumps(payload, ensure_ascii=False)
+        masked = mask_text(line)
+        # 여전히 valid JSON이어야 한다(구조 파괴 없음)
+        parsed = json.loads(masked)
+        # PII는 사라짐
+        self.assertNotIn("010-1234-5678", masked)
+        self.assertNotIn("hong@corp.com", masked)
+        # 수치/구조 필드는 그대로
+        self.assertEqual(parsed["confidence"], 0.873)
+        self.assertEqual(parsed["timestamp"], "2026-06-15T14:23:01.123456")
+        self.assertEqual(parsed["event_id"], "camA_no_helmet_1781893381")
+        self.assertEqual(parsed["detections"][0]["bbox"], [101, 2345, 678, 1011])
+        self.assertEqual(parsed["vlm_inference_ms"], 1234.5)
+
+
 if __name__ == "__main__":
     unittest.main()
