@@ -26,7 +26,7 @@ fi
 PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 log_info "Python 버전: $PYTHON_VERSION"
 
-if [[ "$(echo "$PYTHON_VERSION >= 3.10" | python3 -c "import sys; print(sys.version_info >= (3, 10))")" != "True" ]]; then
+if [[ "$(python3 -c "import sys; print(sys.version_info >= (3, 10))")" != "True" ]]; then
     log_error "Python 3.10 이상이 필요합니다. 현재: $PYTHON_VERSION"
     exit 1
 fi
@@ -52,6 +52,18 @@ source .venv/bin/activate
 pip install --upgrade pip -q
 pip install -r requirements.txt -q
 
+# GPU(DGX) 환경이면 CPU onnxruntime를 onnxruntime-gpu로 교체한다.
+# 두 패키지는 동일 import 네임스페이스를 제공하므로 공존하면 안 됨 → CPU 휠 제거 후 설치.
+# ARM64에서 onnxruntime-gpu 휠을 찾지 못하면 CPU로 폴백(설치 실패로 전체 install 중단 방지).
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    log_info "NVIDIA GPU 감지 — onnxruntime-gpu로 교체 시도..."
+    pip uninstall -y onnxruntime -q || true
+    if ! pip install -q onnxruntime-gpu; then
+        log_warn "onnxruntime-gpu 설치 실패(ARM64 휠 부재 가능) — CPU onnxruntime로 폴백합니다."
+        pip install -q "onnxruntime==1.20.1"
+    fi
+fi
+
 # 모델 디렉토리 확인
 if [ ! -d "models" ] || [ -z "$(ls -A models/*.onnx 2>/dev/null)" ]; then
     log_warn "ONNX 모델이 없습니다. ./models/ 디렉토리에 모델을 배치하세요."
@@ -60,7 +72,7 @@ fi
 
 # 데이터 디렉토리 생성
 log_info "데이터 디렉토리 생성 중..."
-mkdir -p data/captures logs data/sample
+mkdir -p data/captures logs data/sample models/uploaded
 
 # .env 파일 생성 (없는 경우)
 if [ ! -f ".env" ]; then
@@ -73,16 +85,27 @@ fi
 if [[ "$OSTYPE" == "linux-gnu"* ]] && command -v systemctl &> /dev/null; then
     SERVICE_NAME="ksi-cctv"
     SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+    INSTALL_DIR="$(pwd)"
+    INSTALL_USER="$(whoami)"
 
     if [ -f "systemd/${SERVICE_NAME}.service" ]; then
-        log_info "systemd 서비스 설치 중..."
+        log_info "systemd 서비스 설치 중... (설치 경로: $INSTALL_DIR)"
 
-        # 서비스 파일에서 경로 치환
         TEMP_SERVICE=$(mktemp)
-        sed "s|WorkingDirectory=.*|WorkingDirectory=$(pwd)|g" \
-            systemd/${SERVICE_NAME}.service > "$TEMP_SERVICE"
-        sed -i "s|User=.*|User=$(whoami)|g" "$TEMP_SERVICE"
-        sed -i "s|ExecStart=.*|ExecStart=$(pwd)/.venv/bin/streamlit run src/dashboard/app.py --server.port=8080 --server.address=0.0.0.0|g" "$TEMP_SERVICE"
+        # ── 경로 일괄 치환 ──────────────────────────────────────────────────
+        # 1. /opt/ksi-cctv 절대경로(ReadWritePaths 등 포함)를 실제 설치 경로로 치환
+        # 2. WorkingDirectory 치환
+        # 3. User/Group 치환 (설치 사용자로)
+        # 4. ExecStart를 래퍼 스크립트로 지정 (헬스서버 + 대시보드 통합)
+        # 주의: ExecStartPre는 서비스 파일에 더 이상 존재하지 않으므로 치환 불필요.
+        #       (헬스서버는 docker-entrypoint.sh / 래퍼 스크립트 안에서 기동됨)
+        sed "s|/opt/ksi-cctv|${INSTALL_DIR}|g" \
+            "systemd/${SERVICE_NAME}.service" > "$TEMP_SERVICE"
+        sed -i "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|g" "$TEMP_SERVICE"
+        sed -i "s|User=.*|User=${INSTALL_USER}|g" "$TEMP_SERVICE"
+        sed -i "s|Group=.*|Group=${INSTALL_USER}|g" "$TEMP_SERVICE"
+        # ExecStart: 래퍼 스크립트(헬스서버 + 대시보드 통합)로 실행
+        sed -i "s|ExecStart=.*|ExecStart=/bin/bash ${INSTALL_DIR}/scripts/docker-entrypoint.sh|g" "$TEMP_SERVICE"
 
         sudo cp "$TEMP_SERVICE" "$SERVICE_FILE"
         sudo systemctl daemon-reload
@@ -99,6 +122,14 @@ else
     log_warn "systemd를 사용할 수 없는 환경입니다. 수동으로 실행하세요."
 fi
 
+# ── 배포 게이트: 설치 후 readiness 점검 ────────────────────────────────────────
+log_info "배포 readiness 점검 실행 중..."
+if python3 scripts/check_environment.py; then
+    log_info "환경 점검 통과."
+else
+    log_warn "환경 점검에서 일부 경고/오류 발생. 위 메시지를 확인하세요."
+fi
+
 # 완료
 log_info "============================================"
 log_info "KSI-CCTV 설치 완료!"
@@ -106,9 +137,10 @@ log_info "============================================"
 log_info ""
 log_info "다음 단계:"
 log_info "  1. .env 파일 편집: nano .env"
+log_info "     (KSI_CCTV_DASHBOARD_PASSWORD 를 반드시 변경하세요)"
 log_info "  2. 카메라 설정 편집: nano config/cameras.json"
-log_info "  3. 대시보드 실행: ./scripts/run_dashboard.sh"
-log_info "  4. 헬스체크 서버: python -c 'from src.utils.health import start_health_server; start_health_server()'"
+log_info "  3. 배포 readiness 점검: python3 scripts/healthcheck.py"
+log_info "  4. 대시보드 실행: ./scripts/run_dashboard.sh"
 log_info ""
 log_info "문서: docs/"
 log_info "============================================"

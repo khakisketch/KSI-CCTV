@@ -15,10 +15,11 @@
 - 기본 설정: `config/default.yaml`, `config/cameras.json`
 - 테스트: `tests/`
 
-최근 기준 검증:
+최근 기준 검증 (Phase 10 M1, 2026-06-14):
 
-- `python3 -m compileall -q src tests scripts` 통과
-- `./.venv/bin/python -m unittest discover tests -v` 기준 32 tests OK
+- `./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q` — **333 passed, 1 skipped**
+- `scripts/e2e_smoke_test.py --policy-mode` — `ok: true`, `failed_models: {}`
+- `scripts/healthcheck.py --json` — `ok: true`, 12 passes, 1 warning (CUDA CPU fallback)
 
 ## 완료 정의
 
@@ -81,9 +82,9 @@
 
 작업:
 
-- [ ] `target_classes`와 실제 YOLO 클래스 매핑 불일치 시 경고 표시
-- [ ] COCO 모델에서는 safety gear violation 자동 생성이 비활성화됨을 UI/문서에 명시
-- [ ] `detection.safety_gear` 설정의 사용 여부 정리
+- [x] `target_classes`와 실제 YOLO 클래스 매핑 불일치 시 경고 표시 (Phase 10 M1 — ONNX 메타데이터 기반 클래스 자동 인식, 불일치 시 경고)
+- [x] COCO 모델에서는 safety gear violation 자동 생성이 비활성화됨을 UI/문서에 명시 (대시보드 COCO 한계 경고 배지, `docs/configuration.md`)
+- [x] `detection.safety_gear` 설정의 사용 여부 정리 (`no_vest` 비활성, `no_helmet` direct_detection으로 전환)
 
 완료 기준:
 
@@ -96,10 +97,10 @@
 작업:
 
 - [x] person 탐지 프레임을 VLM 분석 후보로 제출하는 정책 추가
-- [ ] 카메라 `detection_type`에 따라 construction/school 프롬프트 자동 선택
-- [ ] VLM 결과의 `risk_level`, `detected_events`, `recommended_action`을 이벤트에 반영
-- [ ] VLM JSON 파싱 실패 시 UI에 원문/오류 표시
-- [ ] VLM 분석 큐 길이와 지연시간 모니터링
+- [x] 카메라 `detection_type`에 따라 construction/school 프롬프트 자동 선택 (`src/vlm/prompt_selector.py`)
+- [x] VLM 결과의 `risk_level`, `detected_events`, `recommended_action`을 이벤트에 반영 (`SafetyEvent` VLM 필드)
+- [x] VLM JSON 파싱 실패 시 UI에 원문/오류 표시 (대시보드 "VLM 파싱 실패" 배지 + `raw_response`)
+- [x] VLM 분석 큐 길이와 지연시간 모니터링 (`get_vlm_cache_stats()`, 대시보드 시스템 상태 탭)
 
 완료 기준:
 
@@ -111,16 +112,14 @@
 
 작업:
 
-- [ ] 클래스 정의 확정: `person, helmet, vest, fire, smoke, fall`
-- [ ] 데이터셋 후보 수집/라이선스 검토
-- [ ] 학습/검증 split 구성
-- [ ] YOLO26 학습 스크립트 작성
-- [ ] ONNX export 및 `class_profile: safety_custom` 적용
+- [x] 클래스 정의 확정 (Phase 9 M4: ppe_yolo=Hardhat/NO-Hardhat, fire_smoke_yolo=fire)
+- [x] 데이터셋 후보 수집 스크립트 (`scripts/download_datasets.py`)
+- [x] YOLO26 학습 스크립트 스캐폴드 — **실행은 데이터셋/GPU 준비 후 필요** (`docs/custom-model-training.md` 참조)
+- [x] ONNX export 스크립트 스캐폴드 (`docs/custom-model-training.md` 3절)
+- [ ] 실제 데이터셋 다운로드 및 학습 실행 (인터넷/GPU 필요 — 다른 프로젝트 학습 완료 후 진행)
 - [ ] 정확도 지표 측정: mAP, precision, recall
 
-완료 기준:
-
-- safety_custom ONNX 모델로 실제 안전 이벤트가 YOLO 단계에서 생성된다.
+> 사전학습 모델(`models/yolo26_ppe.onnx`, `models/yolo26_fire_smoke.onnx`)은 Phase 9 M4에서 Hugging Face 다운로드 완료. 커스텀 학습은 Phase D에서 별도 진행.
 
 ---
 
@@ -130,12 +129,12 @@
 
 작업:
 
-- [ ] 카메라별 상태 카드: connected, fps, dropped frames, last frame time
-- [ ] 시스템 상태 카드: CPU/RAM/GPU/디스크 사용량
-- [ ] 이벤트 검색/필터: 카메라, 이벤트 유형, 위험도, 시간
-- [ ] 이벤트 이미지 갤러리
-- [ ] VLM 결과 상세 패널
-- [ ] 이벤트 통계 차트
+- [x] 카메라별 상태 카드: connected, fps, dropped frames, last frame time (Phase 8 M3)
+- [x] 시스템 상태 카드: CPU/RAM/GPU/디스크 사용량 (Phase 8 M3 — psutil 기반)
+- [x] 이벤트 검색/필터: 카메라, 이벤트 유형, 위험도, 시간 (Phase 8 M3 + M5.3)
+- [x] 이벤트 이미지 갤러리 (Phase 3 기본 구현, 갤러리 탭)
+- [x] VLM 결과 상세 패널 (이벤트 카드에 `risk_level`, `description`, `recommended_action`, `raw_response`)
+- [x] 이벤트 통계 차트 (Phase 8 M5.3 — 카메라별 비교 차트, 시간대별 알람)
 
 완료 기준:
 
@@ -145,10 +144,10 @@
 
 작업:
 
-- [ ] 위험도별 알람 정책: medium 이상만 이메일 등
-- [ ] 이벤트 중복 제거 및 쿨다운 정책 고도화
-- [ ] 이미지 보관 기간 정리 스케줄러 연결
-- [ ] SMTP 설정 검증/테스트 버튼 추가
+- [x] 위험도별 알람 정책: medium 이상만 이메일 (Phase 8 M4 — `_should_send_email()`)
+- [x] 이벤트 중복 제거 및 쿨다운 정책 고도화 (EventPolicyEngine cooldown, VLM TTL cache)
+- [x] 이미지 보관 기간 정리 스케줄러 연결 (6시간 throttle — Phase 10 A)
+- [x] SMTP 설정 검증/테스트 버튼 추가 (Phase 8 M4 — 대시보드 시스템 상태 탭)
 
 완료 기준:
 
@@ -162,11 +161,11 @@
 
 작업:
 
-- [ ] FPS, inference latency, VLM latency 수집
-- [ ] 카메라별 마지막 프레임 수신 시간 기록
-- [ ] 디스크 사용량/로그 크기 모니터링
-- [ ] 헬스체크 CLI 또는 HTTP endpoint 추가
-- [ ] 장애 상태를 대시보드에 표시
+- [x] FPS, inference latency, VLM latency 수집 (`get_model_metrics()`, `OllamaProvider.get_metrics()`)
+- [x] 카메라별 마지막 프레임 수신 시간 기록 (`last_frame_time`, `is_stale`, `get_status()`)
+- [x] 디스크 사용량/로그 크기 모니터링 (`src/utils/system_metrics.py`, 헬스체크)
+- [x] 헬스체크 CLI 및 HTTP endpoint 추가 (`scripts/healthcheck.py`, `src/utils/health.py` — `/health`, `/healthz`, `/health/live`, `/health/ready`)
+- [x] 장애 상태를 대시보드에 표시 (시스템 상태 탭)
 
 완료 기준:
 
@@ -176,11 +175,11 @@
 
 작업:
 
-- [ ] `scripts/install.sh` 작성
-- [ ] `systemd/ksi-cctv.service` 작성
-- [ ] `scripts/check_environment.py` 작성
-- [ ] Dockerfile ARM64/GPU 호환성 점검
-- [ ] docker-compose healthcheck 추가
+- [x] `scripts/install.sh` 작성 (Phase 7)
+- [x] `systemd/ksi-cctv.service` 작성 (Phase 7)
+- [x] `scripts/check_environment.py` 작성 (Phase 7 — `scripts/check_environment.py`)
+- [x] Dockerfile ARM64/GPU 호환성 점검 (Dockerfile, `.dockerignore`, 비root USER)
+- [x] docker-compose healthcheck 추가 (`docker-compose.yml`)
 
 완료 기준:
 
@@ -194,11 +193,11 @@
 
 작업:
 
-- [ ] mock video source 기반 pipeline integration test
-- [ ] 실제 ONNX shape smoke test
-- [ ] VLM mock/real 호출 테스트 분리
-- [ ] alert image save/cleanup 테스트
-- [ ] dashboard config load smoke test
+- [x] mock video source 기반 pipeline integration test (`tests/test_integration.py`)
+- [x] 실제 ONNX shape smoke test (`tests/test_e2e_real.py`)
+- [x] VLM mock/real 호출 테스트 분리 (`tests/test_vlm.py` — VLM opt-in, 1 skipped)
+- [x] alert image save/cleanup 테스트 (`tests/test_pipeline.py` 포함)
+- [x] dashboard config load smoke test (헬스체크 `--json` 기반)
 
 완료 기준:
 
@@ -208,10 +207,10 @@
 
 작업:
 
-- [ ] `ruff` 설정
-- [ ] `mypy` 또는 pyright 적용 범위 선정
-- [ ] `requirements-dev.txt` 분리
-- [ ] CI 스크립트 또는 `scripts/test.sh` 추가
+- [x] `ruff` 설정 (`ruff.toml`)
+- [ ] `mypy` 또는 pyright 적용 범위 선정 (현재 미적용 — 추후 `pyproject.toml` 도입 시 추가)
+- [x] `requirements-dev.txt` 분리
+- [x] CI 스크립트 또는 `scripts/test.sh` 추가
 
 완료 기준:
 
@@ -225,10 +224,10 @@
 
 작업:
 
-- [ ] 로그인 실패 rate limit
-- [ ] 세션 만료
-- [ ] 감사 로그 강화: 로그인/로그아웃/설정 변경/이미지 조회
-- [ ] 운영 환경 HTTPS 가이드
+- [x] 로그인 실패 rate limit (Phase 8 M5.1 — 60초 내 5회 실패 시 60초 잠금)
+- [x] 세션 만료 (Phase 8 M5.1 — 30분 무활동 자동 로그아웃)
+- [x] 감사 로그 강화: 로그인/로그아웃/설정 변경/이미지 조회/모델 업로드 (`logs/audit.log`)
+- [ ] 운영 환경 HTTPS 가이드 (`docs/operations.md`에 보안 체크리스트 추가됨 — nginx/TLS 상세 가이드는 배포 환경별 별도 작성 필요)
 
 완료 기준:
 
@@ -238,10 +237,10 @@
 
 작업:
 
-- [ ] 캡처 이미지 암호화 저장 옵션
-- [ ] 얼굴 블러링 정확도 개선 검토
-- [ ] 데이터 보관/삭제 정책 문서화
-- [ ] RTSP URL/SMTP 비밀값 로그 노출 점검
+- [x] 캡처 이미지 암호화 저장 옵션 (`encrypt_images: true` + `KSI_CCTV_CAPTURE_KEY` Fernet, `.jpg.enc`)
+- [x] 얼굴 블러링 (다중 cascade 블러, `blur_faces: true`)
+- [x] 데이터 보관/삭제 정책 문서화 (`docs/operations.md` 데이터 보관 정책 섹션)
+- [x] RTSP URL/SMTP 비밀값 로그 노출 점검 (`mask_url()`, `mask_text()` — Phase 8 M5.3)
 
 완료 기준:
 
@@ -253,13 +252,13 @@
 
 작업:
 
-- [ ] `docs/architecture.md`
-- [ ] `docs/configuration.md`
-- [ ] `docs/operations.md`
-- [ ] `docs/troubleshooting.md`
-- [ ] `docs/custom-model.md`
-- [ ] 납품용 설치 체크리스트
-- [ ] 시연용 체크리스트
+- [x] `docs/architecture.md` (갱신 완료 — policy-mode 기준)
+- [x] `docs/configuration.md` (신규 작성)
+- [x] `docs/operations.md` (신규 작성)
+- [x] `docs/troubleshooting.md` (신규 작성)
+- [x] `docs/custom-model-training.md` (Phase 8 M3 작성 — 스크립트 스캐폴드 + 실제 학습은 데이터/GPU 필요)
+- [x] 납품용 설치 체크리스트 (`docs/delivery-checklist.md` 파트 A)
+- [x] 시연용 체크리스트 (`docs/delivery-checklist.md` 파트 B)
 
 완료 기준:
 

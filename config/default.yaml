@@ -84,6 +84,9 @@ alerts:
   # 저장 전 얼굴 블러링(개인정보 보호)
   blur_faces: true
   face_blur_strength: 35
+  # 캡처 이미지 암호화 저장(개인정보 보호). true이면 KSI_CCTV_CAPTURE_KEY 환경변수에
+  # Fernet 키가 있어야 하며 .jpg.enc로 저장된다. 대시보드 갤러리는 동일 키로 복호화 표시.
+  encrypt_images: false
   # 알람 로그 로테이션
   log_max_bytes: 10485760
   log_backup_count: 5

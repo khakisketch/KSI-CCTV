@@ -1,0 +1,57 @@
+# 가상환경 — 5.8G+, 이미지에 포함 금지 (pip install로 내부 설치)
+.venv/
+venv/
+
+# Git 메타데이터
+.git/
+.gitignore
+
+# 환경 변수/비밀 — RTSP URL, 비밀번호 등 유출 방지
+.env
+.env.*
+!.env.example
+
+# 로그 및 런타임 데이터 — 볼륨으로 마운트됨
+logs/
+data/
+
+# 모델 파일 — compose 볼륨(./models)으로 마운트되므로 이미지 불필요
+models/
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 개발/테스트 전용 파일
+tests/
+*.test.py
+requirements-dev.txt
+
+# 문서
+docs/
+*.md
+!README.md
+
+# AI 계획 파일
+.ai/
+
+# IDE/에디터
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# 빌드 산출물
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 임시 파일
+*.tmp
+*.bak
+tmp/

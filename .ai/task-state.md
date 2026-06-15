@@ -2,7 +2,9 @@
 
 ## Current milestone
 
-Phase 7 site-specific deployment hardening (완료) → next recommended phase: review.
+Phase 10 M1 완료 (탐지 클래스 정합성 + Phase A 잔여 결함 수정, 2026-06-14).  
+현재 기준선: **333 passed, 1 skipped** (캐시클린 pytest), policy-mode 기본 실행.  
+다음 우선순위: Phase B (실 ONNX+VLM 종단 자동검증 게이트) → Phase C (DGX CUDA·실 RTSP) → Phase D (커스텀 모델 학습).
 
 ## Completed
 

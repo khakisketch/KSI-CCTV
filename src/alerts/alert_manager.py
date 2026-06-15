@@ -2,9 +2,14 @@
 알람 관리 모듈
 
 이벤트 수신 → 로깅 → 이미지 저장 → 알람 발송 (SMTP)
+
+변경 이력:
+- Phase 8 M5.3 S3: URL 마스킹 (mask_text)
+- Phase alerts: SMTP timeout/SSL, 이미지 암호화, cascade 다중, 날짜 기반 cleanup, VLM 필드 포함
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -12,7 +17,7 @@ import shutil
 import smtplib
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from logging.handlers import RotatingFileHandler
@@ -25,6 +30,15 @@ from src.pipeline.pipeline import SafetyEvent
 from src.utils.config import mask_text  # Phase 8 M5.3 S3: URL 마스킹
 
 logger = logging.getLogger(__name__)
+
+# 암호화 선택적 import (cryptography 패키지가 설치된 경우에만 활성화)
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    HAS_CRYPTOGRAPHY = True
+except ImportError:
+    HAS_CRYPTOGRAPHY = False
+    Fernet = None  # type: ignore[assignment,misc]
+    InvalidToken = Exception  # type: ignore[assignment,misc]
 
 
 def parse_alert_log_line(line: str) -> dict | None:
@@ -60,18 +74,24 @@ class AlertConfig:
     log_backup_count: int = 5
     batch_flush_interval: float = 0.0  # seconds; 0 = disabled (immediate)
     batch_max_size: int = 100
+    # 이미지 암호화 저장 옵션 (Phase alerts M6.2)
+    # True로 설정하면 KSI_CCTV_CAPTURE_KEY 환경변수에서 Fernet 키를 읽어 암호화 저장
+    encrypt_images: bool = False
 
 
 class AlertManager:
     """
     알람 관리자
-    
+
     이벤트 수신 시:
     1. 로그 파일 기록
-    2. 이미지 캡처 저장
+    2. 이미지 캡처 저장 (암호화 옵션 지원)
     3. 콘솔 출력
-    4. SMTP 이메일 발송 (설정 시)
+    4. SMTP 이메일 발송 (설정 시, SSL/STARTTLS 분기, timeout 지원)
     """
+
+    # SMTP 기본 연결 timeout (초) — hang 방지
+    SMTP_DEFAULT_TIMEOUT = 10
 
     def __init__(self, config: AlertConfig):
         self.config = config
@@ -93,7 +113,15 @@ class AlertManager:
         # 캡처 디렉토리
         self.capture_dir = Path(config.image_dir)
         self.capture_dir.mkdir(parents=True, exist_ok=True)
-        self.face_cascade = self._load_face_cascade() if config.blur_faces else None
+
+        # 얼굴 블러링용 cascade 로드 (정면 + 측면 병행 — CCTV 각도 대응)
+        self._face_cascades = self._load_face_cascades() if config.blur_faces else []
+
+        # 하위 호환: .face_cascade 속성 (단일 cascade 참조)
+        self.face_cascade = self._face_cascades[0] if self._face_cascades else None
+
+        # 이미지 암호화 키 로드 (Phase alerts M6.2)
+        self._fernet = self._load_fernet_key() if config.encrypt_images else None
 
         # SMTP 설정 로드
         self.smtp_config = self._load_smtp_config()
@@ -107,11 +135,29 @@ class AlertManager:
 
         logger.info("AlertManager 초기화 완료")
 
+    # ------------------------------------------------------------------
+    # SMTP 설정 / 연결 헬퍼
+    # ------------------------------------------------------------------
+
     def _load_smtp_config(self) -> dict | None:
-        """SMTP 환경변수에서 설정 로드"""
+        """SMTP 환경변수에서 설정 로드.
+
+        추가 환경변수:
+        - KSI_CCTV_SMTP_USE_SSL: 'true'면 SMTP_SSL(465) 사용, 기본 STARTTLS(587)
+        - KSI_CCTV_SMTP_TIMEOUT: SMTP 연결 timeout(초), 기본 10
+        """
         host = os.environ.get("KSI_CCTV_SMTP_HOST", "").strip()
         if not host:
             return None
+
+        use_ssl_str = os.environ.get("KSI_CCTV_SMTP_USE_SSL", "false").strip().lower()
+        use_ssl = use_ssl_str in ("1", "true", "yes")
+
+        try:
+            smtp_timeout = float(os.environ.get("KSI_CCTV_SMTP_TIMEOUT", str(self.SMTP_DEFAULT_TIMEOUT)))
+        except ValueError:
+            smtp_timeout = self.SMTP_DEFAULT_TIMEOUT
+
         return {
             "host": host,
             "port": int(os.environ.get("KSI_CCTV_SMTP_PORT", "587")),
@@ -122,7 +168,98 @@ class AlertManager:
                 for r in os.environ.get("KSI_CCTV_SMTP_RECIPIENTS", "").split(",")
                 if r.strip()
             ],
+            # 새 필드: SSL 모드 + timeout
+            "use_ssl": use_ssl,
+            "timeout": smtp_timeout,
         }
+
+    def _smtp_connection(self):
+        """SMTP 연결을 반환하는 컨텍스트 매니저 팩토리.
+
+        KSI_CCTV_SMTP_USE_SSL=true → SMTP_SSL(implicit SSL, 보통 포트 465)
+        그 외 → SMTP + STARTTLS(보통 포트 587)
+
+        모든 연결에 timeout을 지정해 hang 방지.
+        """
+        cfg = self.smtp_config
+        host = cfg["host"]
+        port = cfg["port"]
+        timeout = cfg.get("timeout", self.SMTP_DEFAULT_TIMEOUT)
+        use_ssl = cfg.get("use_ssl", False)
+
+        if use_ssl:
+            # Implicit SSL (465): SMTP_SSL, starttls() 불필요
+            return smtplib.SMTP_SSL(host, port, timeout=timeout)
+        else:
+            # STARTTLS (587): 평문 연결 후 STARTTLS 업그레이드
+            return smtplib.SMTP(host, port, timeout=timeout)
+
+    def _smtp_send(self, msg) -> None:
+        """SMTP 연결을 열고 메시지를 발송하는 공통 헬퍼.
+
+        use_ssl에 따라 SMTP_SSL / SMTP+STARTTLS 분기 처리.
+        인증 정보가 있는 경우에만 login().
+        """
+        cfg = self.smtp_config
+        use_ssl = cfg.get("use_ssl", False)
+
+        with self._smtp_connection() as server:
+            if not use_ssl:
+                # STARTTLS 업그레이드
+                server.starttls()
+            if cfg["user"] and cfg["password"]:
+                server.login(cfg["user"], cfg["password"])
+            server.send_message(msg)
+
+    # ------------------------------------------------------------------
+    # 이미지 암호화 / 복호화
+    # ------------------------------------------------------------------
+
+    def _load_fernet_key(self):
+        """KSI_CCTV_CAPTURE_KEY 환경변수에서 Fernet 키를 로드한다.
+
+        키가 없거나 cryptography 패키지가 없으면 None 반환(평문 fallback).
+        """
+        if not HAS_CRYPTOGRAPHY:
+            logger.warning(
+                "encrypt_images=True이지만 cryptography 패키지가 없습니다. "
+                "pip install cryptography 후 재시작하세요. 평문 저장으로 fallback."
+            )
+            return None
+
+        raw_key = os.environ.get("KSI_CCTV_CAPTURE_KEY", "").strip()
+        if not raw_key:
+            logger.warning(
+                "encrypt_images=True이지만 KSI_CCTV_CAPTURE_KEY 환경변수가 없습니다. "
+                "평문 저장으로 fallback."
+            )
+            return None
+
+        try:
+            return Fernet(raw_key.encode())
+        except Exception as exc:
+            logger.error("Fernet 키 로드 실패 (평문 fallback): %s", exc)
+            return None
+
+    def encrypt_image_bytes(self, image_bytes: bytes) -> bytes:
+        """이미지 바이트를 Fernet으로 암호화한다. 키가 없으면 원본 반환."""
+        if self._fernet is None:
+            return image_bytes
+        return self._fernet.encrypt(image_bytes)
+
+    def decrypt_image_bytes(self, data: bytes) -> bytes:
+        """Fernet 암호화 데이터를 복호화한다. 실패하면 원본 반환."""
+        if self._fernet is None:
+            return data
+        try:
+            return self._fernet.decrypt(data)
+        except (InvalidToken, Exception) as exc:
+            logger.error("이미지 복호화 실패: %s", exc)
+            return data
+
+    # ------------------------------------------------------------------
+    # 로깅
+    # ------------------------------------------------------------------
 
     def _setup_logging(self):
         """로깅 설정"""
@@ -156,6 +293,10 @@ class AlertManager:
         alert_logger.addHandler(console_handler)
 
         self.alert_logger = alert_logger
+
+    # ------------------------------------------------------------------
+    # 이벤트 처리 흐름
+    # ------------------------------------------------------------------
 
     def handle_event(self, event: SafetyEvent):
         """이벤트 처리 (배치 모드 시 일정 간격/크기로 flush)"""
@@ -232,55 +373,11 @@ class AlertManager:
             log_line = mask_text(log_line)
             self.alert_logger.info(f"EVENT | {log_line}")
         if self.config.console_output:
-            print(f"\n📦 배치 알람: {len(events)}건 처리 완료")
+            print(f"\n배치 알람: {len(events)}건 처리 완료")
 
-    def _send_batch_email(self, events: list[SafetyEvent]) -> None:
-        """배치 이벤트 일괄 이메일 발송 (alert_level 임계값 + per-event 설정 적용)"""
-        if not self.smtp_config or not self.smtp_config["recipients"]:
-            return
-        # alert_level + per-event 설정 필터링 (_should_send_email 동일 로직)
-        sendable = [e for e in events if self._should_send_email(e)]
-        if not sendable:
-            return
-        try:
-            msg = MIMEMultipart("alternative")
-            msg["From"] = self.smtp_config["user"]
-            msg["To"] = ", ".join(self.smtp_config["recipients"])
-            msg["Subject"] = f"[KSI-CCTV] 배치 알람 {len(sendable)}건"
-
-            body_plain = f"총 {len(sendable)}건의 알람이 발생했습니다.\n"
-            for e in sendable:
-                body_plain += (
-                    f"- {e.timestamp.strftime('%H:%M:%S')} [{e.camera_id}] "
-                    f"{e.event_type} (level: {getattr(e, 'alert_level', 'low')})\n"
-                )
-            body_html = (
-                f"<html><body style='font-family: sans-serif; padding: 20px;'>"
-                f"<h2>📦 KSI-CCTV 배치 알람 ({len(sendable)}건)</h2>"
-                f"<table style='border-collapse: collapse; width: 100%;'>"
-                f"<tr><th>시각</th><th>카메라</th><th>이벤트</th><th>Level</th></tr>"
-            )
-            for e in sendable:
-                level = getattr(e, "alert_level", "low")
-                color = {"medium": "#ff7f0e", "high": "#d62728", "critical": "#8c0000"}.get(level, "#2ca02c")
-                body_html += (
-                    f"<tr><td>{e.timestamp.strftime('%H:%M:%S')}</td>"
-                    f"<td>{e.camera_id}</td><td>{e.event_type}</td>"
-                    f"<td><span style='background-color: {color}; color: white; padding: 2px 6px;'>{level.upper()}</span></td></tr>"
-                )
-            body_html += "</table></body></html>"
-
-            msg.attach(MIMEText(body_plain, "plain", "utf-8"))
-            msg.attach(MIMEText(body_html, "html", "utf-8"))
-
-            with smtplib.SMTP(self.smtp_config["host"], self.smtp_config["port"]) as server:
-                server.starttls()
-                if self.smtp_config["user"] and self.smtp_config["password"]:
-                    server.login(self.smtp_config["user"], self.smtp_config["password"])
-                server.send_message(msg)
-            logger.info(f"배치 SMTP 알람 발송 완료: {len(sendable)}건")
-        except Exception as exc:
-            logger.error(f"배치 SMTP 알람 발송 실패: {exc}")
+    # ------------------------------------------------------------------
+    # 이메일 발송
+    # ------------------------------------------------------------------
 
     def _load_alert_preferences(self) -> dict[str, Any]:
         """`config/alert_preferences.yaml` 로드 — 실패 시 기본값"""
@@ -304,12 +401,127 @@ class AlertManager:
         # per-event 설정
         event_type = getattr(event, "event_type", "")
         per_event = self._alert_prefs.get("per_event_email_enabled", {})
-        if event_type in per_event and not per_event[event_type]:
-            return False
-        return True
+        return not (event_type in per_event and not per_event[event_type])
+
+    def _build_vlm_plain(self, event: SafetyEvent) -> str:
+        """VLM 분석 결과를 평문 이메일용 텍스트로 반환한다."""
+        lines = []
+        risk = getattr(event, "vlm_risk_level", None)
+        action = getattr(event, "vlm_recommended_action", None)
+        parse_ok = getattr(event, "vlm_parse_success", None)
+        detected = getattr(event, "vlm_detected_events", None)
+
+        if parse_ok is None:
+            # VLM 미실행
+            return ""
+        if not parse_ok:
+            lines.append("VLM 분석: 파싱 실패")
+        else:
+            if risk:
+                lines.append(f"VLM 위험도: {risk}")
+            if detected:
+                lines.append(f"VLM 감지 이벤트: {', '.join(detected)}")
+            if action:
+                lines.append(f"권장 조치: {action}")
+        return "\n".join(lines)
+
+    def _build_vlm_html_rows(self, event: SafetyEvent) -> str:
+        """VLM 분석 결과를 HTML 테이블 행으로 반환한다."""
+        risk = getattr(event, "vlm_risk_level", None)
+        action = getattr(event, "vlm_recommended_action", None)
+        parse_ok = getattr(event, "vlm_parse_success", None)
+        detected = getattr(event, "vlm_detected_events", None)
+
+        if parse_ok is None:
+            return ""
+
+        rows = ""
+        td_style = "padding: 8px; border: 1px solid #ddd;"
+
+        if not parse_ok:
+            rows += (
+                f"<tr><td style='{td_style}'><strong>VLM 분석</strong></td>"
+                f"<td style='{td_style}'>파싱 실패</td></tr>"
+            )
+        else:
+            risk_colors = {
+                "low": "#2ca02c", "medium": "#ff7f0e",
+                "high": "#d62728", "critical": "#8c0000",
+            }
+            if risk:
+                color = risk_colors.get(risk, "#666")
+                rows += (
+                    f"<tr><td style='{td_style}'><strong>VLM 위험도</strong></td>"
+                    f"<td style='{td_style}'>"
+                    f"<span style='background-color:{color};color:white;padding:2px 6px;border-radius:3px;'>"
+                    f"{risk.upper()}</span></td></tr>"
+                )
+            if detected:
+                rows += (
+                    f"<tr><td style='{td_style}'><strong>VLM 감지 이벤트</strong></td>"
+                    f"<td style='{td_style}'>{', '.join(detected)}</td></tr>"
+                )
+            if action:
+                rows += (
+                    f"<tr><td style='{td_style}'><strong>권장 조치</strong></td>"
+                    f"<td style='{td_style}'>{action}</td></tr>"
+                )
+        return rows
+
+    def _send_batch_email(self, events: list[SafetyEvent]) -> None:
+        """배치 이벤트 일괄 이메일 발송 (alert_level 임계값 + per-event 설정 적용)"""
+        if not self.smtp_config or not self.smtp_config["recipients"]:
+            return
+        # alert_level + per-event 설정 필터링 (_should_send_email 동일 로직)
+        sendable = [e for e in events if self._should_send_email(e)]
+        if not sendable:
+            return
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["From"] = self.smtp_config["user"]
+            msg["To"] = ", ".join(self.smtp_config["recipients"])
+            msg["Subject"] = f"[KSI-CCTV] 배치 알람 {len(sendable)}건"
+
+            body_plain = f"총 {len(sendable)}건의 알람이 발생했습니다.\n"
+            for e in sendable:
+                body_plain += (
+                    f"- {e.timestamp.strftime('%H:%M:%S')} [{e.camera_id}] "
+                    f"{e.event_type} (level: {getattr(e, 'alert_level', 'low')})\n"
+                )
+                vlm_plain = self._build_vlm_plain(e)
+                if vlm_plain:
+                    for ln in vlm_plain.splitlines():
+                        body_plain += f"  {ln}\n"
+
+            body_html = (
+                f"<html><body style='font-family: sans-serif; padding: 20px;'>"
+                f"<h2>KSI-CCTV 배치 알람 ({len(sendable)}건)</h2>"
+                f"<table style='border-collapse: collapse; width: 100%;'>"
+                f"<tr><th>시각</th><th>카메라</th><th>이벤트</th><th>Level</th><th>VLM 위험도</th></tr>"
+            )
+            for e in sendable:
+                level = getattr(e, "alert_level", "low")
+                color = {"medium": "#ff7f0e", "high": "#d62728", "critical": "#8c0000"}.get(level, "#2ca02c")
+                vlm_risk = getattr(e, "vlm_risk_level", "") or ""
+                body_html += (
+                    f"<tr><td>{e.timestamp.strftime('%H:%M:%S')}</td>"
+                    f"<td>{e.camera_id}</td><td>{e.event_type}</td>"
+                    f"<td><span style='background-color: {color}; color: white; padding: 2px 6px;'>{level.upper()}</span></td>"
+                    f"<td>{vlm_risk.upper() if vlm_risk else '-'}</td></tr>"
+                )
+            body_html += "</table></body></html>"
+
+            msg.attach(MIMEText(body_plain, "plain", "utf-8"))
+            msg.attach(MIMEText(body_html, "html", "utf-8"))
+
+            # 공통 헬퍼 사용 (timeout + SSL 분기)
+            self._smtp_send(msg)
+            logger.info(f"배치 SMTP 알람 발송 완료: {len(sendable)}건")
+        except Exception as exc:
+            logger.error(f"배치 SMTP 알람 발송 실패: {exc}")
 
     def _send_email(self, event: SafetyEvent):
-        """SMTP 알람 이메일 발송 (HTML + alert_level 필터링 + per-event 설정)"""
+        """SMTP 알람 이메일 발송 (HTML + alert_level 필터링 + per-event 설정 + VLM 필드)"""
         if not self.smtp_config or not self.smtp_config["recipients"]:
             return
 
@@ -333,6 +545,10 @@ class AlertManager:
                 f"신뢰도: {event.confidence:.2f}\n"
                 f"alert_level: {alert_level}\n"
             )
+            # VLM 필드 추가
+            vlm_plain = self._build_vlm_plain(event)
+            if vlm_plain:
+                body_plain += vlm_plain + "\n"
 
             # HTML with alert_level badge
             level_colors = {
@@ -342,26 +558,31 @@ class AlertManager:
                 "critical": "#8c0000",
             }
             level_color = level_colors.get(alert_level, "#2ca02c")
+            td_style = "padding: 8px; border: 1px solid #ddd;"
+
+            # VLM HTML 행
+            vlm_rows = self._build_vlm_html_rows(event)
 
             body_html = f"""
             <html>
             <body style="font-family: sans-serif; padding: 20px;">
-                <h2>🚨 KSI-CCTV 알람</h2>
+                <h2>KSI-CCTV 알람</h2>
                 <table style="border-collapse: collapse; width: 100%; max-width: 600px;">
-                    <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>이벤트</strong></td>
-                        <td style="padding: 8px; border: 1px solid #ddd;">{event.event_type}</td></tr>
-                    <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>카메라</strong></td>
-                        <td style="padding: 8px; border: 1px solid #ddd;">{event.camera_id}</td></tr>
-                    <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>시각</strong></td>
-                        <td style="padding: 8px; border: 1px solid #ddd;">{event.timestamp.strftime('%Y-%m-%d %H:%M:%S')}</td></tr>
-                    <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>신뢰도</strong></td>
-                        <td style="padding: 8px; border: 1px solid #ddd;">{event.confidence:.2f}</td></tr>
-                    <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>alert_level</strong></td>
-                        <td style="padding: 8px; border: 1px solid #ddd;">
+                    <tr><td style="{td_style}"><strong>이벤트</strong></td>
+                        <td style="{td_style}">{event.event_type}</td></tr>
+                    <tr><td style="{td_style}"><strong>카메라</strong></td>
+                        <td style="{td_style}">{event.camera_id}</td></tr>
+                    <tr><td style="{td_style}"><strong>시각</strong></td>
+                        <td style="{td_style}">{event.timestamp.strftime('%Y-%m-%d %H:%M:%S')}</td></tr>
+                    <tr><td style="{td_style}"><strong>신뢰도</strong></td>
+                        <td style="{td_style}">{event.confidence:.2f}</td></tr>
+                    <tr><td style="{td_style}"><strong>alert_level</strong></td>
+                        <td style="{td_style}">
                             <span style="background-color: {level_color}; color: white; padding: 4px 8px; border-radius: 4px;">
                                 {alert_level.upper()}
                             </span>
                         </td></tr>
+                    {vlm_rows}
                 </table>
                 <p style="margin-top: 20px; color: #666; font-size: 12px;">
                     KSI-CCTV 자동 알람 시스템
@@ -373,32 +594,39 @@ class AlertManager:
             msg.attach(MIMEText(body_plain, "plain", "utf-8"))
             msg.attach(MIMEText(body_html, "html", "utf-8"))
 
-            with smtplib.SMTP(
-                self.smtp_config["host"], self.smtp_config["port"]
-            ) as server:
-                server.starttls()
-                if self.smtp_config["user"] and self.smtp_config["password"]:
-                    server.login(self.smtp_config["user"], self.smtp_config["password"])
-                server.send_message(msg)
+            # 공통 헬퍼 사용 (timeout + SSL 분기)
+            self._smtp_send(msg)
             logger.info(f"SMTP 알람 발송 완료: {event.event_type} ({alert_level})")
         except Exception as e:
             logger.error(f"SMTP 알람 발송 실패: {e}")
+
+    # ------------------------------------------------------------------
+    # 이벤트 로깅
+    # ------------------------------------------------------------------
 
     def _log_event(self, event: SafetyEvent):
         """이벤트 로깅 (URL 마스킹 적용)"""
         log_data = event.to_dict()
         log_line = json.dumps(log_data, ensure_ascii=False, default=str)
-        # Phase 8 M5.3 S3: RTSP/HTTP URL 마스킹
+        # Phase 8 M5.3 S3: RTSP/HTTP URL 마스킹 (비밀 보호)
         log_line = mask_text(log_line)
 
         self.alert_logger.info(f"EVENT | {log_line}")
 
         if self.config.console_output:
-            print(f"\n🚨 알람! [{event.camera_id}] {event.event_type} "
+            print(f"\n알람! [{event.camera_id}] {event.event_type} "
                   f"(신뢰도: {event.confidence:.2f})")
 
+    # ------------------------------------------------------------------
+    # 이미지 저장 / 얼굴 블러링 / 암호화
+    # ------------------------------------------------------------------
+
     def _save_image(self, event: SafetyEvent):
-        """이벤트 이미지 저장"""
+        """이벤트 이미지 저장.
+
+        encrypt_images=True이고 Fernet 키가 있으면 .jpg.enc로 암호화 저장.
+        키가 없으면 경고 후 평문 .jpg로 저장.
+        """
         if event.image is None:
             return
 
@@ -408,46 +636,90 @@ class AlertManager:
         event_dir.mkdir(parents=True, exist_ok=True)
 
         # 파일명
-        filename = f"{event.event_type}_{event.timestamp.strftime('%H%M%S')}.jpg"
-        filepath = event_dir / filename
+        base_name = f"{event.event_type}_{event.timestamp.strftime('%H%M%S')}"
 
-        # 이미지 저장
         try:
             image = self._prepare_image_for_storage(event.image)
-            cv2.imwrite(str(filepath), image)
-            logger.info(f"이미지 저장 완료: {filepath}")
-        except Exception as e:
-            logger.error(f"이미지 저장 실패: {e}")
 
-    def _load_face_cascade(self):
-        """OpenCV 기본 얼굴 검출기 로드"""
-        cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
-        cascade = cv2.CascadeClassifier(str(cascade_path))
-        if cascade.empty():
-            logger.warning("얼굴 블러링 검출기를 로드하지 못했습니다")
-            return None
-        return cascade
+            if self.config.encrypt_images and self._fernet is not None:
+                # 암호화 경로: JPG 인코딩 → Fernet 암호화 → .jpg.enc
+                ok, buf = cv2.imencode(".jpg", image)
+                if not ok:
+                    raise RuntimeError("cv2.imencode 실패")
+                encrypted = self._fernet.encrypt(bytes(buf))
+                filepath = event_dir / f"{base_name}.jpg.enc"
+                filepath.write_bytes(encrypted)
+                logger.info("암호화 이미지 저장 완료: %s", filepath)
+            else:
+                # 평문 경로 (기존 동작, 또는 키 미설정 fallback)
+                filepath = event_dir / f"{base_name}.jpg"
+                cv2.imwrite(str(filepath), image)
+                logger.info("이미지 저장 완료: %s", filepath)
+        except Exception as e:
+            logger.error("이미지 저장 실패: %s", e)
+
+    def _load_face_cascades(self) -> list:
+        """얼굴 검출기를 복수 로드한다.
+
+        CCTV 환경(상방·측방 설치)에서 정면 단일 cascade 누락을 보완하기 위해
+        haarcascade_frontalface_default + haarcascade_profileface를 병행 사용한다.
+
+        반환: 로드에 성공한 CascadeClassifier 목록 (빈 목록이면 블러링 비활성)
+        """
+        cascade_names = [
+            "haarcascade_frontalface_default.xml",
+            "haarcascade_profileface.xml",
+        ]
+        loaded = []
+        data_dir = Path(cv2.data.haarcascades)
+        for name in cascade_names:
+            path = data_dir / name
+            cascade = cv2.CascadeClassifier(str(path))
+            if cascade.empty():
+                logger.warning("얼굴 블러링 검출기 로드 실패: %s", name)
+            else:
+                loaded.append(cascade)
+
+        if not loaded:
+            logger.warning("사용 가능한 얼굴 검출기가 없습니다. 블러링 비활성.")
+        return loaded
 
     def _prepare_image_for_storage(self, image):
-        """저장 전 개인정보 보호 처리"""
-        if not self.config.blur_faces or self.face_cascade is None:
+        """저장 전 개인정보 보호 처리.
+
+        여러 cascade(정면 + 측면)에서 검출한 얼굴 영역을 모두 블러링한다.
+        중복 영역은 NMS 없이 각 cascade 결과를 순서대로 적용한다.
+        """
+        if not self.config.blur_faces or not self._face_cascades:
             return image
 
         protected = image.copy()
         gray = cv2.cvtColor(protected, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
 
         kernel = max(3, int(self.config.face_blur_strength))
         if kernel % 2 == 0:
             kernel += 1
 
-        for (x, y, w, h) in faces:
-            roi = protected[y:y + h, x:x + w]
-            if roi.size == 0:
-                continue
-            protected[y:y + h, x:x + w] = cv2.GaussianBlur(roi, (kernel, kernel), 0)
+        for cascade in self._face_cascades:
+            # scaleFactor=1.05 (기존 1.1보다 촘촘하게 — 원거리/소형 얼굴 검출)
+            # minSize=(20, 20) (기존 30×30보다 작은 얼굴도 검출)
+            faces = cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.05,
+                minNeighbors=4,
+                minSize=(20, 20),
+            )
+            for (x, y, w, h) in (faces if len(faces) > 0 else []):
+                roi = protected[y:y + h, x:x + w]
+                if roi.size == 0:
+                    continue
+                protected[y:y + h, x:x + w] = cv2.GaussianBlur(roi, (kernel, kernel), 0)
 
         return protected
+
+    # ------------------------------------------------------------------
+    # 이미지 조회 / 정리
+    # ------------------------------------------------------------------
 
     def get_event_log(self, limit: int = 100) -> list[dict]:
         """최근 이벤트 로그 조회"""
@@ -467,42 +739,64 @@ class AlertManager:
         return events
 
     def get_captured_images(self, date: str | None = None) -> list[Path]:
-        """캡처된 이미지 목록"""
-        if date:
-            target_dir = self.capture_dir / date
-        else:
-            target_dir = self.capture_dir
+        """캡처된 이미지 목록.
+
+        암호화 저장 시 .jpg.enc 파일도 포함한다.
+        """
+        target_dir = self.capture_dir / date if date else self.capture_dir
 
         if not target_dir.exists():
             return []
 
         images = []
         for dirpath in target_dir.rglob('*'):
-            if dirpath.is_file() and dirpath.suffix.lower() in {'.jpg', '.jpeg', '.png'}:
+            if dirpath.is_file() and dirpath.suffix.lower() in {'.jpg', '.jpeg', '.png', '.enc'}:
                 images.append(dirpath)
 
         return sorted(images, reverse=True)
 
     def cleanup_old_images(self):
-        """오래된 이미지 정리"""
+        """오래된 이미지를 보관 기간 기준으로 정리한다.
+
+        디렉토리명(YYYYMMDD)을 우선 파싱해 날짜를 결정한다.
+        파싱이 불가능한 디렉토리는 st_mtime fallback.
+
+        기존 동작(mtime 단독)의 문제: 디렉토리에 파일이 나중에 추가/이동되면
+        mtime이 갱신돼 보관기간을 넘긴 데이터가 삭제되지 않을 수 있었다.
+        디렉토리명 기반은 OS mtime에 영향받지 않는 신뢰 가능한 날짜 기준이다.
+        """
         if self.config.image_retention_days <= 0:
             return
 
-        cutoff = datetime.now().timestamp() - (self.config.image_retention_days * 86400)
+        cutoff_date = date.fromtimestamp(
+            datetime.now().timestamp() - self.config.image_retention_days * 86400
+        )
         deleted = 0
 
         for date_dir in self.capture_dir.iterdir():
             if not date_dir.is_dir():
                 continue
 
-            # 디렉토리의 최근 수정 시간 확인
+            # 디렉토리명(YYYYMMDD)으로 날짜 파싱 시도
+            dir_date: date | None = None
+            with contextlib.suppress(ValueError):
+                dir_date = datetime.strptime(date_dir.name, "%Y%m%d").date()
+
             try:
-                mtime = date_dir.stat().st_mtime
-                if mtime < cutoff:
+                if dir_date is not None:
+                    # 디렉토리명 기반 날짜 판정 (mtime 무관)
+                    should_delete = dir_date < cutoff_date
+                else:
+                    # 날짜 디렉토리가 아닌 경우 mtime fallback
+                    mtime = date_dir.stat().st_mtime
+                    cutoff_ts = datetime.now().timestamp() - self.config.image_retention_days * 86400
+                    should_delete = mtime < cutoff_ts
+
+                if should_delete:
                     shutil.rmtree(date_dir)
                     deleted += 1
             except Exception as e:
-                logger.error(f"정리 실패: {e}")
+                logger.error("정리 실패: %s", e)
 
         if deleted > 0:
-            logger.info(f"{deleted}개 오래된 디렉토리 정리 완료")
+            logger.info("%d개 오래된 디렉토리 정리 완료", deleted)

@@ -87,27 +87,45 @@ person bbox 종횡비, 위치 변화, temporal 정보를 이용해 쓰러짐 후
 | on_high_confidence | 고신뢰 후보만 분석 |
 | on_low_confidence | 저신뢰 후보만 확인 |
 
-## SafetyEvent 확장 필요 필드
+## SafetyEvent 정책 필드 (Phase 4 이후 dataclass 정식 필드)
 
-- alert_level: low, medium, high, critical
-- cooldown_sec: 이벤트별 쿨다운
-- vlm_needed: VLM 분석 필요 여부
-- source_models: 어떤 모델이 이벤트를 만들었는지
-- rule_name: 어떤 rule이 이벤트를 만들었는지
+`SafetyEvent` dataclass에 다음 필드가 정식 추가되었습니다.
 
-현재 Phase 3 구현에서는 파이프라인 통합 전 독립 검증을 위해 위 필드를 `SafetyEvent` 동적 속성으로 붙입니다. Phase 4에서 `SafetyEvent` dataclass 정식 필드로 반영해야 합니다.
+```python
+alert_level: str = "low"          # low | medium | high | critical
+cooldown_sec: float = 30.0
+vlm_needed: bool = False
+source_models: List[str] = field(default_factory=list)
+rule_name: str = ""
+```
 
-## 구현 상태
+추가 VLM 결과 필드 (VLM 분석 완료 후 enrich):
+
+```python
+vlm_detected_events: list[str] = field(default_factory=list)
+vlm_recommended_action: str = ""
+vlm_parse_success: bool | None = None   # None=VLM 미실행, True=파싱 성공, False=파싱 실패
+vlm_raw_response: str = ""
+```
+
+## 구현 상태 (Phase 10 기준 — 통합 완료)
 
 - `src/policy/rule_evaluators.py`: rule evaluator registry 구현 완료
-- `src/policy/event_policy_engine.py`: profile policy 평가와 `PolicyDecision` 생성 구현 완료
-- `tests/test_policy.py`: 독립 단위 테스트 추가 완료
-- Pipeline 통합은 아직 미완료이며 Phase 4 범위입니다.
+- `src/policy/event_policy_engine.py`: profile policy 평가, `PolicyDecision` 생성 완료
+  - `enabled_events=[]` 논리 수정 완료 (Phase 10 A)
+  - 룰 평가를 `trigger.models` 범위로 스코핑 (크로스모델 중복 카운트 방지)
+  - pose_anomaly temporal TTL + 위치 게이트 구현
+  - `min_confidence` 상속: trigger 정의 없으면 global 기본값 사용
+- `tests/test_policy.py`: 독립 단위 테스트 완료 (+2 회귀 테스트 Phase 10 A)
+- **Pipeline 통합 완료** (Phase 4): `SafetyPipeline._process_frame_with_policy()`에서 직접 호출
+- **대시보드 기본 실행 경로** (Phase 10 M0): `start_pipeline()`이 policy-mode를 기본으로 사용
 
-## 구현 순서
+## 구현 순서 (완료)
 
-1. config/event_policies.yaml 작성 완료
-2. RuleEvaluatorRegistry 구현 완료
-3. EventPolicyEngine 구현 완료
+1. `config/event_policies.yaml` 작성 완료
+2. `RuleEvaluatorRegistry` 구현 완료
+3. `EventPolicyEngine` 구현 완료
 4. 테스트 작성 완료
-5. Pipeline 통합 예정
+5. `SafetyPipeline` 통합 완료 (Phase 4)
+6. `SafetyEvent` dataclass 정식 필드화 완료 (Phase 4)
+7. 대시보드 기본 실행 경로 policy-mode 전환 완료 (Phase 10 M0)

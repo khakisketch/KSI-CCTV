@@ -1,0 +1,178 @@
+# =============================================================================
+# KSI-CCTV 근접 위험 탐지(Proximity Detection) 설정 예시 템플릿
+# =============================================================================
+#
+# 이 파일은 예시(template)입니다. 실제 운영에는 직접 사용하지 마세요.
+#
+# 용도:
+#   - proximity 룰: 사람(person)과 위험 장비(truck/forklift/crane 등) 간
+#     픽셀 거리가 임계값 이하일 때 안전 이벤트를 발생시킨다.
+#   - event_policies.yaml 의 equipment_proximity 정책에 적용.
+#
+# 핵심 제약:
+#   max_distance_px 는 픽셀 거리 임계값이므로
+#   카메라 화각(FOV), 해상도, 카메라-피사체 거리에 따라 전혀 다른 물리 거리를 의미한다.
+#   반드시 실제 카메라 영상에서 캘리브레이션(측정)해야 의미 있는 값이 된다.
+#
+#   캘리브레이션 방법:
+#     1. 실제 현장에서 기준 물체(예: 사람 키 170cm)를 카메라 앞에 세운다.
+#     2. YOLO가 탐지한 bbox(y1, y2) 높이 픽셀 수를 측정한다.
+#     3. 원하는 안전거리(예: 실물 3m)가 몇 픽셀인지 비율로 환산한다.
+#        예: 사람 bbox 높이 = 200px (실물 170cm)
+#            3m = 200 × (300/170) ≈ 353px → max_distance_px: 350
+#     4. 카메라 위치·각도가 달라지면 재캘리브레이션 필요.
+#
+# 사용 방법:
+#   1. 이 파일을 참조하여 config/event_policies.yaml 에
+#      equipment_proximity 정책을 추가한다.
+#   2. max_distance_px 를 실 카메라 캘리브레이션 결과로 교체한다.
+#   3. between 의 클래스명은 config/model_profiles.yaml class_map 이후 표준명을 사용한다.
+#
+# =============================================================================
+
+# =============================================================================
+# 근접 룰(proximity rule) 파라미터 설명
+# =============================================================================
+#
+# rule:
+#   type: proximity
+#     ↳ person_proximity 와 다른 룰 타입.
+#       person_proximity = 사람끼리의 근접(싸움 등)
+#       proximity        = 사람 ↔ 장비/물체 간 근접(중장비 위험 접근 등)
+#
+#   between: [<class_a>, [class_b_options]]
+#     ↳ A는 단일 클래스명(문자열), B는 클래스명 리스트. 두 그룹 간 거리를 측정한다.
+#       예: ["person", ["truck", "forklift", "crane"]]
+#       (주의: A(left)를 리스트로 쓰면 evaluator가 매칭하지 못해 영구 미발생한다.)
+#       → person 바운딩박스와 truck/forklift/crane 바운딩박스 중심 간 픽셀 거리
+#
+#   max_distance_px: <정수>
+#     ↳ 이 픽셀 거리 이하이면 위험 근접으로 판정.
+#       반드시 실 카메라 캘리브레이션 결과로 설정. 기본값은 없음.
+#
+#   self_pair_guard: true  (ProximityEvaluator 기본 활성)
+#     ↳ 동일 bbox를 A·B 양쪽에 중복 매칭하는 경우를 자동 제거.
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 예시 1. 건설현장 — 사람과 중장비(지게차/굴착기/크레인) 근접 위험
+# -----------------------------------------------------------------------------
+# max_distance_px 는 예시값입니다. 실 카메라 캘리브레이션 후 교체하세요.
+#
+# 배경:
+#   - 카메라 해상도: 1920 × 1080, 화각 약 90도, 지상 5m 높이 설치
+#   - 현장에서 사람 bbox 높이 ≈ 150px (카메라-사람 거리 약 10m 기준)
+#   - 안전거리 목표: 실물 3m → 약 150 × (300/170) ≈ 265px
+#   → 아래 max_distance_px: 265 는 이 환경 기준 추정값 (실측 후 교체 필수)
+example_construction_equipment_proximity:
+  description: "건설현장 사람-중장비 근접 위험 정책 예시"
+  policy_key: equipment_proximity   # event_policies.yaml 에 이 이름으로 추가
+  profile: construction             # event_policies.yaml profiles 아래 섹션
+  enabled: false                    # 캘리브레이션 완료 후 true 로 전환
+  trigger:
+    models: [general_yolo]
+    classes: [person]               # 트리거 클래스 (COCO pretrained 기준)
+    min_confidence: 0.30
+  rule:
+    type: proximity
+    between:
+      - person                      # A(left): 단일 클래스명(문자열)
+      - [truck, forklift, crane,    # B(right): 클래스명 리스트 (COCO 클래스명 기준)
+         bus, car, motorcycle]      #           커스텀 모델이면 class_map 이후 표준명으로
+    # ↓↓↓ 반드시 실 카메라 캘리브레이션 후 교체하세요 ↓↓↓
+    max_distance_px: 265            # 예시값 — 실측 전 절대 운영 사용 금지
+    # ↑↑↑ 캘리브레이션 방법은 파일 상단 주석 참조 ↑↑↑
+  vlm: on_ambiguous                 # VLM으로 2차 확인 권장
+  alert_level: high
+  cooldown_sec: 15
+  description_ko: "중장비 3m 이내 접근 위험"
+
+
+# -----------------------------------------------------------------------------
+# 예시 2. 공장 — 사람과 산업용 로봇/컨베이어 근접 위험
+# -----------------------------------------------------------------------------
+# max_distance_px 는 예시값입니다. 실 카메라 캘리브레이션 후 교체하세요.
+#
+# 배경:
+#   - 카메라 해상도: 1280 × 720, 화각 약 60도, 라인 정면 설치
+#   - 현장에서 사람 bbox 높이 ≈ 200px (카메라-사람 거리 약 5m 기준)
+#   - 안전거리 목표: 실물 1.5m → 약 200 × (150/170) ≈ 177px
+#   → 아래 max_distance_px: 180 은 이 환경 기준 추정값 (실측 후 교체 필수)
+example_factory_robot_proximity:
+  description: "공장 사람-산업로봇/컨베이어 근접 위험 정책 예시"
+  policy_key: robot_proximity
+  profile: factory
+  enabled: false
+  trigger:
+    models: [general_yolo]
+    classes: [person]
+    min_confidence: 0.30
+  rule:
+    type: proximity
+    between:
+      - person                      # A(left): 단일 클래스명(문자열)
+      # COCO 는 로봇/컨베이어 클래스가 없으므로 커스텀 모델 필요.
+      # 커스텀 모델 도입 전 임시: 움직이는 대형 물체 COCO 클래스로 근사
+      - [truck, bus, train]         # B(right): 리스트 — 커스텀 모델 class_map 이후 robot/conveyor 로 교체
+    # ↓↓↓ 반드시 실 카메라 캘리브레이션 후 교체하세요 ↓↓↓
+    max_distance_px: 180            # 예시값 — 실측 전 절대 운영 사용 금지
+    # ↑↑↑ 캘리브레이션 방법은 파일 상단 주석 참조 ↑↑↑
+  vlm: always
+  alert_level: critical
+  cooldown_sec: 10
+  description_ko: "산업로봇 1.5m 이내 접근 위험"
+
+
+# =============================================================================
+# event_policies.yaml 에 추가하는 방법 (복사·붙여넣기 템플릿)
+# =============================================================================
+#
+# 아래를 config/event_policies.yaml 의 profiles.construction.policies 아래 추가:
+#
+#   equipment_proximity:
+#     enabled: false              # 캘리브레이션 완료 후 true 로 전환
+#     trigger:
+#       models: [general_yolo]
+#       classes: [person]
+#       min_confidence: 0.30
+#     rule:
+#       type: proximity
+#       between:
+#         - person                  # A(left): 단일 클래스명(문자열)
+#         - [truck, forklift, crane, bus]   # B(right): 리스트
+#       max_distance_px: 265      # ← 실 카메라 캘리브레이션 결과로 교체 필수
+#     vlm: on_ambiguous
+#     alert_level: high
+#     cooldown_sec: 15
+#     description: "중장비 3m 이내 접근 위험 (캘리브레이션 필요)"
+#
+# =============================================================================
+# 캘리브레이션 절차 상세
+# =============================================================================
+#
+# [1단계] 기준 영상 확보
+#   - 실제 카메라로 현장을 촬영하거나 RTSP 스트림에서 프레임 캡처
+#   - python3 scripts/create_sample_video.py 등으로 테스트 영상 생성 가능
+#
+# [2단계] 기준 물체 bbox 측정
+#   - 파이프라인을 디버그 모드로 실행하여 YOLO bbox 좌표 로그 확인
+#   - 예: 사람 bbox → x1=850, y1=380, x2=980, y2=730
+#         → 높이 = 730 - 380 = 350px (이 카메라 기준 사람 bbox 높이)
+#
+# [3단계] 안전거리(물리)를 픽셀로 환산
+#   - 사람 bbox 높이 350px ≈ 실물 170cm
+#   - 안전거리 3m(300cm) → 350 × (300 / 170) ≈ 617px
+#   - max_distance_px: 617 로 설정
+#
+# [4단계] 현장 검증
+#   - 실제 사람이 중장비 3m 앞에 서는 시나리오를 촬영
+#   - 파이프라인 로그에서 proximity 이벤트 발생 확인
+#   - 오탐/누락에 따라 max_distance_px 미세 조정
+#
+# [5단계] 운영 적용
+#   - config/event_policies.yaml 의 max_distance_px 업데이트
+#   - enabled: true 로 전환
+#   - 파이프라인 재기동
+#
+# =============================================================================

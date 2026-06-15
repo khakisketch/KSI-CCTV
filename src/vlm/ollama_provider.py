@@ -12,11 +12,11 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 
-from .vlm_inference import VLMProvider, VLMAnalysisResult
+from .vlm_inference import VLMAnalysisResult, VLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class OllamaProvider(VLMProvider):
         self.max_retries = max_retries
         # Phase 9: 메트릭
         self._metrics_lock = threading.Lock()
-        self._metrics: Dict[str, Any] = {
+        self._metrics: dict[str, Any] = {
             "total_calls": 0,
             "success_count": 0,
             "failure_count": 0,
@@ -50,7 +50,7 @@ class OllamaProvider(VLMProvider):
 
     # ───────── Phase 9: Metrics ─────────
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """현재까지의 VLM 메트릭을 반환 (thread-safe snapshot)."""
         with self._metrics_lock:
             m = dict(self._metrics)
@@ -176,10 +176,66 @@ class OllamaProvider(VLMProvider):
             inference_time_ms=round(inference_time_ms, 1),
         )
 
+    @staticmethod
+    def _extract_json_object(text: str) -> str | None:
+        """본문에서 첫 번째 완결된 {...} JSON 객체를 괄호 균형 매칭으로 추출.
+
+        정규식으로 '{' 위치를 찾은 뒤 괄호 카운터로 닫는 위치를 탐색한다.
+        이중 따옴표 내부 괄호는 이스케이프까지 고려해 무시한다.
+        """
+        # 본문 내 첫 '{' 시작 위치 탐색 (앞뒤 설명 텍스트 건너뜀)
+        start = text.find("{")
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape_next = False
+
+        for i, ch in enumerate(text[start:], start=start):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        return None
+
     def _parse_response(self, content: str) -> VLMAnalysisResult:
-        """Ollama 응답에서 JSON 파싱"""
-        # ```json ... ``` 블록 추출 시도
-        json_str = content
+        """Ollama 응답에서 JSON 파싱.
+
+        시도 순서:
+          1. ```json ... ``` 코드 펜스 블록
+          2. 본문 전체 json.loads
+          3. 정규식/괄호 균형 매칭으로 첫 {...} 추출 (fallback)
+          4. 모두 실패 시 parse_success=False, risk_level 보존 없이 'low' 유지하고
+             원본 응답을 description에 담아 상위에서 판단 가능하게 한다.
+        """
+        raw_excerpt = content[:1000]
+
+        def _build_result(data: dict) -> VLMAnalysisResult:
+            return VLMAnalysisResult(
+                description=data.get("description", ""),
+                risk_level=data.get("risk_level", "low"),
+                detected_events=data.get("detected_events", []),
+                recommended_action=data.get("recommended_action", ""),
+                confidence=float(data.get("confidence", 0.5)),
+                raw_response=raw_excerpt,
+                parse_success=True,
+            )
+
+        # ── 경로 1: ```json ... ``` 코드 펜스 블록 추출 ──
         if "```" in content:
             parts = content.split("```")
             for part in parts:
@@ -187,36 +243,35 @@ class OllamaProvider(VLMProvider):
                 if part.startswith("json"):
                     part = part[4:].strip()
                 try:
-                    data = json.loads(part)
-                    return VLMAnalysisResult(
-                        description=data.get("description", ""),
-                        risk_level=data.get("risk_level", "low"),
-                        detected_events=data.get("detected_events", []),
-                        recommended_action=data.get("recommended_action", ""),
-                        confidence=float(data.get("confidence", 0.5)),
-                        raw_response=content[:1000],
-                        parse_success=True,
-                    )
-                except json.JSONDecodeError:
+                    return _build_result(json.loads(part))
+                except (json.JSONDecodeError, ValueError):
                     continue
 
-        # 일반 JSON 파싱 시도
+        # ── 경로 2: 본문 전체 json.loads ──
         try:
-            data = json.loads(json_str)
-            return VLMAnalysisResult(
-                description=data.get("description", ""),
-                risk_level=data.get("risk_level", "low"),
-                detected_events=data.get("detected_events", []),
-                recommended_action=data.get("recommended_action", ""),
-                confidence=float(data.get("confidence", 0.5)),
-                raw_response=content[:1000],
-                parse_success=True,
-            )
-        except json.JSONDecodeError:
-            # JSON 파싱 실패 시 전체 응답을 설명으로 사용
-            return VLMAnalysisResult(
-                description=content[:500],
-                risk_level="medium",
-                raw_response=content[:1000],
-                parse_success=False,
-            )
+            return _build_result(json.loads(content))
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # ── 경로 3: 본문 내 첫 {...} 객체 추출 fallback ──
+        # VLM이 "분석 결과: {...}" 형태로 응답하는 경우를 처리
+        candidate = self._extract_json_object(content)
+        if candidate:
+            try:
+                return _build_result(json.loads(candidate))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # ── 경로 4: 모든 파싱 실패 ──
+        # risk_level을 임의로 medium 고정하지 않는다 — 원본 텍스트를 보존해
+        # 상위 레이어(pipeline/dashboard)가 맥락을 볼 수 있게 한다.
+        logger.warning(
+            "VLM 응답 JSON 파싱 실패 — 원본 텍스트를 description으로 보존. "
+            "raw_response를 확인하세요."
+        )
+        return VLMAnalysisResult(
+            description=content[:500],
+            risk_level="low",  # 파싱 불가 = 위험 과대 판정 방지, 상위가 재판정
+            raw_response=raw_excerpt,
+            parse_success=False,
+        )

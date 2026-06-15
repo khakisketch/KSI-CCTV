@@ -1,0 +1,22 @@
+# KSI-CCTV 프로젝트 도구 설정
+# - ruff(lint/format) 설정은 ruff.toml에 별도 분리되어 있다(기존 관습 유지).
+# - 여기서는 mypy 타입 검사 범위를 정의한다(M5.2 "mypy 적용 범위 선정").
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+# 서드파티 라이브러리(cv2/onnxruntime/ultralytics/streamlit/psutil/cryptography 등)는
+# 타입 스텁이 없으므로 import 누락 오류를 무시한다.
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+# 점진 도입 정책: 미타입 레거시 코드베이스이므로 strict를 강제하지 않는다.
+# 신규/수정 코드부터 타입 정합성을 높이고, 남은 경고는 advisory로 추적한다(게이트 차단 아님).
+# scripts/·tests/는 현재 검사 범위에서 제외(files=src). 추후 범위를 넓힌다.
+disallow_untyped_defs = false
+check_untyped_defs = false
+
+[tool.pytest.ini_options]
+# 캐시로 인한 가짜 green을 피하기 위해 CI/게이트는 -p no:cacheprovider 권장.
+testpaths = ["tests"]
+python_files = ["test_*.py"]

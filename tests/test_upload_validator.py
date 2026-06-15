@@ -1,6 +1,7 @@
 """User model upload validator tests."""
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent))
 
 import tempfile
@@ -134,6 +135,139 @@ class TestUploadValidator(unittest.TestCase):
             self.assertFalse((base / result.model_id).exists())
             profiles = yaml.safe_load(profiles_path.read_text(encoding="utf-8"))
             self.assertNotIn(result.profile_name, profiles.get("models", {}))
+
+
+class TestValidateMetadataThresholds(unittest.TestCase):
+    """_validate_metadata의 conf/iou threshold 검증 보강 테스트.
+
+    브리프 Finding: float() 무조건 변환으로 인한 영문 raw ValueError 전파 방지.
+    비수치 문자열이 들어오면 한국어 에러 메시지를 ValueError로 반환해야 한다.
+    """
+
+    def _call(self, meta: dict) -> dict:
+        return uv._validate_metadata(meta)
+
+    # --- conf_threshold 정상 케이스 ---
+    def test_conf_threshold_default_applied(self):
+        """conf_threshold 미지정 시 기본값 0.25 적용."""
+        result = self._call({"classes": ["a"], "input_size": [640, 640]})
+        self.assertAlmostEqual(result["conf_threshold"], 0.25)
+
+    def test_conf_threshold_int_accepted(self):
+        """conf_threshold에 정수 0 허용(경계값)."""
+        result = self._call({"classes": ["a"], "input_size": [640, 640], "conf_threshold": 0})
+        self.assertAlmostEqual(result["conf_threshold"], 0.0)
+
+    def test_conf_threshold_string_numeric_accepted(self):
+        """conf_threshold에 수치 문자열 '0.5' 허용 — float 변환 성공."""
+        result = self._call({"classes": ["a"], "input_size": [640, 640], "conf_threshold": "0.5"})
+        self.assertAlmostEqual(result["conf_threshold"], 0.5)
+
+    # --- conf_threshold 오류 케이스 ---
+    def test_conf_threshold_non_numeric_string_raises_korean_error(self):
+        """비수치 문자열 conf_threshold → 한국어 에러 메시지, 영문 raw ValueError 아님.
+
+        재현 경로: _validate_metadata({'classes':['a'],'conf_threshold':'abc'}) → CRASH.
+        """
+        with self.assertRaises(ValueError) as ctx:
+            self._call({"classes": ["a"], "input_size": [640, 640], "conf_threshold": "abc"})
+        error_msg = str(ctx.exception)
+        self.assertIn("conf_threshold", error_msg)
+        # 영문 raw Python 메시지("could not convert string to float")가 아닌지 확인
+        self.assertNotIn("could not convert string to float", error_msg)
+        # 한국어 안내 포함 확인
+        self.assertIn("숫자", error_msg)
+
+    def test_conf_threshold_out_of_range_raises_korean_error(self):
+        """conf_threshold 범위 초과(1.5) → 한국어 에러 메시지."""
+        with self.assertRaises(ValueError) as ctx:
+            self._call({"classes": ["a"], "input_size": [640, 640], "conf_threshold": 1.5})
+        error_msg = str(ctx.exception)
+        self.assertIn("conf_threshold", error_msg)
+        self.assertIn("사이", error_msg)
+
+    def test_conf_threshold_negative_raises_korean_error(self):
+        """conf_threshold 음수(-0.1) → 한국어 에러 메시지."""
+        with self.assertRaises(ValueError) as ctx:
+            self._call({"classes": ["a"], "input_size": [640, 640], "conf_threshold": -0.1})
+        self.assertIn("conf_threshold", str(ctx.exception))
+
+    def test_conf_threshold_bool_raises_error(self):
+        """conf_threshold에 bool 값 전달 → 에러(int subclass인 bool 오용 방지)."""
+        with self.assertRaises(ValueError):
+            self._call({"classes": ["a"], "input_size": [640, 640], "conf_threshold": True})
+
+    def test_conf_threshold_list_raises_error(self):
+        """conf_threshold에 list 전달 → 에러."""
+        with self.assertRaises(ValueError) as ctx:
+            self._call({"classes": ["a"], "input_size": [640, 640], "conf_threshold": [0.5]})
+        self.assertIn("conf_threshold", str(ctx.exception))
+
+    # --- iou_threshold 정상 케이스 ---
+    def test_iou_threshold_default_applied(self):
+        """iou_threshold 미지정 시 기본값 0.45 적용."""
+        result = self._call({"classes": ["a"], "input_size": [640, 640]})
+        self.assertAlmostEqual(result["iou_threshold"], 0.45)
+
+    def test_iou_threshold_string_numeric_accepted(self):
+        """iou_threshold에 수치 문자열 '0.45' 허용."""
+        result = self._call({"classes": ["a"], "input_size": [640, 640], "iou_threshold": "0.45"})
+        self.assertAlmostEqual(result["iou_threshold"], 0.45)
+
+    # --- iou_threshold 오류 케이스 ---
+    def test_iou_threshold_non_numeric_string_raises_korean_error(self):
+        """비수치 문자열 iou_threshold → 한국어 에러 메시지, 영문 raw ValueError 아님."""
+        with self.assertRaises(ValueError) as ctx:
+            self._call({"classes": ["a"], "input_size": [640, 640], "iou_threshold": "xyz"})
+        error_msg = str(ctx.exception)
+        self.assertIn("iou_threshold", error_msg)
+        self.assertNotIn("could not convert string to float", error_msg)
+        self.assertIn("숫자", error_msg)
+
+    def test_iou_threshold_out_of_range_raises_korean_error(self):
+        """iou_threshold 범위 초과(2.0) → 한국어 에러 메시지."""
+        with self.assertRaises(ValueError) as ctx:
+            self._call({"classes": ["a"], "input_size": [640, 640], "iou_threshold": 2.0})
+        self.assertIn("iou_threshold", str(ctx.exception))
+
+    def test_iou_threshold_bool_raises_error(self):
+        """iou_threshold에 bool 값 전달 → 에러."""
+        with self.assertRaises(ValueError):
+            self._call({"classes": ["a"], "input_size": [640, 640], "iou_threshold": False})
+
+    # --- upload_model 통합: ValueError가 한국어 메시지로 전달되는지 확인 ---
+    def test_upload_model_conf_non_numeric_returns_korean_error(self):
+        """upload_model에 비수치 conf_threshold → UploadResult.error가 한국어 메시지."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = uv.upload_model(
+                b"fake",
+                "model.onnx",
+                metadata={"classes": ["a"], "conf_threshold": "not_a_number"},
+                upload_base_dir=uv.Path(tmp) / "uploaded",
+                model_profiles_path=uv.Path(tmp) / "model_profiles.yaml",
+            )
+        self.assertFalse(result.success)
+        self.assertIn("conf_threshold", result.error)
+        self.assertNotIn("could not convert string to float", result.error)
+        self.assertIn("숫자", result.error)
+
+    def test_upload_model_iou_non_numeric_returns_korean_error(self):
+        """upload_model에 비수치 iou_threshold → UploadResult.error가 한국어 메시지."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = uv.upload_model(
+                b"fake",
+                "model.onnx",
+                metadata={"classes": ["a"], "iou_threshold": "bad_value"},
+                upload_base_dir=uv.Path(tmp) / "uploaded",
+                model_profiles_path=uv.Path(tmp) / "model_profiles.yaml",
+            )
+        self.assertFalse(result.success)
+        self.assertIn("iou_threshold", result.error)
+        self.assertNotIn("could not convert string to float", result.error)
 
 
 if __name__ == "__main__":

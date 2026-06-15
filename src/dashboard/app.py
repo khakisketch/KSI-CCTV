@@ -64,8 +64,13 @@ st.set_page_config(
 # CSS 스타일
 st.markdown("""
 <style>
-.main-header { font-size: 2.5rem; font-weight: bold; color: #1f77b4; }
-.sub-header { font-size: 1.5rem; font-weight: bold; color: #2ca02c; }
+/* 한글 어절 단위 줄바꿈 (글자 단위 쪼개짐 방지) */
+body, .main, .stMarkdown, .metric-card, .alert-card, .stCaption {
+    word-break: keep-all;
+    overflow-wrap: break-word;
+}
+.main-header { font-size: 2.5rem; font-weight: bold; color: #1f77b4; word-break: keep-all; }
+.sub-header { font-size: 1.5rem; font-weight: bold; color: #2ca02c; word-break: keep-all; }
 .status-online { color: #2ca02c; font-weight: bold; }
 .status-offline { color: #d62728; font-weight: bold; }
 .alert-card {
@@ -74,12 +79,14 @@ st.markdown("""
     margin: 10px 0;
     border-left: 5px solid #d62728;
     background-color: #fff3f3;
+    word-break: keep-all;
 }
 .metric-card {
     padding: 20px;
     border-radius: 10px;
     background-color: #f0f2f6;
     text-align: center;
+    word-break: keep-all;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -142,10 +149,30 @@ def _load_audit_log() -> list[dict]:
     except Exception:
         return []
 
+_AUDIT_LOG_MAX_BYTES: int = 5 * 1024 * 1024  # 5 MB 초과 시 오래된 절반 제거
+_AUDIT_LOG_KEEP_RATIO: float = 0.5  # 초과 시 최신 50%만 유지
+
+
+def _rotate_audit_log_if_needed(log_path: Path) -> None:
+    """감사 로그 크기 초과 시 오래된 줄을 제거한다 (간단한 크기 기반 회전)."""
+    try:
+        if log_path.stat().st_size < _AUDIT_LOG_MAX_BYTES:
+            return
+        with open(log_path, encoding="utf-8") as f:
+            lines = f.readlines()
+        keep = max(1, int(len(lines) * _AUDIT_LOG_KEEP_RATIO))
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.writelines(lines[-keep:])
+        logger.info(f"감사 로그 회전: {len(lines)} → {keep}줄")
+    except Exception as exc:
+        logger.warning(f"감사 로그 회전 실패: {exc}")
+
+
 def _write_audit_log(entry: dict):
-    """오디트 로그 쓰기"""
+    """오디트 로그 쓰기 (크기 초과 시 자동 회전)"""
     log_path = Path("./logs/dashboard_audit.jsonl")
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_audit_log_if_needed(log_path)
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
 
@@ -225,6 +252,45 @@ def get_events_for_domain(policies: dict[str, Any], domain: str) -> list[dict]:
     return events
 
 
+def is_coco_only_active() -> bool:
+    """활성 모델이 모두 COCO pretrained(class_profile='coco')인지 판단.
+
+    coco 모델만 활성화된 경우 안전장비/화재/연기/쓰러짐 자동 탐지가 불가하므로
+    UI 경고를 표시해야 한다.
+    """
+    try:
+        model_st = get_model_status()
+        models = model_st.get("models", {})
+        if not models:
+            return False
+        # loaded 또는 active 모델의 class_profile 확인
+        active_profiles = []
+        for info in models.values():
+            if isinstance(info, dict) and (info.get("loaded") or info.get("status") == "active"):
+                profile = info.get("class_profile") or info.get("profile") or ""
+                active_profiles.append(profile)
+        if not active_profiles:
+            return False
+        # 활성 모델 전부 'coco' 프로필이면 True
+        return all(p == "coco" for p in active_profiles)
+    except Exception:
+        return False
+
+
+def render_coco_warning():
+    """COCO pretrained 모델 한계 경고 배너.
+
+    활성 모델이 COCO 전용일 때 렌더. 안전장비/화재/연기/쓰러짐 미탐지 주의.
+    """
+    if is_coco_only_active():
+        st.warning(
+            "**기본 COCO 모델 사용 중** — 사람·차량 등 일반 객체만 탐지하며 "
+            "안전모·조끼·화재·연기·쓰러짐은 자동 감지되지 않습니다. "
+            "해당 탐지가 필요하면 `safety_custom` ONNX 모델을 업로드·활성화하세요.",
+            icon="⚠️",
+        )
+
+
 def get_model_status() -> dict[str, Any]:
     """MultiModelRegistry 상태 조회 (없으면 config 기반 fallback)"""
     if not HAS_MODEL_REGISTRY:
@@ -285,10 +351,36 @@ def get_vlm_policy_label(policy: str) -> str:
     return labels.get(policy, policy)
 
 
+# 서버측 전역 로그인 실패 카운터 — 세션 쿠키 삭제로 lockout 우회 방지
+# { "attempts": [timestamp, ...], "locked_until": float | None }
+_GLOBAL_LOGIN_STATE: dict[str, Any] = {
+    "attempts": [],
+    "locked_until": None,
+}
+_GLOBAL_LOGIN_MAX_ATTEMPTS: int = 5
+_GLOBAL_LOGIN_WINDOW_SEC: int = 60
+_GLOBAL_LOGIN_LOCKOUT_SEC: int = 60
+
+
 def _is_rate_limited() -> bool:
-    """Rate limit login attempts (5 failures per minute lockout 60s)"""
+    """Rate limit login attempts — 세션 쿠키 삭제로 우회되지 않도록 모듈 전역 상태로 관리.
+
+    5회 실패 / 60초 윈도우 → 60초 lockout.
+    세션 state도 병행 관리(빠른 검사 경로).
+    """
     now = datetime.utcnow().timestamp()
-    # Check if currently locked
+
+    # 전역 lockout 우선 확인 (세션 삭제로 우회 불가)
+    global_locked = _GLOBAL_LOGIN_STATE.get("locked_until")
+    if global_locked and now < global_locked:
+        remaining = int(global_locked - now)
+        st.warning(f"로그인 시도가 너무 많습니다. {remaining}초 후에 다시 시도하세요.")
+        return True
+    if global_locked and now >= global_locked:
+        _GLOBAL_LOGIN_STATE["locked_until"] = None
+        _GLOBAL_LOGIN_STATE["attempts"] = []
+
+    # 세션 상태도 초기화
     if st.session_state.get("login_locked_until"):
         locked_until = st.session_state.login_locked_until
         if now < locked_until:
@@ -300,24 +392,45 @@ def _is_rate_limited() -> bool:
             st.session_state.login_attempts = []
     return False
 
+
 def _record_login_failure() -> None:
-    """Record a failed login attempt for rate limiting"""
+    """Record a failed login attempt for rate limiting (세션 + 전역 dual track)."""
     now = datetime.utcnow().timestamp()
-    window = 60  # 60 seconds window
-    attempts = st.session_state.get("login_attempts", [])
-    attempts = [t for t in attempts if now - t < window]
-    attempts.append(now)
-    st.session_state.login_attempts = attempts
-    if len(attempts) >= 5:
-        st.session_state.login_locked_until = now + 60
+    window = _GLOBAL_LOGIN_WINDOW_SEC
+
+    # 전역 카운터 업데이트
+    attempts_global = [t for t in _GLOBAL_LOGIN_STATE["attempts"] if now - t < window]
+    attempts_global.append(now)
+    _GLOBAL_LOGIN_STATE["attempts"] = attempts_global
+    if len(attempts_global) >= _GLOBAL_LOGIN_MAX_ATTEMPTS:
+        _GLOBAL_LOGIN_STATE["locked_until"] = now + _GLOBAL_LOGIN_LOCKOUT_SEC
+
+    # 세션 카운터 병행 업데이트 (표시 목적)
+    attempts_session = st.session_state.get("login_attempts", [])
+    attempts_session = [t for t in attempts_session if now - t < window]
+    attempts_session.append(now)
+    st.session_state.login_attempts = attempts_session
+    if len(attempts_session) >= _GLOBAL_LOGIN_MAX_ATTEMPTS:
+        st.session_state.login_locked_until = now + _GLOBAL_LOGIN_LOCKOUT_SEC
         st.warning("로그인 시도 5회 실패. 60초 동안 잠깁니다.")
 
 
 def require_dashboard_auth() -> bool:
-    """선택적 대시보드 비밀번호 보호 (해싱 기반 + rate limiting + session timeout)"""
+    """선택적 대시보드 비밀번호 보호 (해싱 기반 + rate limiting + session timeout).
+
+    비밀번호 미설정 또는 'change-me' 상태이면 무인증으로 통과하나,
+    운영 배포 위험을 알리는 경고 배너를 항상 표시한다.
+    """
     ConfigLoader.load_env()
     password = os.environ.get("KSI_CCTV_DASHBOARD_PASSWORD", "").strip()
     if not password or password == "change-me":
+        # 무인증 모드: 이미지 갤러리·감사로그 등 PII가 노출될 수 있음을 경고
+        st.warning(
+            "**인증 비활성 상태** — `KSI_CCTV_DASHBOARD_PASSWORD` 환경변수가 설정되지 않았습니다. "
+            "운영 배포 시 반드시 비밀번호를 설정하고 재시작하세요. "
+            "현재 CCTV 캡처 이미지 및 감사 로그가 무인증으로 노출될 수 있습니다.",
+            icon="🔓",
+        )
         return True
 
     # Session timeout check (30 min inactivity)
@@ -334,6 +447,15 @@ def require_dashboard_auth() -> bool:
     if st.session_state.get("authenticated"):
         # Update activity on every call
         st.session_state.last_activity = datetime.utcnow().timestamp()
+        # 로그아웃 버튼 (사이드바)
+        with st.sidebar:
+            if st.button("🚪 로그아웃", key="logout_btn"):
+                st.session_state.authenticated = False
+                _write_audit_log({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "event": "logout",
+                })
+                st.rerun()
         return True
 
     # Rate limiting before showing login form
@@ -343,9 +465,10 @@ def require_dashboard_auth() -> bool:
     st.title("KSI-CCTV 로그인")
     entered = st.text_input("대시보드 비밀번호", type="password")
     if st.button("로그인"):
+        import hmac as _hmac  # timing-safe 비교를 위해 지역 임포트
         hashed = _hash_password(entered)
         expected = _hash_password(password)
-        if hashed == expected:
+        if _hmac.compare_digest(hashed, expected):  # timing-safe: timing attack 방지
             st.session_state.authenticated = True
             st.session_state.login_attempts = []
             st.session_state.login_locked_until = None
@@ -636,11 +759,14 @@ def render_dashboard():
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
+        # 연결 0대이면 중립(회색), 1대 이상이면 녹색 표시
+        conn_class = "status-online" if connected_count > 0 else "status-offline"
+        conn_label = f"{connected_count}대" if connected_count > 0 else "없음"
         st.markdown(f"""
         <div class='metric-card'>
             <h3>📹 카메라</h3>
             <h2>{camera_count}대</h2>
-            <p>연결: <span class='status-online'>{connected_count}대</span></p>
+            <p>연결: <span class='{conn_class}'>{conn_label}</span></p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -734,6 +860,9 @@ def render_stream_view():
     """실시간 스트림 뷰"""
     st.subheader("실시간 CCTV 스트림")
 
+    # COCO 한계 경고 (활성 모델이 COCO 전용일 때)
+    render_coco_warning()
+
     if not st.session_state.get('is_running'):
         st.info("📢 왼쪽 사이드바에서 '시작' 버튼을 눌러 파이프라인을 실행하세요")
 
@@ -773,9 +902,31 @@ def render_stream_view():
             placeholder = np.zeros((240, 320, 3), dtype=np.uint8)
             placeholder[:] = [40, 40, 40]  # Dark gray
 
-            # 상태 표시
-            status = get_status_color(camera_status.get(cam['id'], {}).get("connected", False))
+            # 카메라 상태 카드: connected/fps/dropped_frames/last_frame_time
+            cam_st = camera_status.get(cam['id'], {})
+            connected = cam_st.get("connected", False)
+            status = get_status_color(connected)
             st.caption(f"상태: {status}")
+            fps_val = cam_st.get("fps", 0.0)
+            dropped = cam_st.get("dropped_frames", 0)
+            is_stale = cam_st.get("is_stale", False)
+            last_frame_time = cam_st.get("last_frame_time")  # float unix timestamp or None
+            seconds_since = cam_st.get("seconds_since_last_frame")
+
+            # fps/dropped/마지막 프레임 시각 표시
+            fps_str = f"{fps_val:.1f} FPS" if fps_val else "N/A"
+            dropped_str = f"{dropped}프레임" if dropped else "0"
+            if last_frame_time is not None:
+                import datetime as _dt
+                lft_str = _dt.datetime.fromtimestamp(last_frame_time).strftime("%H:%M:%S")
+            elif seconds_since is not None:
+                lft_str = f"{seconds_since:.0f}초 전"
+            else:
+                lft_str = "N/A"
+            stale_badge = " 🔴 지연" if is_stale else ""
+            st.caption(
+                f"FPS: {fps_str} | 드롭: {dropped_str} | 마지막: {lft_str}{stale_badge}"
+            )
 
             frame = None
             if pipeline:
@@ -970,6 +1121,26 @@ def render_alert_log():
                 st.markdown(f"🤖 **VLM 설명:** {vlm_desc}")
                 if vlm_conf is not None:
                     st.caption(f"VLM 신뢰도: {vlm_conf:.2f}")
+
+            # VLM 상세 결과: recommended_action / detected_events (신규 필드)
+            vlm_parse_success = getattr(event, "vlm_parse_success", None)
+            vlm_detected_events = getattr(event, "vlm_detected_events", None)
+            vlm_recommended_action = getattr(event, "vlm_recommended_action", None)
+            vlm_raw_response = getattr(event, "vlm_raw_response", None)
+
+            if vlm_parse_success is False:
+                # 파싱 실패 배지 + 원문 expander
+                st.markdown("⚠️ **VLM JSON 파싱 실패** — 응답을 구조화할 수 없습니다.")
+                if vlm_raw_response:
+                    with st.expander("🔍 VLM 원문 응답 보기"):
+                        st.code(vlm_raw_response[:500], language="text")
+            elif vlm_parse_success is True:
+                # 파싱 성공: detected_events / recommended_action 표시
+                if vlm_detected_events:
+                    events_str = ", ".join(str(e) for e in vlm_detected_events)
+                    st.caption(f"🔍 감지된 이벤트: {events_str}")
+                if vlm_recommended_action:
+                    st.info(f"💡 **권고 조치:** {vlm_recommended_action}")
 
             # 이미지 표시 (있는 경우)
             if event.image is not None:
@@ -1201,6 +1372,9 @@ def render_camera_settings():
     """카메라 설정 UI — 도메인/이벤트/모델 선택"""
     st.subheader("⚙️ 카메라 설정")
 
+    # COCO 한계 경고
+    render_coco_warning()
+
     # 정책 로드
     policies = load_event_policies()
     domains = get_available_domains(policies)
@@ -1424,15 +1598,15 @@ def render_audit_log():
 
     st.caption(f"총 {len(filtered)}개 이벤트 (전체 {len(logs)}개)")
 
-    # 테이블 형태로 표시
-    import pandas as pd
+    # 테이블 형태로 표시 (pandas가 없으면 수동 표시)
     try:
+        import pandas as pd  # pandas 미설치 환경 대비: try 블록 안에서 import
         df = pd.DataFrame(filtered)
         if not df.empty and "timestamp" in df.columns:
             df = df.sort_values("timestamp", ascending=False)
         st.dataframe(df, use_container_width=True)
-    except Exception:
-        # pandas 없으면 수동 표시
+    except (ImportError, Exception):
+        # pandas 없거나 DataFrame 변환 실패 시 수동 표시
         for log in reversed(filtered[-100:]):  # 최신 100개
             ts = log.get("timestamp", "N/A")
             event = log.get("event", "unknown")
@@ -1458,6 +1632,9 @@ def render_audit_log():
 def render_system_status():
     """시스템 상태 위젯 — CPU/메모리/디스크, ONNX Runtime 정보"""
     st.subheader("🔧 시스템 상태")
+
+    # COCO 한계 경고
+    render_coco_warning()
 
     # ONNX Runtime 정보
     st.markdown("**🧠 ONNX Runtime**")
@@ -1599,7 +1776,12 @@ def render_system_status():
                         msg["From"] = smtp_user
                         msg["To"] = recipients
 
-                        with smtplib.SMTP(smtp_host, int(os.environ.get("KSI_CCTV_SMTP_PORT", "587"))) as server:
+                        # timeout 미지정 시 죽은 SMTP 서버에서 대시보드가 무한 hang될 수 있음.
+                        with smtplib.SMTP(
+                            smtp_host,
+                            int(os.environ.get("KSI_CCTV_SMTP_PORT", "587")),
+                            timeout=10,
+                        ) as server:
                             server.starttls()
                             password = os.environ.get("KSI_CCTV_SMTP_PASSWORD", "")
                             if smtp_user and password:
@@ -1771,8 +1953,15 @@ def main():
     render_dashboard()
 
     # Phase 8 M5.1: Auto-refresh at end of main loop
+    # 개선: 사용자 최근 활동 2초 내엔 sleep 건너뜀(버튼 클릭·로그인 직후 즉각 반응),
+    # interval 하한 3초(UI 블로킹 최소화).
     if st.session_state.get("auto_refresh_enabled", True):
-        interval = st.session_state.get("auto_refresh_interval", 5)
+        interval = max(3, st.session_state.get("auto_refresh_interval", 5))
+        # 주의: last_activity 기반 'sleep 건너뛰기' 최적화는 busy-loop 회귀를 유발한다 —
+        # require_dashboard_auth가 인증 세션에서 매 run마다 last_activity=now로 갱신하므로
+        # time_since_activity가 항상 ~0이 되어 sleep을 영구히 건너뛰고 무한 rerun(CPU 폭증)이 된다.
+        # 사용자 위젯 상호작용은 Streamlit이 별도 rerun으로 즉시 처리하므로, 여기서는 고정
+        # interval만큼 sleep 후 rerun하면 충분하다. (근본 개선은 st.fragment(run_every) 도입.)
         time.sleep(interval)
         st.rerun()
 
@@ -1838,6 +2027,21 @@ def render_system_metrics():
         st.error(f"메트릭 수집 실패: {e}")
 
 
+def _load_capture_fernet():
+    """캡처 이미지 복호화용 Fernet 인스턴스 반환. 키/패키지 없으면 None.
+
+    encrypt_images=True로 저장된 .jpg.enc 캡처를 갤러리에서 복호화 표시하는 데 사용한다.
+    """
+    key = os.environ.get("KSI_CCTV_CAPTURE_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(key.encode())
+    except Exception:
+        return None
+
+
 def render_image_gallery():
     """캡처 이미지 갤러리 (Phase 3)"""
     st.subheader("📸 캡처 이미지 갤러리")
@@ -1861,6 +2065,17 @@ def render_image_gallery():
         index=0
     )
 
+    # 갤러리 조회 감사: 사용자가 날짜를 새로 선택했을 때만 1회 기록한다.
+    # (Streamlit은 비활성 탭/닫힌 expander의 body도 매 rerun 실행하므로, expander 안에서
+    #  카메라마다 무조건 기록하면 auto-refresh 주기마다 image_gallery_viewed가 폭증한다.)
+    if st.session_state.get("_last_gallery_audit_date") != selected_date:
+        st.session_state["_last_gallery_audit_date"] = selected_date
+        _write_audit_log({
+            "timestamp": datetime.utcnow().isoformat(),
+            "event": "image_gallery_viewed",
+            "date": selected_date,
+        })
+
     date_path = image_dir / selected_date
     if not date_path.exists():
         st.info(f"{selected_date}에 저장된 이미지가 없습니다.")
@@ -1868,15 +2083,36 @@ def render_image_gallery():
 
     # 카메라별 그룹화
     camera_dirs = sorted([d for d in date_path.iterdir() if d.is_dir()])
+    # 암호화 저장(.jpg.enc) 복호화용 키 (encrypt_images=True 운영 시). 없으면 잠금 표시.
+    fernet = _load_capture_fernet()
 
     for cam_dir in camera_dirs:
-        with st.expander(f"📷 {cam_dir.name} ({len(list(cam_dir.glob('*.jpg')))}장)"):
-            images = sorted(cam_dir.glob("*.jpg"), reverse=True)
-            # 그리드 레이아웃으로 표시
+        plain = sorted(cam_dir.glob("*.jpg"), reverse=True)
+        encrypted = sorted(cam_dir.glob("*.jpg.enc"), reverse=True)
+        img_count = len(plain) + len(encrypted)
+        with st.expander(f"📷 {cam_dir.name} ({img_count}장)"):
+            # 그리드 레이아웃으로 표시 (평문 + 암호화 합쳐 최대 20장)
             cols = st.columns(4)
-            for i, img_path in enumerate(images[:20]):  # 최대 20장
-                with cols[i % 4]:
+            shown = 0
+            for img_path in plain:
+                if shown >= 20:
+                    break
+                with cols[shown % 4]:
                     st.image(str(img_path), caption=img_path.name, use_container_width=True)
+                shown += 1
+            for enc_path in encrypted:
+                if shown >= 20:
+                    break
+                with cols[shown % 4]:
+                    if fernet is None:
+                        st.caption(f"🔒 {enc_path.name} (복호화 키 미설정)")
+                    else:
+                        try:
+                            data = fernet.decrypt(enc_path.read_bytes())
+                            st.image(data, caption=enc_path.stem, use_container_width=True)
+                        except Exception:
+                            st.caption(f"🔒 {enc_path.name} (복호화 실패)")
+                shown += 1
 
 
 def render_enhanced_event_search():

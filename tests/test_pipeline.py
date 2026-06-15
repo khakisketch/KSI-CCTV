@@ -3,12 +3,13 @@
 """
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent))
 
-import unittest
-from unittest.mock import Mock, patch
 import os
 import tempfile
+import unittest
+from unittest.mock import Mock, patch
 
 from src.utils.config import ConfigLoader
 
@@ -45,10 +46,10 @@ class TestPureConfig(unittest.TestCase):
 try:
     import numpy as np
 
-    from src.capture.rtsp_capture import RTSPCapture, CameraManager
-    from src.detection.yolo_detector import YOLODetector, Detection
-    from src.pipeline.pipeline import SafetyPipeline, SafetyEvent
-    from src.alerts.alert_manager import AlertManager, AlertConfig
+    from src.alerts.alert_manager import AlertConfig, AlertManager
+    from src.capture.rtsp_capture import CameraManager, RTSPCapture
+    from src.detection.yolo_detector import Detection, YOLODetector
+    from src.pipeline.pipeline import SafetyEvent, SafetyPipeline
 
     HAS_RUNTIME_DEPS = True
 except ModuleNotFoundError:
@@ -552,3 +553,196 @@ class TestPolicyPipelineIntegration(unittest.TestCase):
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].event_type, "safety_gear_violation")
+
+
+@unittest.skipUnless(HAS_RUNTIME_DEPS, "requirements.txt 의존성 설치 후 실행 가능")
+class TestPipelineVlmWiringBatch2(unittest.TestCase):
+    """Batch2 회귀 가드: VLM 결과 배선·파싱실패 표식·backpressure·enabled_events·get_status."""
+
+    def _event(self, **kw):
+        base = {
+            "event_id": "e1",
+            "camera_id": "cam_001",
+            "event_type": "fire",
+            "timestamp": __import__("datetime").datetime.now(),
+            "confidence": 0.8,
+            "image": np.zeros((10, 10, 3), dtype=np.uint8),
+        }
+        base.update(kw)
+        return SafetyEvent(**base)
+
+    def test_safety_event_vlm_fields_default_and_to_dict(self):
+        ev = self._event()
+        self.assertEqual(ev.vlm_detected_events, [])
+        self.assertEqual(ev.vlm_recommended_action, "")
+        self.assertIsNone(ev.vlm_parse_success)
+        self.assertEqual(ev.vlm_raw_response, "")
+        d = ev.to_dict()
+        for key in (
+            "vlm_detected_events",
+            "vlm_recommended_action",
+            "vlm_parse_success",
+            "vlm_raw_response",
+        ):
+            self.assertIn(key, d)
+
+    def test_analyze_with_vlm_copies_extended_fields_and_marks_parse_failure(self):
+        pipeline = SafetyPipeline(detector=Mock())
+        pipeline.prompt_selector = Mock()
+        pipeline.prompt_selector.build_prompt.return_value = "prompt"
+        result = Mock()
+        result.description = "원본 텍스트"
+        result.risk_level = "low"
+        result.confidence = 0.0
+        result.inference_time_ms = 5.0
+        result.detected_events = ["fall"]
+        result.recommended_action = "관리자 확인 요망"
+        result.raw_response = "not-json"
+        result.parse_success = False
+        provider = Mock()
+        provider.analyze.return_value = result
+        pipeline.vlm_provider = provider
+
+        ev = self._event()
+        pipeline._analyze_with_vlm(ev, None)
+
+        self.assertEqual(ev.vlm_detected_events, ["fall"])
+        self.assertEqual(ev.vlm_recommended_action, "관리자 확인 요망")
+        self.assertFalse(ev.vlm_parse_success, "파싱 실패가 event에 표식돼야 한다")
+        self.assertEqual(ev.vlm_raw_response, "not-json")
+
+    def test_legacy_emit_event_submits_vlm(self):
+        """회귀 가드: legacy _emit_event(fire/smoke/fall)도 VLM 분석에 제출돼야 한다(baseline 동작)."""
+        pipeline = SafetyPipeline(detector=Mock(), alert_cooldown=0)
+        pipeline._vlm_executor = Mock()
+        alerts = []
+        pipeline.add_alert_callback(alerts.append)
+        pipeline._emit_event(
+            camera_id="cam_001",
+            event_type="fire_detected",
+            timestamp=__import__("datetime").datetime.now(),
+            detections=[Detection(0, "fire", 0.9, (0, 0, 50, 50))],
+            image=np.zeros((10, 10, 3), dtype=np.uint8),
+        )
+        self.assertEqual(len(alerts), 1, "즉시 알림 콜백은 호출돼야 한다")
+        pipeline._vlm_executor.submit.assert_called_once()
+
+    def test_backpressure_drops_low_priority_but_bypasses_critical(self):
+        pipeline = SafetyPipeline(detector=Mock())
+        pipeline._vlm_executor = Mock()
+        pipeline._vlm_queue_max_in_flight = 1
+        pipeline._vlm_in_flight = 1  # 포화 상태
+
+        low = self._event(event_type="person_detected", alert_level="low")
+        self.assertFalse(pipeline._submit_vlm_analysis(low), "포화 시 low는 drop돼야 한다")
+        pipeline._vlm_executor.submit.assert_not_called()
+        self.assertGreaterEqual(pipeline._vlm_dropped_count, 1)
+
+        # critical은 backpressure를 우회해 제출돼야 한다
+        crit = self._event(event_type="fire", alert_level="critical")
+        self.assertTrue(pipeline._submit_vlm_analysis(crit))
+        pipeline._vlm_executor.submit.assert_called_once()
+
+    def test_dropped_event_does_not_poison_cache(self):
+        """drop된 이벤트가 TTL cache를 오염시켜 다음 정상 이벤트를 억제하면 안 된다."""
+        pipeline = SafetyPipeline(detector=Mock(), vlm_cache_ttl_sec=60)
+        pipeline._vlm_executor = Mock()
+        pipeline._vlm_queue_max_in_flight = 1
+        pipeline._vlm_in_flight = 1  # 포화 → 다음 low는 drop
+
+        dropped = self._event(event_type="no_helmet", alert_level="medium")
+        self.assertFalse(pipeline._submit_vlm_analysis(dropped))
+
+        # 포화 해소 후 같은 event_type 정상 이벤트는 cache-hit 없이 제출돼야 한다
+        pipeline._vlm_in_flight = 0
+        ok = self._event(event_type="no_helmet", alert_level="medium")
+        self.assertTrue(
+            pipeline._submit_vlm_analysis(ok),
+            "drop이 cache를 오염시켜 다음 정상 이벤트가 억제되면 안 된다",
+        )
+        pipeline._vlm_executor.submit.assert_called_once()
+
+    def test_enabled_events_empty_list_is_preserved_not_none(self):
+        """enabled_events=[](전부 비활성)가 None으로 바뀌어 필터 해제되면 안 된다."""
+        captured = {}
+
+        def fake_eval(**kw):
+            captured["enabled_events"] = kw.get("enabled_events")
+            return []
+
+        engine = Mock()
+        engine.evaluate.side_effect = fake_eval
+        registry = Mock()
+        registry.detect_all.return_value = {}
+
+        pipeline = SafetyPipeline(model_registry=registry, policy_engine=engine)
+        ts = __import__("datetime").datetime.now()
+        img = np.zeros((10, 10, 3), dtype=np.uint8)
+
+        pipeline.set_camera_profile("cam_001", {"domain": "construction", "enabled_events": []})
+        pipeline._process_frame_with_policy("cam_001", img, ts)
+        self.assertEqual(captured["enabled_events"], [], "빈 리스트가 그대로 전달돼야 한다")
+
+        # events fallback (enabled_events 없을 때)
+        pipeline.set_camera_profile("cam_002", {"domain": "construction", "events": ["fire"]})
+        pipeline._process_frame_with_policy("cam_002", img, ts)
+        self.assertEqual(captured["enabled_events"], ["fire"])
+
+        # 둘 다 없으면 None(필터 없음)
+        pipeline.set_camera_profile("cam_003", {"domain": "construction"})
+        pipeline._process_frame_with_policy("cam_003", img, ts)
+        self.assertIsNone(captured["enabled_events"])
+
+    def test_get_status_includes_operational_metrics(self):
+        registry = Mock()
+        registry.get_model_metrics.return_value = {"general_yolo": {"inference_count": 3}}
+        pipeline = SafetyPipeline(model_registry=registry, policy_engine=Mock())
+        status = pipeline.get_status()
+        for key in ("running", "cameras", "vlm_queue", "vlm_cache", "vlm_provider", "models"):
+            self.assertIn(key, status)
+        self.assertEqual(status["models"], {"general_yolo": {"inference_count": 3}})
+        self.assertIn("in_flight", status["vlm_queue"])
+
+    def test_inflight_event_image_protected_from_eviction(self):
+        """회귀 가드(#1/#4): VLM 큐 대기 중(in-flight) 이벤트의 이미지는 eviction에서 보호된다."""
+        pipeline = SafetyPipeline(detector=Mock())
+        pipeline._history_image_keep = 2
+        img = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        inflight = self._event(event_id="inflight", image=img.copy())
+        pipeline._inflight_event_ids.add("inflight")
+        pipeline._record_event(inflight)
+        # keep(2)를 넉넉히 초과하도록 이후 이벤트를 다수 기록
+        for i in range(6):
+            pipeline._record_event(self._event(event_id=f"e{i}", image=img.copy()))
+
+        self.assertIsNotNone(
+            inflight.image, "in-flight 이벤트 이미지가 eviction으로 None이 되면 VLM·캡처가 누락된다"
+        )
+
+    def test_analyze_with_vlm_fires_callbacks_even_when_image_none(self):
+        """회귀 가드(#6): image가 eviction으로 None이어도 지연 alert 콜백은 호출된다."""
+        pipeline = SafetyPipeline(detector=Mock())
+        pipeline.vlm_provider = Mock()
+        ev = self._event(image=None)
+        fired = []
+        pipeline._analyze_with_vlm(ev, [fired.append])
+        self.assertEqual(len(fired), 1, "image None이어도 지연 alert 콜백은 발송돼야 한다")
+
+    def test_validate_target_classes_registry_mode_uses_get_model(self):
+        """회귀 가드(#5): registry 모드 validate가 존재하지 않는 _detectors가 아니라 get_model을 쓴다."""
+        reg = Mock()
+        status = Mock()
+        status.loaded = True
+        reg.load_status = {"general_yolo": status}
+        det = Mock()
+        det.classes = {0: "person"}
+        reg.get_model.return_value = det
+
+        pipeline = SafetyPipeline(model_registry=reg, policy_engine=Mock())
+        pipeline.target_classes = ["person", "fire"]
+        unreachable = pipeline.validate_target_classes()
+
+        reg.get_model.assert_called_with("general_yolo")
+        self.assertIn("fire", unreachable, "COCO 미산출 클래스(fire)는 unreachable로 경고돼야 한다")
+        self.assertNotIn("person", unreachable)

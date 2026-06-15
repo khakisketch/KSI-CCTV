@@ -81,9 +81,15 @@ profiles:
         trigger:
           models: [general_yolo]
           classes: [person]
+          # trigger.min_confidence를 명시해 저신뢰 person 박스를 coarse 게이트에서 차단한다.
+          # rule에 min_confidence가 없으면 이 값을 상속한다(SSOT — 한 곳에만 명시).
+          min_confidence: 0.25
         rule:
           type: pose_anomaly
           aspect_ratio_threshold: 2.0
+          # temporal 파라미터 — 이전 프레임 대비 높이/중심 변화로 쓰러짐 보강 판단
+          height_drop_ratio: 0.45
+          cy_drop_ratio: 0.35
         vlm: always
         alert_level: high
         cooldown_sec: 20
@@ -122,9 +128,12 @@ profiles:
         trigger:
           models: [general_yolo]
           classes: [person]
+          min_confidence: 0.25
         rule:
           type: pose_anomaly
           aspect_ratio_threshold: 2.0
+          height_drop_ratio: 0.45
+          cy_drop_ratio: 0.35
         vlm: always
         alert_level: high
         cooldown_sec: 20
@@ -135,6 +144,7 @@ profiles:
         trigger:
           models: [general_yolo]
           classes: [person]
+          min_confidence: 0.25
         rule:
           type: person_proximity
           min_persons: 2
@@ -149,6 +159,7 @@ profiles:
         trigger:
           models: [general_yolo]
           classes: [person]
+          min_confidence: 0.25
         rule:
           type: count_threshold
           min_count: 20

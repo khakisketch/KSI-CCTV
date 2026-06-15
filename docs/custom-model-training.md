@@ -76,42 +76,32 @@ python scripts/generate_dataset_yaml.py \
 
 ## 2. 모델 학습
 
+학습 스크립트는 `scripts/train_ppe.py`와 `scripts/train_fire_smoke.py`로 작성되어 있습니다.  
+**실행을 위해서는 YOLO 포맷 데이터셋과 GPU(CUDA)가 필요합니다.**  
+데이터셋 없이는 실행되지 않습니다 (스크립트 상단 주석에 명시됨).
+
 ### 2.1. PPE 모델 학습
 
-```python
-# scripts/train_ppe.py
-from ultralytics import YOLO
-
-# 사전학습된 모델 로드
-model = YOLO("yolov8n.pt")  # 또는 yolov8s.pt, yolov8m.pt
-
-# 학습
-model.train(
-    data="data/ppe/yolo/dataset.yaml",
-    epochs=100,
-    imgsz=640,
-    batch=16,
-    name="ppe_yolo",
-    project="models/training",
-)
+```bash
+# scripts/train_ppe.py — 완전한 학습 스크립트 (254 lines)
+# 필수: PPE 데이터셋(person/helmet/no_helmet/vest/no_vest YOLO 포맷), GPU
+./.venv/bin/python scripts/train_ppe.py \
+    --data /data/ppe_dataset/data.yaml \
+    --model yolo11n.pt \
+    --epochs 50 \
+    --batch 8     # DGX Spark 통합메모리 제한 — batch=-1 절대 금지
 ```
 
 ### 2.2. 화재/연기 모델 학습
 
-```python
-# scripts/train_fire_smoke.py
-from ultralytics import YOLO
-
-model = YOLO("yolov8n.pt")
-
-model.train(
-    data="data/fire_smoke/yolo/dataset.yaml",
-    epochs=100,
-    imgsz=640,
-    batch=16,
-    name="fire_smoke_yolo",
-    project="models/training",
-)
+```bash
+# scripts/train_fire_smoke.py — 완전한 학습 스크립트 (266 lines)
+# 필수: fire/smoke 데이터셋, GPU
+./.venv/bin/python scripts/train_fire_smoke.py \
+    --data /data/fire_smoke_dataset/data.yaml \
+    --model yolo11n.pt \
+    --epochs 50 \
+    --batch 8
 ```
 
 ### 2.3. 학습 모니터링
@@ -121,7 +111,7 @@ model.train(
 tensorboard --logdir models/training
 
 # 또는 Ultralytics CLI
-yolo task=detect mode=train model=yolov8n.pt data=data/ppe/yolo/dataset.yaml epochs=100
+yolo task=detect mode=train model=yolo11n.pt data=data/ppe/yolo/dataset.yaml epochs=50
 ```
 
 ## 3. ONNX 변환
@@ -129,16 +119,10 @@ yolo task=detect mode=train model=yolov8n.pt data=data/ppe/yolo/dataset.yaml epo
 ### 3.1. 학습된 모델 내보내기
 
 ```bash
-# scripts/export_to_onnx.py
-python -c "
-from ultralytics import YOLO
-
-# 학습된 모델 로드
-model = YOLO('models/training/ppe_yolo/weights/best.pt')
-
-# ONNX로 변환
-model.export(format='onnx', imgsz=640, half=True, simplify=True)
-"
+# scripts/export_to_onnx.py — 완전한 변환 스크립트 (272 lines)
+./.venv/bin/python scripts/export_to_onnx.py \
+    --model models/training/ppe_yolo/weights/best.pt \
+    --output models/yolo26_ppe.onnx
 ```
 
 ### 3.2. 변환 검증

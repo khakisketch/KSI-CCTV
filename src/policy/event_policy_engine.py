@@ -1,6 +1,7 @@
 """이벤트 정책 엔진."""
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,9 +9,17 @@ from typing import Any
 
 import numpy as np
 
+# SafetyEvent는 pipeline에서 가져온다. policy 코드 자체는 cv2에 직접 의존하지 않지만,
+# rule_evaluators → yolo_detector → `import cv2` 및 pipeline → `import cv2` 경로로
+# cv2가 transitive하게 필요하다. cv2는 이 프로젝트의 하드 런타임 의존성(requirements.txt)
+# 이므로 별도 폴백을 두지 않는다. (cv2 없는 환경에서의 policy 단위 테스트 격리가 필요하면
+# Detection/SafetyEvent를 cv2-free 모듈로 분리해야 하며, 이는 detection/pipeline 수정을
+# 수반하는 별도 작업이다.)
 from src.pipeline.pipeline import SafetyEvent
 from src.policy.rule_evaluators import ModelDetections, RuleEvaluatorRegistry
 from src.utils.config import ConfigLoader
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,6 +45,8 @@ class EventPolicyEngine:
     ):
         self.policies = policies or {}
         self.rule_evaluators = rule_evaluators or RuleEvaluatorRegistry()
+        # 알 수 없는 profile에 대해 중복 경고를 억제하기 위한 캐시
+        self._warned_profiles: set[str] = set()
 
     @classmethod
     def from_config(cls, path: str = "./config/event_policies.yaml") -> EventPolicyEngine:
@@ -54,6 +65,26 @@ class EventPolicyEngine:
         profile = self.policies.get("profiles", {}).get(profile_name, {})
         policy_map = profile.get("policies", {}) if isinstance(profile, dict) else {}
         if not isinstance(policy_map, dict):
+            policy_map = {}
+
+        # 평가 가능한 정책이 하나도 없으면 운영 가시성 경고(세션당 1회) 후 빈 결과.
+        # 미정의 profile(빈 dict)뿐 아니라 profile은 등록됐으나 policies 섹션이 없거나 비어있는
+        # 경우(예: camera_profiles의 factory/parking 도메인)도 모든 이벤트가 조용히 사라지는데,
+        # 이전 `if not profile` 가드는 후자를 놓쳤다. (enabled_events=[]로 인한 의도적 전부 비활성
+        # 과는 구분 — 그건 policy_map이 존재하므로 여기 걸리지 않는다.)
+        if not policy_map:
+            if profile_name not in self._warned_profiles:
+                self._warned_profiles.add(profile_name)
+                known = list(self.policies.get("profiles", {}).keys())
+                logger.warning(
+                    "policy profile '%s'에 평가 가능한 정책이 없습니다 "
+                    "(event_policies.yaml에 profiles.%s.policies 미정의/비어있음). "
+                    "이 카메라의 모든 이벤트가 발생하지 않습니다. 등록된 profile: %s. camera_id=%s",
+                    profile_name,
+                    profile_name,
+                    known,
+                    camera_id,
+                )
             return []
 
         # enabled_events가 빈 리스트([])면 "아무 이벤트도 허용 안 함"이어야 한다.
@@ -81,8 +112,20 @@ class EventPolicyEngine:
 
             rule = dict(policy.get("rule", {}) or {})
             rule.setdefault("classes", trigger.get("classes", []))
+            # trigger.min_confidence → rule.min_confidence 상속 (SSOT 규약):
+            #   trigger는 "이 클래스/모델의 탐지가 있으면 rule로 넘긴다"는 coarse 게이트.
+            #   rule은 정밀 판단을 담당하며 자체 min_confidence를 우선한다.
+            #   rule에 min_confidence가 없으면 trigger 값을 상속해 person 저신뢰
+            #   박스(fall/fight/crowding에서 0.0이 되는 것)를 걸러낸다.
+            #   의도된 person 신뢰 하한은 trigger 또는 rule 어느 쪽에 써도 되나,
+            #   동일 정책의 coarse/fine 두 단계에 서로 다른 값을 쓰면 혼동의 원인이 된다 —
+            #   권장: trigger.min_confidence에 한 번만 명시하고 rule은 미지정으로 상속.
             rule.setdefault("min_confidence", trigger.get("min_confidence", 0.0))
-            rule_result = self.rule_evaluators.evaluate(rule, scoped_detections, frame, zones)
+
+            # camera_id를 rule_evaluators에 전달 — pose_anomaly temporal 상태 관리에 사용
+            rule_result = self.rule_evaluators.evaluate(
+                rule, scoped_detections, frame, zones, camera_id
+            )
             if not rule_result.get("triggered", False):
                 continue
 

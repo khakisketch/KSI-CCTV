@@ -23,26 +23,37 @@ CCTV / RTSP
   -> Alert / Dashboard / Audit Log
 ```
 
-## 현재 구조
+## 현재 구조 (Phase 10 기준, policy-mode 기본 실행)
 
-현재 구현은 다음과 같습니다.
+Phase 4 Pipeline 통합 + Phase 10 M0 policy-mode 실행 경로 복구로 목표 아키텍처와 일치하게 구현되었습니다.
 
 ```text
-RTSPCapture -> YOLODetector(single) -> SafetyPipeline hardcoded rules -> VLM optional -> AlertManager / Dashboard
+RTSP / 로컬 영상
+  -> RTSPCapture (RTSP open/read 타임아웃, 지수백오프 재연결, FPS 이동평균)
+  -> SafetyPipeline._process_frame_with_policy()   ← 기본 실행 경로
+     -> MultiModelRegistry (enabled 모델만 로드, ONNX 메타데이터 자동 클래스 인식,
+                            모델별 latency/error metrics, 모델 로드 실패 격리)
+     -> EventPolicyEngine (trigger/rule/vlm/alert 정책 평가,
+                           카메라별 camera_profile 반영)
+     -> VLM Dispatcher (필요한 이벤트만 Ollama qwen3-vl 분석,
+                        TTL cache + backpressure + ThreadPool)
+  -> AlertManager (이벤트 로그, 캡처 이미지 저장, 얼굴 블러링,
+                   이미지 암호화 옵션, SMTP 알람, 자동 정리)
+  -> Streamlit 대시보드 (13탭: 실시간 모니터링, 이벤트, 갤러리,
+                          카메라 설정, 알람 설정, 모델 업로드, 시스템 상태, ...)
 ```
 
-장점:
+legacy 단일 detector 경로(`_process_frame_legacy()`)는 하위 호환 fallback으로만 유지됩니다.
 
-- 단순하고 빠르게 검증 가능
-- COCO YOLO + Qwen3-VL smoke test 완료
-- 기본 RTSP/알람/대시보드 흐름 존재
+### 구현된 핵심 기능
 
-한계:
-
-- 카메라별 감지 목적 설정이 약함
-- 모델별 역할 분리가 없음
-- 이벤트별 VLM 필요 여부가 하드코딩에 가까움
-- 사용자 업로드 모델을 연결할 구조가 없음
+- **ONNX 메타데이터 기반 클래스 자동 인식**: `classes: null`이면 ONNX `names` 메타데이터 우선. config 불일치 시 경고 출력.
+- **모델별 latency/error metrics**: `registry.get_model_metrics()` 공개 API.
+- **letterbox bbox 보정**: 원본 해상도에 맞게 bbox 좌표 역변환.
+- **policy-mode 기본 실행**: `start_pipeline()`이 `MultiModelRegistry + EventPolicyEngine`을 주입.
+- **VLM TTL cache**: `(camera_id, event_type)` 키 + critical/high bypass.
+- **캡처 이미지 암호화**: `encrypt_images: true` + `KSI_CCTV_CAPTURE_KEY` Fernet 키.
+- **scrypt 인증 + rate limit + 세션 만료 + 감사 로그** 대시보드 보안.
 
 ## 목표 컴포넌트
 

@@ -16,9 +16,10 @@ import concurrent.futures
 import logging
 import shutil
 import uuid
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ class UploadResult:
     model_id: str = ""
     profile_name: str = ""
     error: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _safe_original_name(original_filename: str) -> str:
@@ -62,7 +63,7 @@ def sanitize_filename(original_name: str) -> str:
     return "model.onnx"
 
 
-def _validate_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _validate_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     """Normalize optional model metadata without trusting arbitrary values."""
 
     meta = dict(metadata or {})
@@ -84,6 +85,37 @@ def _validate_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not model_name:
         model_name = "uploaded_onnx_model"
 
+    # conf_threshold / iou_threshold — 비수치 입력에 대해 명시적으로 검증하고
+    # 한국어 에러 메시지를 반환한다. float() 무조건 변환으로 인한 영문 raw ValueError
+    # 전파를 방지한다.
+    conf_raw = meta.get("conf_threshold", 0.25)
+    if isinstance(conf_raw, bool) or not isinstance(conf_raw, (int, float, str)):
+        raise ValueError("conf_threshold는 0과 1 사이의 숫자여야 합니다.")
+    try:
+        conf_threshold = float(conf_raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"conf_threshold 값을 숫자로 변환할 수 없습니다: '{conf_raw}'. 0과 1 사이의 숫자를 입력하세요."
+        ) from exc
+    if not (0.0 <= conf_threshold <= 1.0):
+        raise ValueError(
+            f"conf_threshold는 0과 1 사이여야 합니다. 입력값: {conf_threshold}"
+        )
+
+    iou_raw = meta.get("iou_threshold", 0.45)
+    if isinstance(iou_raw, bool) or not isinstance(iou_raw, (int, float, str)):
+        raise ValueError("iou_threshold는 0과 1 사이의 숫자여야 합니다.")
+    try:
+        iou_threshold = float(iou_raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"iou_threshold 값을 숫자로 변환할 수 없습니다: '{iou_raw}'. 0과 1 사이의 숫자를 입력하세요."
+        ) from exc
+    if not (0.0 <= iou_threshold <= 1.0):
+        raise ValueError(
+            f"iou_threshold는 0과 1 사이여야 합니다. 입력값: {iou_threshold}"
+        )
+
     return {
         "model_name": model_name,
         "model_type": "yolo_onnx",
@@ -91,8 +123,8 @@ def _validate_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "classes": classes,
         "postprocess_mode": str(meta.get("postprocess_mode") or "auto"),
         "class_profile": str(meta.get("class_profile") or "custom"),
-        "conf_threshold": float(meta.get("conf_threshold", 0.25)),
-        "iou_threshold": float(meta.get("iou_threshold", 0.45)),
+        "conf_threshold": conf_threshold,
+        "iou_threshold": iou_threshold,
     }
 
 
@@ -211,16 +243,16 @@ def validate_onnx_inference(file_path: Path, timeout_sec: float = INFERENCE_TIME
     return _run_with_timeout(_run, timeout_sec)
 
 
-def _load_yaml(path: Path) -> Dict[str, Any]:
+def _load_yaml(path: Path) -> dict[str, Any]:
     import yaml
 
     if not path.exists():
         return {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
-def _write_yaml(path: Path, data: Dict[str, Any]) -> None:
+def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     import yaml
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -240,7 +272,7 @@ def _register_disabled_profile(
     *,
     model_id: str,
     model_path: Path,
-    metadata: Dict[str, Any],
+    metadata: dict[str, Any],
     model_profiles_path: Path,
 ) -> str:
     """Register uploaded model in model_profiles.yaml as disabled-by-default."""
@@ -270,7 +302,7 @@ def _register_disabled_profile(
 def upload_model(
     file_bytes: bytes,
     original_filename: str,
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
     *,
     max_file_size: int = MAX_FILE_SIZE_BYTES,
     upload_base_dir: Path = UPLOAD_BASE_DIR,
@@ -343,12 +375,12 @@ def upload_model(
             tmp_file.unlink(missing_ok=True)
 
 
-def get_uploaded_models(upload_base_dir: Path = UPLOAD_BASE_DIR) -> list[Dict[str, Any]]:
+def get_uploaded_models(upload_base_dir: Path = UPLOAD_BASE_DIR) -> list[dict[str, Any]]:
     """Return uploaded model metadata list."""
 
     if not upload_base_dir.exists():
         return []
-    models: list[Dict[str, Any]] = []
+    models: list[dict[str, Any]] = []
     for model_dir in sorted(upload_base_dir.iterdir()):
         if not model_dir.is_dir() or model_dir.name == "tmp":
             continue

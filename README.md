@@ -5,54 +5,45 @@
 ## 시스템 아키텍처
 
 - **중앙집중형 관제**: CCTV → 네트워크 허브 → DGX Spark 중앙 처리
-- **1차 고속 필터링**: YOLO26 ONNX로 사람 등 후보 객체 탐지
-- **2차 정밀 분석**: Ollama 기반 Qwen3-VL로 후보 프레임을 상황 설명/위험도 판단
-- **대시보드**: Streamlit 기반 실시간 상태, 알람 로그, 통계 확인
+- **MultiModelRegistry**: ONNX 메타데이터 기반 클래스 자동 인식, 모델별 latency/error metrics, 모델 로드 실패 격리
+- **EventPolicyEngine**: 이벤트별 trigger/rule/VLM/alert 정책 YAML 기반 평가
+- **VLM Dispatcher**: Ollama Qwen3-VL — 필요한 이벤트만 분석 (TTL cache + backpressure)
+- **AlertManager**: 이벤트 로그, 캡처 이미지 저장, 얼굴 블러링, 이미지 암호화(Fernet), SMTP 알람
+- **Streamlit 대시보드 (13탭)**: 실시간 모니터링, 이벤트, 갤러리, 시스템 상태, 모델 업로드, 감사 로그 등
+- **헬스체크**: `/health`, `/healthz`, `/health/live`, `/health/ready` HTTP 엔드포인트
 
 ## 핵심 기능
 
-- RTSP 스트림 수신 및 프레임 큐 관리
-- YOLO26/Ultralytics ONNX 추론
-- YOLO raw 출력과 YOLO26 NMS-free final 출력 모두 지원
-- COCO pretrained 모델과 커스텀 안전 모델 클래스 프로파일 분리
-- 커스텀 안전 모델 사용 시 안전장비 미착용 이벤트 생성
-- 이벤트 로그 및 캡처 이미지 저장(얼굴 블러링 기본 활성화)
-- RTSP와 로컬 비디오 파일(`.mp4`, `.avi` 등) 입력 지원
-- 선택적 대시보드 비밀번호 보호
-- Docker Compose 기반 실행 준비
+- RTSP 스트림 수신 및 프레임 큐 관리 (RTSP 타임아웃, 지수백오프 재연결, FPS 이동평균)
+- YOLO26 ONNX 다중 모델 추론 (general_yolo, ppe_yolo, fire_smoke_yolo)
+- ONNX 메타데이터 기반 클래스 자동 인식 — config 불일치 시 메타데이터 우선 + 경고
+- 이벤트별 VLM 정책 (never/always/on_ambiguous/on_high_confidence/on_low_confidence)
+- 사용자 ONNX 모델 업로드/검증/격리 저장/활성화 (대시보드 "모델 업로드" 탭)
+- 이벤트 로그 및 캡처 이미지 저장 (얼굴 블러링, 선택적 Fernet 암호화)
+- scrypt 비밀번호 + rate limit + 세션 만료 + 감사 로그 대시보드 보안
+- RTSP와 로컬 비디오 파일 (`.mp4`, `.avi` 등) 입력 지원
+- Docker Compose / systemd 서비스 배포 지원
 
 ## 빠른 시작
 
 ```bash
-pip install -r requirements.txt
-```
+# 설치 (가상환경, 의존성, 런타임 디렉터리)
+bash scripts/install.sh
 
-YOLO26 ONNX 모델을 준비합니다.
-
-```bash
-yolo export model=yolo26n.pt format=onnx imgsz=640 half=True device=0
-mkdir -p models
-mv yolo26n.onnx models/yolo26.onnx
-```
-
-또는 준비 스크립트를 사용할 수 있습니다.
-
-```bash
-python3 scripts/prepare_yolo26.py --model yolo26n.pt
-```
-
-환경변수와 카메라 설정을 수정합니다.
-
-```bash
+# 환경변수 설정
 cp .env.example .env
-# .env에서 CCTV_CAM_001_URL 등을 실제 RTSP URL 또는 ./data/sample.mp4로 수정
+# .env에서 KSI_CCTV_DASHBOARD_PASSWORD, CCTV_CAM_001_URL 수정
 # config/cameras.json에서 사용할 채널의 enabled를 true로 변경
-```
 
-실행합니다.
+# 사전학습 안전 모델 다운로드 (선택 — 인터넷 필요)
+./.venv/bin/python scripts/fetch_safety_models.py --all
 
-```bash
-scripts/run_dashboard.sh
+# 헬스체크
+./.venv/bin/python scripts/healthcheck.py --json
+
+# 대시보드 실행
+bash scripts/run_dashboard.sh
+# http://localhost:8080 에서 접속
 ```
 
 ## 설정 파일
@@ -78,12 +69,18 @@ scripts/run_dashboard.sh
 
 ## 프로젝트 구조
 
-- `src/capture/`: RTSP 스트림 캡처
-- `src/detection/`: YOLO26/ONNX 객체 탐지
-- `src/pipeline/`: 캡처 → 탐지 → 이벤트 파이프라인
-- `src/alerts/`: 알람/로깅/캡처 저장
-- `src/dashboard/`: Streamlit 대시보드
-- `tests/`: 유닛 테스트
+- `src/capture/`: RTSP 스트림 캡처 (타임아웃, 재연결, FPS 이동평균)
+- `src/detection/`: MultiModelRegistry, YOLO ONNX 탐지, 클래스 어댑터
+- `src/policy/`: EventPolicyEngine, RuleEvaluatorRegistry
+- `src/pipeline/`: SafetyPipeline (policy-mode / legacy 이중 경로)
+- `src/vlm/`: VLM inference (Ollama), PromptSelector, TTL cache
+- `src/alerts/`: AlertManager (로그, 캡처, 얼굴 블러, 암호화, SMTP)
+- `src/dashboard/`: Streamlit 대시보드 (13탭)
+- `src/models/`: 사용자 모델 업로드 검증기
+- `src/utils/`: 헬스체크, 시스템 메트릭, 설정 로더
+- `config/`: YAML 설정 파일, 도메인별 VLM 프롬프트
+- `scripts/`: 설치, 헬스체크, E2E 테스트, 프로파일링, 모델 다운로드/학습
+- `tests/`: 유닛/통합 테스트 (333 passed, 1 skipped)
 
 ## 개발 환경
 
@@ -92,24 +89,34 @@ scripts/run_dashboard.sh
 - DGX Spark 실증 기준
 - 개발 보조 모델: Qwen 3.6 27B Dense 권장
 
+## 현재 상태 (Phase 10 M1, 2026-06-14)
+
+- 단위 테스트: **333 passed, 1 skipped** (`./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q`)
+- E2E 스모크: `ok: true`, `failed_models: {}`
+- 대시보드: policy-mode (MultiModelRegistry + EventPolicyEngine) 기본 실행
+- 활성 모델: `general_yolo`, `ppe_yolo`, `fire_smoke_yolo`
+
 ## 다음 단계
 
-1. 샘플 영상/RTSP 카메라로 End-to-End 테스트
-2. 안전모/조끼/화재/연기/쓰러짐 커스텀 YOLO26 학습 또는 VLM 판정 정책 확정
-3. DGX Spark 실장 환경에서 ONNX Runtime GPU/CPU 경로 검증
-4. 납품 전 보안·개인정보 최종 리뷰
+1. 실 RTSP 카메라 또는 사람 포함 영상으로 E2E 수동 검증
+2. DGX Spark 환경에서 `CUDAExecutionProvider` 검증
+3. 커스텀 Safety YOLO 학습 (`scripts/train_ppe.py`, `scripts/train_fire_smoke.py` — 데이터셋/GPU 필요)
 
-상세한 시스템 완성 계획은 다음 문서를 참고하세요.
+## 문서
 
-- `docs/project-definition.md`: 제품 정의와 목표 사용자/가치
-- `docs/architecture.md`: 다중 모델 + 이벤트 정책 목표 아키텍처
-- `docs/model-management.md`: 기본/사용자 업로드 모델 관리 전략
-- `docs/event-policy-engine.md`: 이벤트 정책 엔진 설계
-- `docs/custom-model-upload.md`: 사용자 ONNX 모델 업로드 보안 설계
-- `docs/development-roadmap.md`: 단계별 개발 로드맵
-- `docs/adr/0001-multi-model-policy-architecture.md`: 아키텍처 결정 기록
-- `docs/completion-plan.md`: 납품 가능한 시스템 완성까지의 전체 작업 계획
-- `docs/e2e-validation-checklist.md`: 다음 즉시 실행할 End-to-End 검증 체크리스트
+| 문서 | 내용 |
+|---|---|
+| `docs/configuration.md` | 환경변수·설정파일 레퍼런스 |
+| `docs/operations.md` | 24h 운영·로그 관리·헬스체크 |
+| `docs/troubleshooting.md` | 장애 진단 및 해결 가이드 |
+| `docs/delivery-checklist.md` | 납품용 설치 체크리스트 + 시연 체크리스트 |
+| `docs/deployment-guide.md` | 설치·배포·systemd 상세 가이드 |
+| `docs/architecture.md` | 목표 아키텍처 (policy-mode) |
+| `docs/model-management.md` | 모델 관리 전략 |
+| `docs/event-policy-engine.md` | 이벤트 정책 엔진 설계 |
+| `docs/custom-model-training.md` | 커스텀 모델 학습 전체 가이드 |
+| `docs/development-roadmap.md` | 단계별 개발 로드맵 |
+| `docs/completion-plan.md` | 납품 완성 계획 (체크박스 현행화) |
 
 ## License
 

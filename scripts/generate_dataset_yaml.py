@@ -12,21 +12,20 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import List
 
 
 def generate_dataset_yaml(
     dataset_dir: Path,
-    classes: List[str],
+    classes: list[str],
     train_ratio: float = 0.8,
     val_ratio: float = 0.1,
 ) -> Path:
     """Generate dataset.yaml for Ultralytics YOLO training."""
     yaml_path = dataset_dir / "dataset.yaml"
-    
+
     # Check for split directories
     has_splits = (dataset_dir / "train").exists()
-    
+
     if has_splits:
         path_str = str(dataset_dir.absolute())
         train_str = "train/images"
@@ -38,12 +37,12 @@ def generate_dataset_yaml(
         train_str = "images"
         val_str = "images"
         test_str = ""
-    
+
     # Build class names section
     names_lines = ["names:"]
     for i, cls in enumerate(classes):
         names_lines.append(f"  {i}: {cls}")
-    
+
     # Build YAML content
     lines = [
         "# KSI-CCTV Dataset Configuration",
@@ -55,10 +54,10 @@ def generate_dataset_yaml(
         f"train: {train_str}",
         f"val: {val_str}",
     ]
-    
+
     if test_str:
         lines.append(f"test: {test_str}")
-    
+
     lines.extend([
         "",
         *names_lines,
@@ -66,7 +65,7 @@ def generate_dataset_yaml(
         "# KSI-CCTV Phase 8 custom model training",
         "# See scripts/download_datasets.py for data sources",
     ])
-    
+
     yaml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Generated dataset.yaml: {yaml_path}")
     return yaml_path
@@ -77,9 +76,9 @@ def main() -> int:
     parser.add_argument("--dataset-dir", required=True, type=Path, help="Dataset directory")
     parser.add_argument("--classes", nargs="+", required=True, help="Class names (in order)")
     args = parser.parse_args()
-    
+
     yaml_path = generate_dataset_yaml(args.dataset_dir, args.classes)
-    print(f"\nDataset config ready for training:")
+    print("\nDataset config ready for training:")
     print(f"  Path: {yaml_path}")
     print(f"  Classes: {args.classes}")
     return 0

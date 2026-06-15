@@ -3,12 +3,13 @@ VLM 모듈 테스트
 """
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent))
 
-import unittest
 import json
 import tempfile
-from unittest.mock import Mock, patch, MagicMock
+import unittest
+from unittest.mock import Mock, patch
 
 
 class TestVLMAnalysisResult(unittest.TestCase):
@@ -73,7 +74,9 @@ class TestOllamaParser(unittest.TestCase):
         content = "이것은 JSON이 아닙니다. 그냥 텍스트 설명."
         result = provider._parse_response(content)
         self.assertIn("JSON이 아닙니다", result.description)
-        self.assertEqual(result.risk_level, "medium")
+        # parse_success=False 시 risk_level은 'low'로 보존 (medium 하드코딩 제거)
+        self.assertEqual(result.risk_level, "low")
+        self.assertFalse(result.parse_success)
 
 
 class TestContextBuilder(unittest.TestCase):
@@ -263,6 +266,194 @@ class TestPromptSelector(unittest.TestCase):
         prompt = selector.build_prompt("construction", "person(0.9)", "no events")
         self.assertIsInstance(prompt, str)
         self.assertGreater(len(prompt), 0)
+
+
+class TestOllamaParserEmbeddedJsonFallback(unittest.TestCase):
+    """Finding P2/S: 본문 내 임베드 JSON 추출 fallback 테스트"""
+
+    def _make_provider(self):
+        from src.vlm.ollama_provider import OllamaProvider
+
+        return OllamaProvider(base_url="http://localhost:99999", model="test")
+
+    def test_parse_inline_json_after_text(self):
+        """'분석 결과: {...}' 형태 — 경로 3 fallback으로 파싱 성공해야 함"""
+        provider = self._make_provider()
+        json_obj = json.dumps(
+            {
+                "description": "안전모 미착용 작업자 발견",
+                "risk_level": "high",
+                "detected_events": ["no_helmet"],
+                "recommended_action": "즉시 착용 지도",
+                "confidence": 0.9,
+            }
+        )
+        content = f"분석 결과:\n{json_obj}"
+        result = provider._parse_response(content)
+        self.assertTrue(result.parse_success, "임베드 JSON 추출 fallback이 parse_success=True여야 함")
+        self.assertEqual(result.description, "안전모 미착용 작업자 발견")
+        self.assertEqual(result.risk_level, "high")
+
+    def test_parse_json_prefix_label(self):
+        """'JSON: {...}' 형태도 fallback으로 파싱 성공해야 함"""
+        provider = self._make_provider()
+        json_obj = json.dumps(
+            {
+                "description": "화재 감지",
+                "risk_level": "critical",
+                "detected_events": ["fire"],
+                "recommended_action": "소방대 호출",
+                "confidence": 0.99,
+            }
+        )
+        content = f"JSON: {json_obj}"
+        result = provider._parse_response(content)
+        self.assertTrue(result.parse_success)
+        self.assertEqual(result.risk_level, "critical")
+
+    def test_parse_trailing_explanation(self):
+        """JSON 뒤에 설명이 붙어도 본문 앞 JSON 객체를 추출해야 함"""
+        provider = self._make_provider()
+        json_obj = json.dumps(
+            {
+                "description": "정상 상황",
+                "risk_level": "low",
+                "detected_events": [],
+                "recommended_action": "계속 모니터링",
+                "confidence": 0.7,
+            }
+        )
+        content = f"{json_obj}\n\n위 결과는 현재 상황 기준입니다."
+        result = provider._parse_response(content)
+        self.assertTrue(result.parse_success)
+        self.assertEqual(result.risk_level, "low")
+
+    def test_parse_no_json_returns_parse_failure(self):
+        """JSON이 전혀 없으면 parse_success=False, risk_level='low'여야 함"""
+        provider = self._make_provider()
+        content = "현재 이미지에서 특이사항을 발견하지 못했습니다."
+        result = provider._parse_response(content)
+        self.assertFalse(result.parse_success)
+        self.assertEqual(result.risk_level, "low")  # medium 하드코딩 제거 확인
+        self.assertIn("특이사항", result.description)
+
+    def test_extract_json_object_nested(self):
+        """_extract_json_object가 중첩 객체를 올바르게 추출해야 함"""
+        from src.vlm.ollama_provider import OllamaProvider
+
+        provider = OllamaProvider(base_url="http://localhost:99999", model="test")
+        text = '설명 {"a": {"b": 1}, "c": [1,2]} 이후 텍스트'
+        extracted = provider._extract_json_object(text)
+        self.assertIsNotNone(extracted)
+        parsed = json.loads(extracted)
+        self.assertEqual(parsed["a"]["b"], 1)
+
+    def test_extract_json_object_with_braces_in_string(self):
+        """문자열 내 중괄호가 있어도 괄호 균형을 올바르게 계산해야 함"""
+        from src.vlm.ollama_provider import OllamaProvider
+
+        provider = OllamaProvider(base_url="http://localhost:99999", model="test")
+        text = 'prefix {"key": "value with { brace }"} suffix'
+        extracted = provider._extract_json_object(text)
+        self.assertIsNotNone(extracted)
+        parsed = json.loads(extracted)
+        self.assertIn("{", parsed["key"])
+
+
+class TestPromptSelectorUnmappedWarning(unittest.TestCase):
+    """Finding P3/S: 미매핑 도메인 경고 및 새 프롬프트 yaml 테스트"""
+
+    def test_unmapped_domain_logs_warning(self):
+        """PROMPT_MAP에 없는 도메인은 logger.warning을 1회 출력해야 함"""
+        import logging
+
+        import src.vlm.prompt_selector as _ps1
+        from src.vlm.prompt_selector import PromptSelector as _PS1
+
+        # _UNMAPPED_DOMAINS 초기화 (테스트 격리)
+        _ps1._UNMAPPED_DOMAINS.clear()
+
+        selector = _PS1(prompts_dir="./config/prompts")
+        with self.assertLogs("src.vlm.prompt_selector", level=logging.WARNING) as cm:
+            selector.get_builder("unknown_domain_xyz")
+
+        warning_messages = [m for m in cm.output if "전용 프롬프트" in m]
+        self.assertTrue(len(warning_messages) >= 1, "미매핑 도메인 경고가 없음")
+
+    def test_unmapped_domain_warning_only_once(self):
+        """같은 미매핑 도메인을 두 번 호출해도 경고는 1회만 출력해야 함"""
+        import logging
+
+        import src.vlm.prompt_selector as _ps2
+        from src.vlm.prompt_selector import PromptSelector as _PS2
+
+        _ps2._UNMAPPED_DOMAINS.clear()
+
+        selector = _PS2(prompts_dir="./config/prompts")
+        # 첫 번째 호출 — 경고 발생
+        with self.assertLogs("src.vlm.prompt_selector", level=logging.WARNING):
+            selector.get_builder("another_unknown_domain")
+
+        # 두 번째 호출 — 캐시 히트이므로 경고 없음
+        # assertLogs는 최소 1개 이상 있어야 통과하므로 sentinel warning 주입 후
+        # 실제 "전용 프롬프트" 경고가 추가로 없는지 확인
+        root_logger = logging.getLogger("src.vlm.prompt_selector")
+        with self.assertLogs(root_logger, level=logging.WARNING) as cm2:
+            root_logger.warning("__sentinel__")
+            selector.get_builder("another_unknown_domain")
+
+        domain_warnings = [m for m in cm2.output if "전용 프롬프트" in m]
+        self.assertEqual(len(domain_warnings), 0, "두 번째 호출에서 중복 경고 발생")
+
+    def test_mapped_domain_no_warning(self):
+        """PROMPT_MAP에 있는 도메인은 미매핑 경고를 출력하지 않아야 함"""
+        import logging
+
+        import src.vlm.prompt_selector as _ps3
+        from src.vlm.prompt_selector import PromptSelector as _PS3
+
+        _ps3._UNMAPPED_DOMAINS.clear()
+
+        selector = _PS3(prompts_dir="./config/prompts")
+        # construction은 매핑 도메인 — 미매핑 경고 없어야 함
+        # (파일 존재 시 INFO만 출력, WARNING 없어야 함)
+        with self.assertLogs("src.vlm.prompt_selector", level=logging.DEBUG) as cm:
+            selector.get_builder("construction")
+
+        unmapped_warnings = [m for m in cm.output if "전용 프롬프트" in m]
+        self.assertEqual(len(unmapped_warnings), 0)
+
+    def test_factory_prompt_file_exists(self):
+        """factory.yaml이 존재하고 정상적으로 로드되어야 함"""
+        from src.vlm.prompt_selector import PromptSelector
+
+        selector = PromptSelector(prompts_dir="./config/prompts")
+        builder = selector.get_builder("factory")
+        self.assertIsNotNone(builder)
+        # 빌드 결과가 비어 있지 않아야 함
+        prompt = builder.build("person(0.9)", "no events")
+        self.assertGreater(len(prompt), 0)
+        self.assertIn("공장", prompt)
+
+    def test_warehouse_prompt_file_exists(self):
+        """warehouse.yaml이 존재하고 정상적으로 로드되어야 함"""
+        from src.vlm.prompt_selector import PromptSelector
+
+        selector = PromptSelector(prompts_dir="./config/prompts")
+        builder = selector.get_builder("warehouse")
+        prompt = builder.build("person(0.9)", "no events")
+        self.assertGreater(len(prompt), 0)
+        self.assertIn("창고", prompt)
+
+    def test_parking_prompt_file_exists(self):
+        """parking.yaml이 존재하고 정상적으로 로드되어야 함"""
+        from src.vlm.prompt_selector import PromptSelector
+
+        selector = PromptSelector(prompts_dir="./config/prompts")
+        builder = selector.get_builder("parking")
+        prompt = builder.build("person(0.9)", "no events")
+        self.assertGreater(len(prompt), 0)
+        self.assertIn("주차", prompt)
 
 
 if __name__ == "__main__":

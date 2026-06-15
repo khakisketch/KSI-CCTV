@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional
 
 try:
     import yaml
@@ -31,14 +30,14 @@ class ContextBuilder:
         if not p.exists():
             logger.warning(f"프롬프트 템플릿을 찾을 수 없습니다: {path}")
             return {"system": "", "context_template": ""}
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         return data
 
     def build(
         self,
         detections_summary: str,
-        recent_events: Optional[str] = None,
+        recent_events: str | None = None,
     ) -> str:
         """VLM 프롬프트 전체 구성"""
         system = self.template.get("system", "")

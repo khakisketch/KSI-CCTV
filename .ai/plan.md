@@ -14,7 +14,7 @@
 | 7 | 운영/배포/보안 강화 | 완료 |
 | 8 | Custom Safety Model + 대시보드/알림 개선 | 완료 |
 | 9 | 개발 개선 (observability, stress test, profiling) | 완료 |
-| 10 | **생산 준비 + 커스텀 모델 학습** | **진행 중** |
+| 10 | **생산 준비 + 커스텀 모델 학습** | **진행 중 (M0+M1 완료, 333 tests green)** |
 
 ## Phase 10 — 생산 준비 + 커스텀 모델 학습
 

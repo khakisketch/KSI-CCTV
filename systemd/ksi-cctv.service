@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 # Site-specific values: create this user/group and install the project at
 # WorkingDirectory, or adjust all three values for the target deployment.
+# install.sh가 WorkingDirectory/User/Group/ExecStart/ReadWritePaths 를 일괄 치환한다.
 User=ksi-cctv
 Group=ksi-cctv
 WorkingDirectory=/opt/ksi-cctv
@@ -15,9 +16,9 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=TZ=Asia/Seoul
 # Site-specific secrets/env file. Keep owner-readable only, do not commit it.
 EnvironmentFile=-/etc/ksi-cctv/ksi-cctv.env
-# 대시보드 (포트 8080) + 헬스체크 (포트 8081) 동시 실행
-ExecStartPre=/bin/bash -c 'source .venv/bin/activate && python -c "from src.utils.health import start_health_server; start_health_server(port=8081)" &'
-ExecStart=/bin/bash scripts/run_dashboard.sh
+# 헬스체크 서버(8081) + 대시보드(8080)는 래퍼 스크립트 한 곳에서 관리.
+# ExecStartPre의 `&` 백그라운드 패턴은 systemd cgroup 정리로 인해 프로세스가 죽을 수 있어 제거.
+ExecStart=/bin/bash /opt/ksi-cctv/scripts/docker-entrypoint.sh
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
@@ -27,9 +28,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-# Writable paths required by logs/captures, user-uploaded ONNX files, and the
-# existing Phase 6 uploaded-model registration path. Keep config writable only
-# for model_profiles.yaml, not the whole config directory.
+# install.sh가 /opt/ksi-cctv 를 실제 설치 경로($(pwd))로 함께 치환한다.
+# 아래 경로들도 치환되므로 설치 후 경로 불일치 없음.
 ReadWritePaths=/opt/ksi-cctv/logs /opt/ksi-cctv/data /opt/ksi-cctv/models/uploaded /opt/ksi-cctv/config/model_profiles.yaml
 
 [Install]

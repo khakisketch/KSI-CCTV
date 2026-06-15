@@ -25,11 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
-import subprocess
-import sys
 from pathlib import Path
-from typing import Dict, List, Optional
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -38,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODELS_DIR = ROOT / "models"
 
 # Model definitions: model_id → config
-SAFETY_MODELS: Dict[str, Dict[str, any]] = {
+SAFETY_MODELS: dict[str, dict[str, any]] = {
     "ppe_yolo": {
         "repo_id": "keremberke/yolov8n-hard-hat-detection",
         "output_name": "yolo26_ppe.onnx",
@@ -82,7 +78,7 @@ def _has_ultralytics() -> bool:
         return False
 
 
-def _download_hf(repo_id: str, local_dir: Path) -> Optional[Path]:
+def _download_hf(repo_id: str, local_dir: Path) -> Path | None:
     """Download model from Hugging Face Hub."""
     try:
         from huggingface_hub import snapshot_download
@@ -95,7 +91,7 @@ def _download_hf(repo_id: str, local_dir: Path) -> Optional[Path]:
         return None
 
 
-def _find_best_ckpt(model_dir: Path) -> Optional[Path]:
+def _find_best_ckpt(model_dir: Path) -> Path | None:
     """Find the best checkpoint (.pt) in the downloaded directory."""
     candidates = list(model_dir.rglob("*.pt"))
     if not candidates:
@@ -159,7 +155,7 @@ def _print_manual_instructions(name: str, repo_id: str, output_name: str) -> Non
 """)
 
 
-def fetch_model(name: str, config: Dict[str, any], skip_existing: bool = True) -> bool:
+def fetch_model(name: str, config: dict[str, any], skip_existing: bool = True) -> bool:
     """Fetch a single model: download, export, validate."""
     output_path = MODELS_DIR / config["output_name"]
     if skip_existing and output_path.exists():
@@ -219,12 +215,9 @@ def main() -> int:
 
     skip_existing = args.skip_existing and not args.force
 
-    results: Dict[str, Dict[str, any]] = {}
-    if args.model:
-        models_to_fetch = {args.model: SAFETY_MODELS[args.model]}
-    else:
-        # --all 또는 기본값: 모든 모델
-        models_to_fetch = SAFETY_MODELS
+    results: dict[str, dict[str, any]] = {}
+    # --model 지정 시 해당 모델만, 아니면(--all/기본) 전체
+    models_to_fetch = {args.model: SAFETY_MODELS[args.model]} if args.model else SAFETY_MODELS
 
     for name, config in models_to_fetch.items():
         ok = fetch_model(name, config, skip_existing=skip_existing)

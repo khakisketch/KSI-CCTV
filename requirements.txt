@@ -1,11 +1,18 @@
 # Runtime dependencies
 numpy==2.2.4
 onnx==1.17.0
-onnxruntime-gpu==1.20.1
+# ONNX 런타임 기본은 CPU 휠 — x86_64/aarch64(ARM64) 모두 제공되어 어떤 플랫폼에서도
+# `pip install -r requirements.txt`가 실패하지 않는다. (onnxruntime-gpu==1.20.1은
+# aarch64 휠이 없어 DGX Spark(ARM64)에서 설치 자체가 실패했다.)
+# GPU 환경(DGX)에서는 scripts/install.sh와 Dockerfile이 GPU 감지/빌드인자에 따라
+# 이 CPU 패키지를 제거하고 onnxruntime-gpu로 교체한다(두 패키지 공존 금지).
+onnxruntime==1.20.1
 opencv-python-headless==4.11.0.86
 pillow==11.1.0
 PyYAML==6.0.2
-streamlit==1.45.2
+# streamlit==1.45.2는 PyPI에 존재하지 않아(1.45.1 다음이 1.46.0) fresh install이 실패했다.
+# 로컬에서 실제 검증·구동되는 버전으로 정렬한다.
+streamlit==1.57.0
 ultralytics==8.3.111
 
 # Hugging Face Hub — Phase 9 M4: 사전학습 모델 다운로드에 필요
@@ -21,3 +28,7 @@ torchaudio==2.6.0
 requests==2.32.3
 tqdm==4.67.1
 pynvml==12.0.0
+psutil>=5.9.0
+
+# 이미지 암호화 저장 (Phase alerts M6.2) — encrypt_images=True 옵션 사용 시 필요
+cryptography>=42.0.0

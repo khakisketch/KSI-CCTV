@@ -7,13 +7,15 @@ Phase 8: 사전학습된 공개 모델의 클래스 이름을 KSI-CCTV 표준 �
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+import logging
 
 from src.detection.yolo_detector import Detection
 
+logger = logging.getLogger(__name__)
+
 
 # 공개 모델 → KSI-CCTV 표준 클래스 매핑
-DEFAULT_CLASS_MAPS: Dict[str, Dict[str, str]] = {
+DEFAULT_CLASS_MAPS: dict[str, dict[str, str]] = {
     # PPE (hard-hat detection)
     "ppe_yolo": {
         "Hardhat": "helmet",
@@ -40,10 +42,10 @@ DEFAULT_CLASS_MAPS: Dict[str, Dict[str, str]] = {
 
 
 def adapt_detections(
-    detections: List[Detection],
-    class_map: Optional[Dict[str, str]] = None,
-    model_name: Optional[str] = None,
-) -> List[Detection]:
+    detections: list[Detection],
+    class_map: dict[str, str] | None = None,
+    model_name: str | None = None,
+) -> list[Detection]:
     """탐지 결과의 클래스 이름을 표준 이름으로 변환.
 
     Args:
@@ -59,7 +61,7 @@ def adapt_detections(
     if not class_map:
         return detections
 
-    adapted: List[Detection] = []
+    adapted: list[Detection] = []
     for det in detections:
         new_name = class_map.get(det.class_name, det.class_name)
         if new_name != det.class_name:
@@ -76,7 +78,7 @@ def adapt_detections(
     return adapted
 
 
-def get_class_map_for_profile(profile: Dict[str, str]) -> Optional[Dict[str, str]]:
+def get_class_map_for_profile(profile: dict[str, str]) -> dict[str, str] | None:
     """model_profiles.yaml profile에서 class_map을 추출.
 
     Args:
@@ -96,3 +98,50 @@ def get_class_map_for_profile(profile: Dict[str, str]) -> Optional[Dict[str, str
         return DEFAULT_CLASS_MAPS.get(model_name)
 
     return None
+
+
+def warn_target_class_mismatch(
+    model_name: str,
+    detector_classes: dict[int, str],
+    target_classes: list[str],
+) -> None:
+    """detector의 실제 클래스와 정책/파이프라인의 target_classes 불일치를 경고한다.
+
+    Args:
+        model_name: 모델 식별자 (로그용)
+        detector_classes: YOLODetector.classes ({id: name})
+        target_classes: 파이프라인/정책에서 기대하는 클래스 이름 목록
+
+    불일치 패턴:
+    - detector에는 없는 target_class: 해당 클래스를 이 모델로 탐지할 수 없어
+      정책이 트리거되지 않을 수 있다.
+    - target에 없는 detector_class: 무해하지만 불필요한 탐지 비용일 수 있다.
+    """
+    if not target_classes:
+        return
+
+    detector_class_names: set[str] = set(detector_classes.values())
+    target_set: set[str] = set(target_classes)
+
+    # detector에 없는 target_class (누락 위험)
+    missing_in_detector = target_set - detector_class_names
+    if missing_in_detector:
+        logger.warning(
+            "target_classes 불일치 [%s]: 정책/파이프라인이 요구하는 클래스 %s가 "
+            "detector 클래스 목록에 없습니다. 해당 클래스는 탐지되지 않아 "
+            "관련 정책이 트리거되지 않을 수 있습니다. "
+            "(detector 보유 클래스: %s)",
+            model_name,
+            sorted(missing_in_detector),
+            sorted(detector_class_names),
+        )
+
+    # target에 없는 detector_class (과잉 탐지 알림 — WARNING 아닌 DEBUG)
+    extra_in_detector = detector_class_names - target_set
+    if extra_in_detector:
+        logger.debug(
+            "target_classes 범위 초과 [%s]: detector가 %s 클래스를 탐지할 수 있으나 "
+            "target_classes에 포함되지 않았습니다(무해, 정책 필터로 제거됨).",
+            model_name,
+            sorted(extra_in_detector),
+        )

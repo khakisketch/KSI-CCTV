@@ -20,7 +20,7 @@
 
 목표: 여러 ONNX 모델을 로드하고 모델별 탐지 결과를 반환합니다.
 
-상태: foundation 구현 진행 완료. `src/detection/model_registry.py`와 기본 단위 테스트가 추가되었습니다.
+상태: 구현 완료. `src/detection/model_registry.py`와 단위 테스트, Pipeline 통합, 대시보드 상태 표시, metrics 수집까지 완료되었습니다.
 
 작업:
 
@@ -29,9 +29,9 @@
 - [x] enabled 모델만 로드
 - [x] 모델별 오류 격리
 - [x] tests/test_model_registry.py
-- [ ] 실제 파이프라인 통합
-- [ ] 대시보드 모델 상태 표시
-- [ ] 모델별 latency/error metrics 수집
+- [x] 실제 파이프라인 통합 (Phase 4)
+- [x] 대시보드 모델 상태 표시 (Phase 8 M3)
+- [x] 모델별 latency/error metrics 수집 (`get_model_metrics()`, Phase 10)
 
 ## Phase 3. EventPolicyEngine 구현
 
@@ -64,28 +64,34 @@
 - [x] scripts/e2e_smoke_test.py에 `--policy-mode` 옵션 추가
 - [x] 기존 52개 테스트 + 신규 8개 = 총 60개 전량 통과
 
-## Phase 5. 대시보드 설정 UI
+## Phase 5. 대시보드 설정 UI ✅
 
 목표: 비개발자가 카메라별 이벤트/모델을 선택할 수 있게 합니다.
 
+상태: 완료.
+
 작업:
 
-- 도메인 템플릿 선택
-- 이벤트 체크박스
-- 모델 선택
-- 정책 미리보기
+- [x] 도메인 템플릿 선택
+- [x] 이벤트 체크박스
+- [x] 모델 선택 및 모델 상태 표시
+- [x] 정책 미리보기 (alert_level 아이콘, policy metadata 표시)
+- [x] `set_camera_profile()` 파이프라인 연동
 
-## Phase 6. 사용자 모델 업로드
+## Phase 6. 사용자 모델 업로드 ✅
 
 목표: ONNX 모델 업로드/검증/등록/카메라 할당을 지원합니다.
 
+상태: 완료.
+
 작업:
 
-- 업로드 디렉토리 격리
-- metadata parser
-- ONNX smoke test
-- 모델 활성화/비활성화
-- 감사 로그
+- [x] 업로드 디렉토리 격리 (`models/uploaded/{model_id}/`)
+- [x] metadata parser + ONNX 로드 검증
+- [x] ONNX smoke test (입력 shape 검증 + 합성 추론)
+- [x] 모델 활성화/비활성화/삭제 (삭제 확인 체크박스 포함)
+- [x] 감사 로그 (업로드/활성화/비활성화/삭제 기록)
+- [x] `src/models/upload_validator.py` + `tests/test_upload_validator.py`
 
 ## Phase 7. 운영/보안/납품 강화 ✅
 

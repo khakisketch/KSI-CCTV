@@ -172,7 +172,6 @@ def main() -> int:
     if args.policy_mode:
         # Phase 4 정책 기반 모드
         cameras = []
-        camera_id = "cam_001"
         stream_url = "./data/sample.mp4"
         if not Path(stream_url).exists():
             raise RuntimeError(f"Sample video not found for policy mode: {stream_url}")
@@ -255,4 +254,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2))
-        raise SystemExit(1)
+        raise SystemExit(1) from exc

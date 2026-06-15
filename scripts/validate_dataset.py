@@ -19,16 +19,14 @@ import json
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import cv2
-import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def _list_files(directory: Path, extensions: Tuple[str, ...]) -> List[Path]:
+def _list_files(directory: Path, extensions: tuple[str, ...]) -> list[Path]:
     """List files with given extensions."""
     files = []
     if directory.exists():
@@ -37,11 +35,11 @@ def _list_files(directory: Path, extensions: Tuple[str, ...]) -> List[Path]:
     return sorted(files)
 
 
-def _read_yolo_labels(label_path: Path) -> List[List[float]]:
+def _read_yolo_labels(label_path: Path) -> list[list[float]]:
     """Read YOLO format labels from file."""
     labels = []
     try:
-        with open(label_path, "r") as f:
+        with open(label_path) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -64,7 +62,7 @@ def _read_yolo_labels(label_path: Path) -> List[List[float]]:
     return labels
 
 
-def validate_image(image_path: Path) -> Tuple[bool, Optional[str], Optional[Tuple[int, int]]]:
+def validate_image(image_path: Path) -> tuple[bool, str | None, tuple[int, int] | None]:
     """Validate that an image file is readable and not corrupted."""
     try:
         img = cv2.imread(str(image_path))
@@ -80,47 +78,47 @@ def validate_image(image_path: Path) -> Tuple[bool, Optional[str], Optional[Tupl
 
 def validate_labels(
     label_path: Path,
-    image_size: Optional[Tuple[int, int]] = None,
-    num_classes: Optional[int] = None,
-) -> Tuple[bool, List[str]]:
+    image_size: tuple[int, int] | None = None,
+    num_classes: int | None = None,
+) -> tuple[bool, list[str]]:
     """Validate YOLO label file."""
     errors = []
-    
+
     if not label_path.exists():
         return False, ["Label file not found"]
-    
+
     labels = _read_yolo_labels(label_path)
-    
+
     if not labels:
         return False, ["Empty or unreadable label file"]
-    
+
     for i, (class_id, x_center, y_center, width, height) in enumerate(labels):
         # Check normalized values are in [0, 1]
         if not (0 <= x_center <= 1 and 0 <= y_center <= 1):
             errors.append(f"Line {i+1}: Center coordinates out of range [0,1]")
         if not (0 < width <= 1 and 0 < height <= 1):
             errors.append(f"Line {i+1}: Width/height out of range [0,1]")
-        
+
         # Check class ID
         if num_classes is not None and class_id >= num_classes:
             errors.append(f"Line {i+1}: Class ID {class_id} >= num_classes {num_classes}")
-        
+
         # Check negative values
         if x_center < 0 or y_center < 0 or width < 0 or height < 0:
             errors.append(f"Line {i+1}: Negative values")
-    
+
     return len(errors) == 0, errors
 
 
 def validate_dataset(
     dataset_dir: Path,
-    num_classes: Optional[int] = None,
+    num_classes: int | None = None,
     strict: bool = False,
-) -> Dict[str, any]:
+) -> dict[str, any]:
     """Validate a YOLO format dataset directory."""
     images_dir = dataset_dir / "images"
     labels_dir = dataset_dir / "labels"
-    
+
     result = {
         "dataset_dir": str(dataset_dir),
         "valid": True,
@@ -128,27 +126,27 @@ def validate_dataset(
         "warnings": [],
         "stats": {},
     }
-    
+
     # Check directory structure
     if not images_dir.exists():
         result["valid"] = False
         result["errors"].append("images/ directory not found")
         return result
-    
+
     if not labels_dir.exists():
         result["warnings"].append("labels/ directory not found (images without labels?)")
-    
+
     # Collect images and labels
     image_extensions = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
     images = _list_files(images_dir, image_extensions)
     labels = _list_files(labels_dir, (".txt",))
-    
+
     image_names = {img.stem for img in images}
     label_names = {lbl.stem for lbl in labels}
-    
+
     result["stats"]["total_images"] = len(images)
     result["stats"]["total_labels"] = len(labels)
-    
+
     # Check for images without labels
     images_without_labels = image_names - label_names
     if images_without_labels:
@@ -156,28 +154,28 @@ def validate_dataset(
         if strict:
             result["valid"] = False
             result["errors"].append(f"Images without labels: {len(images_without_labels)}")
-    
+
     # Check for labels without images
     labels_without_images = label_names - image_names
     if labels_without_images:
         result["warnings"].append(f"{len(labels_without_images)} labels without images")
-    
+
     # Validate each image-label pair
     class_distribution = Counter()
     valid_pairs = 0
     invalid_pairs = 0
-    
+
     for img_path in images:
         stem = img_path.stem
         label_path = labels_dir / f"{stem}.txt"
-        
+
         # Validate image
         img_valid, img_error, img_size = validate_image(img_path)
         if not img_valid:
             result["errors"].append(f"Image {img_path.name}: {img_error}")
             invalid_pairs += 1
             continue
-        
+
         # Validate label if exists
         if label_path.exists():
             lbl_valid, lbl_errors = validate_labels(label_path, img_size, num_classes)
@@ -186,40 +184,40 @@ def validate_dataset(
                     result["errors"].append(f"Label {label_path.name}: {error}")
                 invalid_pairs += 1
                 continue
-            
+
             # Count class distribution
             labels = _read_yolo_labels(label_path)
             for label in labels:
                 class_distribution[label[0]] += 1
-        
+
         valid_pairs += 1
-    
+
     result["stats"]["valid_pairs"] = valid_pairs
     result["stats"]["invalid_pairs"] = invalid_pairs
     result["stats"]["class_distribution"] = dict(class_distribution)
-    
+
     if result["errors"]:
         result["valid"] = False
-    
+
     return result
 
 
-def validate_split(dataset_dir: Path) -> Dict[str, any]:
+def validate_split(dataset_dir: Path) -> dict[str, any]:
     """Validate train/val/test split directories."""
     splits = ["train", "val", "test"]
     results = {}
-    
+
     for split in splits:
         split_dir = dataset_dir / split
         if split_dir.exists():
             results[split] = validate_dataset(split_dir)
         else:
             results[split] = {"valid": False, "error": "Directory not found"}
-    
+
     return results
 
 
-def generate_report(results: Dict[str, any], output_path: Optional[Path] = None) -> None:
+def generate_report(results: dict[str, any], output_path: Path | None = None) -> None:
     """Generate validation report."""
     report_lines = [
         "# KSI-CCTV Dataset Validation Report",
@@ -235,26 +233,26 @@ def generate_report(results: Dict[str, any], output_path: Optional[Path] = None)
         "",
         "## Class Distribution",
     ]
-    
+
     class_dist = results['stats'].get('class_distribution', {})
     if class_dist:
         for class_id, count in sorted(class_dist.items()):
             report_lines.append(f"- Class {class_id}: {count} instances")
     else:
         report_lines.append("- No classes found")
-    
+
     if results['warnings']:
         report_lines.extend(["", "## Warnings"])
         for warning in results['warnings']:
             report_lines.append(f"- {warning}")
-    
+
     if results['errors']:
         report_lines.extend(["", "## Errors"])
         for error in results['errors']:
             report_lines.append(f"- {error}")
-    
+
     report_text = "\n".join(report_lines)
-    
+
     if output_path:
         output_path.write_text(report_text, encoding="utf-8")
         logger.info("Report saved to: %s", output_path)
@@ -271,18 +269,18 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="Report output path")
     parser.add_argument("--json", action="store_true", help="Output JSON summary")
     args = parser.parse_args()
-    
+
     dataset_dir = args.dataset_dir
-    
+
     logger.info("Validating dataset: %s", dataset_dir)
-    
+
     # Check if it's a split dataset (train/val/test)
     has_splits = all((dataset_dir / split).exists() for split in ["train", "val"])
-    
+
     if has_splits:
         logger.info("Detected split dataset (train/val/test)")
         results = validate_split(dataset_dir)
-        
+
         # Combine results
         combined = {
             "dataset_dir": str(dataset_dir),
@@ -291,7 +289,7 @@ def main() -> int:
         }
     else:
         combined = validate_dataset(dataset_dir, num_classes=args.num_classes, strict=args.strict)
-    
+
     if args.json:
         print(json.dumps(combined, indent=2, ensure_ascii=False))
     elif args.report or args.output:
@@ -300,7 +298,7 @@ def main() -> int:
         # Simple console output
         print(f"\nDataset: {combined['dataset_dir']}")
         print(f"Valid: {'YES' if combined['valid'] else 'NO'}")
-        
+
         if "splits" in combined:
             for split, result in combined["splits"].items():
                 print(f"\n  {split}:")
@@ -313,19 +311,19 @@ def main() -> int:
             print(f"  Labels: {stats.get('total_labels', 0)}")
             print(f"  Valid Pairs: {stats.get('valid_pairs', 0)}")
             print(f"  Invalid: {stats.get('invalid_pairs', 0)}")
-        
+
         if combined.get("errors"):
             print(f"\n  Errors ({len(combined['errors'])}):")
             for error in combined["errors"][:10]:
                 print(f"    - {error}")
             if len(combined["errors"]) > 10:
                 print(f"    ... and {len(combined['errors']) - 10} more")
-        
+
         if combined.get("warnings"):
             print(f"\n  Warnings ({len(combined['warnings'])}):")
             for warning in combined["warnings"][:5]:
                 print(f"    - {warning}")
-    
+
     return 0 if combined["valid"] else 1
 
 

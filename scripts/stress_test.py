@@ -25,7 +25,7 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -35,7 +35,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def _load_video(video_path: str, loop: bool = True) -> Optional[cv2.VideoCapture]:
+def _load_video(video_path: str, loop: bool = True) -> cv2.VideoCapture | None:
     """비디오 파일을 로드. loop=True면 끝까지 가면 처음부터 다시 재생."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -43,7 +43,7 @@ def _load_video(video_path: str, loop: bool = True) -> Optional[cv2.VideoCapture
     return cap
 
 
-def _read_frames(cap: cv2.VideoCapture, max_frames: int = 0, loop: bool = True) -> List[np.ndarray]:
+def _read_frames(cap: cv2.VideoCapture, max_frames: int = 0, loop: bool = True) -> list[np.ndarray]:
     """비디오에서 프레임들을 읽음. loop=True면 영상이 끝나면 처음으로 돌아감."""
     frames = []
     count = 0
@@ -59,9 +59,9 @@ def _read_frames(cap: cv2.VideoCapture, max_frames: int = 0, loop: bool = True) 
     return frames
 
 
-def _create_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
+def _create_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     """파이프라인 컴포넌트 생성 (1회만 호출)."""
-    components: Dict[str, Any] = {"policy_mode": args.policy_mode}
+    components: dict[str, Any] = {"policy_mode": args.policy_mode}
     if args.policy_mode:
         from src.detection.model_registry import MultiModelRegistry
         from src.policy.event_policy_engine import EventPolicyEngine
@@ -90,11 +90,11 @@ def _create_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
 def _run_single_frame_pipeline(
     frame: np.ndarray,
     args: argparse.Namespace,
-    components: Dict[str, Any],
+    components: dict[str, Any],
     cam_id: str = "stress_test_cam",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """단일 프레임에 대해 파이프라인 실행 (재사용된 컴포넌트 사용)."""
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "frame_shape": list(frame.shape),
         "inference_ms": 0.0,
         "total_ms": 0.0,
@@ -140,7 +140,7 @@ def _run_single_frame_pipeline(
     return result
 
 
-def _maybe_run_vlm(frame: np.ndarray) -> Optional[Dict[str, Any]]:
+def _maybe_run_vlm(frame: np.ndarray) -> dict[str, Any] | None:
     """VLM 호출 (선택). Ollama가 사용 가능할 때만 실행."""
     try:
         from src.utils.config import AppConfig
@@ -220,7 +220,7 @@ def main() -> int:
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    print(f"[스트레스 테스트 시작]")
+    print("[스트레스 테스트 시작]")
     print(f"  비디오: {args.video} ({width}x{height} @ {fps:.1f}fps, {total_frames}프레임)")
     print(f"  지속 시간: {args.duration}초")
     print(f"  카메라 수: {args.cameras}")
@@ -229,7 +229,7 @@ def main() -> int:
     print(f"  프레임 스킵: {args.skip_frames}")
 
     # 프레임 미리 로드 (메모리에 모두 로드)
-    print(f"\n프레임 로드 중...")
+    print("\n프레임 로드 중...")
     frames = _read_frames(cap, max_frames=total_frames, loop=False)
     cap.release()
     if not frames:
@@ -238,7 +238,7 @@ def main() -> int:
     print(f"  {len(frames)}프레임 로드됨")
 
     # 파이프라인 컴포넌트 1회 생성
-    print(f"\n파이프라인 컴포넌트 로드 중...")
+    print("\n파이프라인 컴포넌트 로드 중...")
     components = _create_pipeline(args)
     if args.policy_mode:
         print(f"  활성 모델: {components['registry'].active_model_names}")
@@ -249,14 +249,14 @@ def main() -> int:
     frame_idx = 0
     frame_count = 0
     vlm_count = 0
-    inference_times: List[float] = []
-    total_times: List[float] = []
+    inference_times: list[float] = []
+    total_times: list[float] = []
     event_type_counter: Counter = Counter()
     alert_level_counter: Counter = Counter()
-    failed_frames: List[int] = []
-    vlm_results: List[Dict[str, Any]] = []
+    failed_frames: list[int] = []
+    vlm_results: list[dict[str, Any]] = []
 
-    print(f"\n[실행 중...]")
+    print("\n[실행 중...]")
     while time.time() < deadline and (args.max_frames == 0 or frame_count < args.max_frames):
         frame = frames[frame_idx % len(frames)]
         frame_idx += 1
@@ -335,7 +335,7 @@ def main() -> int:
             } if vlm_latencies else None,
         }
 
-    print(f"\n=== 스트레스 테스트 결과 ===")
+    print("\n=== 스트레스 테스트 결과 ===")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
     if args.json_out:

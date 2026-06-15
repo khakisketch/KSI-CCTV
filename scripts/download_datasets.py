@@ -15,12 +15,9 @@ import argparse
 import json
 import logging
 import shutil
-import subprocess
-import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -39,13 +36,13 @@ class DatasetSource:
     source_type: str  # kaggle, roboflow, url
     identifier: str  # kaggle dataset name, roboflow project, or URL
     target_dir: Path
-    classes: List[str]
+    classes: list[str]
     description: str = ""
-    api_key_env: Optional[str] = None  # Environment variable for API key
+    api_key_env: str | None = None  # Environment variable for API key
 
 
 # Pre-configured dataset sources
-DATASET_SOURCES: Dict[str, List[DatasetSource]] = {
+DATASET_SOURCES: dict[str, list[DatasetSource]] = {
     "ppe": [
         DatasetSource(
             name="hard_hat_workers",
@@ -96,7 +93,7 @@ def _download_kaggle(dataset_name: str, target_dir: Path) -> bool:
         logger.info("Downloading Kaggle dataset: %s", dataset_name)
         path = kagglehub.dataset_download(dataset_name)
         logger.info("Downloaded to: %s", path)
-        
+
         # Move to target directory
         _ensure_dir(target_dir)
         downloaded_path = Path(path)
@@ -125,19 +122,19 @@ def _download_url(url: str, target_dir: Path) -> bool:
         logger.info("Downloading from URL: %s", url)
         response = requests.get(url, stream=True, timeout=300)
         response.raise_for_status()
-        
+
         # Determine file extension
         parsed = urlparse(url)
         filename = Path(parsed.path).name or "download.zip"
         temp_path = target_dir / f"_temp_{filename}"
-        
+
         _ensure_dir(target_dir)
-        
+
         # Download with progress
         total_size = int(response.headers.get("content-length", 0))
         downloaded = 0
         chunk_size = 8192
-        
+
         with open(temp_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=chunk_size):
                 if chunk:
@@ -147,7 +144,7 @@ def _download_url(url: str, target_dir: Path) -> bool:
                         percent = (downloaded / total_size) * 100
                         print(f"\rDownloading: {percent:.1f}%", end="", flush=True)
         print()  # New line after progress
-        
+
         # Extract if zip
         if filename.endswith(".zip") or zipfile.is_zipfile(temp_path):
             logger.info("Extracting zip file...")
@@ -157,40 +154,37 @@ def _download_url(url: str, target_dir: Path) -> bool:
             # Move single file
             dest = target_dir / filename
             shutil.move(str(temp_path), str(dest))
-        
+
         # Clean up temp file
         if temp_path.exists():
             temp_path.unlink()
-        
+
         logger.info("Downloaded and extracted to: %s", target_dir)
         return True
-        
+
     except Exception as exc:
         logger.error("Failed to download from URL %s: %s", url, exc)
         return False
 
 
-def _download_roboflow(project: str, target_dir: Path, api_key: Optional[str] = None) -> bool:
+def _download_roboflow(project: str, target_dir: Path, api_key: str | None = None) -> bool:
     """Download dataset from Roboflow."""
     try:
         import roboflow
         logger.info("Downloading Roboflow project: %s", project)
-        
-        if api_key:
-            rf = roboflow.Roboflow(api_key=api_key)
-        else:
-            rf = roboflow.Roboflow()
-        
+
+        rf = roboflow.Roboflow(api_key=api_key) if api_key else roboflow.Roboflow()
+
         # Format: workspace/project-version
         parts = project.split("/")
         if len(parts) != 2:
             logger.error("Invalid Roboflow project format. Expected: workspace/project")
             return False
-        
+
         workspace, project_name = parts
         project = rf.workspace(workspace).project(project_name)
         dataset = project.version("latest").download("yolov8")
-        
+
         # Move to target directory
         _ensure_dir(target_dir)
         downloaded_path = Path(dataset.location)
@@ -202,10 +196,10 @@ def _download_roboflow(project: str, target_dir: Path, api_key: Optional[str] = 
                 else:
                     dest.unlink()
             shutil.move(str(item), str(dest))
-        
+
         logger.info("Downloaded Roboflow dataset to: %s", target_dir)
         return True
-        
+
     except ImportError:
         logger.error("roboflow not installed. Install with: pip install roboflow")
         return False
@@ -214,13 +208,13 @@ def _download_roboflow(project: str, target_dir: Path, api_key: Optional[str] = 
         return False
 
 
-def download_dataset(source: DatasetSource, api_key: Optional[str] = None) -> bool:
+def download_dataset(source: DatasetSource, api_key: str | None = None) -> bool:
     """Download a single dataset source."""
     logger.info("=" * 60)
     logger.info("Dataset: %s (%s)", source.name, source.description)
     logger.info("Source: %s", source.source_type)
     logger.info("Target: %s", source.target_dir)
-    
+
     if source.source_type == "kaggle":
         return _download_kaggle(source.identifier, source.target_dir)
     elif source.source_type == "roboflow":
@@ -232,13 +226,13 @@ def download_dataset(source: DatasetSource, api_key: Optional[str] = None) -> bo
         return False
 
 
-def generate_dataset_yaml(dataset_name: str, target_dir: Path, classes: List[str]) -> Path:
+def generate_dataset_yaml(dataset_name: str, target_dir: Path, classes: list[str]) -> Path:
     """Generate Ultralytics YOLO dataset.yaml file."""
     yaml_path = target_dir / "dataset.yaml"
-    
+
     yaml_content = f"""# KSI-CCTV Dataset Configuration
 # Auto-generated by scripts/download_datasets.py
-# 
+#
 # Classes: {', '.join(classes)}
 
 path: {target_dir.absolute()}  # dataset root dir
@@ -254,7 +248,7 @@ names:
 # This dataset was downloaded for KSI-CCTV Phase 8 custom model training
 # See scripts/download_datasets.py for source configuration
 """
-    
+
     yaml_path.write_text(yaml_content, encoding="utf-8")
     logger.info("Generated dataset.yaml: %s", yaml_path)
     return yaml_path
@@ -268,7 +262,7 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="List available datasets without downloading")
     parser.add_argument("--json", action="store_true", help="Output JSON summary")
     args = parser.parse_args()
-    
+
     if args.list:
         print("\nAvailable datasets:\n")
         for category, sources in DATASET_SOURCES.items():
@@ -279,22 +273,22 @@ def main() -> int:
                 print(f"      Classes: {', '.join(source.classes)}")
                 print()
         return 0
-    
+
     if not args.dataset and not args.all:
         parser.print_help()
         return 1
-    
+
     datasets_to_download = list(DATASET_SOURCES.keys()) if args.all else [args.dataset]
-    
-    results: Dict[str, List[Dict[str, any]]] = {}
-    
+
+    results: dict[str, list[dict[str, any]]] = {}
+
     for category in datasets_to_download:
         sources = DATASET_SOURCES.get(category, [])
         category_results = []
-        
+
         for source in sources:
             ok = download_dataset(source, api_key=args.api_key)
-            
+
             # Generate dataset.yaml if download succeeded
             if ok:
                 yaml_path = generate_dataset_yaml(source.name, source.target_dir, source.classes)
@@ -312,9 +306,9 @@ def main() -> int:
                     "path": str(source.target_dir),
                     "error": "Download failed",
                 })
-        
+
         results[category] = category_results
-    
+
     if args.json:
         print(json.dumps(results, indent=2, ensure_ascii=False))
     else:
@@ -329,7 +323,7 @@ def main() -> int:
                 if result["ok"]:
                     print(f"      Classes: {', '.join(result['classes'])}")
                     print(f"      Config: {result['yaml']}")
-    
+
     # Return success only if all downloads succeeded
     all_ok = all(r["ok"] for category_results in results.values() for r in category_results)
     return 0 if all_ok else 1

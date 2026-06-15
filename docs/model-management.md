@@ -88,10 +88,17 @@ versions:
 - 업로드 모델은 기본 disabled 상태로 등록하고 smoke test 성공 후 활성화합니다.
 - 모델별 latency, detection count, error count를 수집해야 합니다.
 
-## 현재 구현 상태
+## 현재 구현 상태 (Phase 10 기준 — 통합 완료)
 
-- `src/detection/model_registry.py`에 `MultiModelRegistry` foundation 구현 완료
+- `src/detection/model_registry.py`에 `MultiModelRegistry` 구현 완료
 - `config/model_profiles.yaml`의 `enabled: true` + `type: yolo_onnx` 모델만 로드
-- 개별 모델 로드 실패는 `failed_models`와 `load_status`에 기록
-- `detect_all(image)`는 `{model_name: detections}` 형태로 결과 반환
-- 아직 `SafetyPipeline` 통합은 다음 phase 작업
+- 개별 모델 로드 실패는 `failed_models`와 `load_status`에 기록 (전체 앱 장애 없음)
+- `detect_all(image)` 및 `detect_model(model_name, image)` — 모두 `class_map` 적용 후 반환
+- `get_model_metrics()` — 모델별 latency/error metrics 공개 API
+- **ONNX 메타데이터 자동 클래스 인식**: `classes: null`이면 ONNX `names` 메타데이터 우선 사용. config와 모델 클래스 수 불일치 시 메타데이터를 신뢰하고 경고 출력.
+- **SafetyPipeline 통합 완료** (Phase 4): `SafetyPipeline(model_registry=..., policy_engine=...)`으로 주입. 대시보드 `start_pipeline()`이 기본으로 policy-mode를 사용 (Phase 10 M0).
+- 사용자 업로드 모델: `src/models/upload_validator.py`가 ONNX 전용 업로드·검증·격리 저장·`enabled: false` 등록을 담당. 대시보드 "모델 업로드" 탭에서 관리.
+- 활성 사전학습 모델:
+  - `general_yolo`: `models/yolo26.onnx` (COCO 80클래스)
+  - `ppe_yolo`: `models/yolo26_ppe.onnx` (Hardhat/NO-Hardhat — `scripts/fetch_safety_models.py --all`로 다운로드)
+  - `fire_smoke_yolo`: `models/yolo26_fire_smoke.onnx` (fire 클래스 — smoke는 VLM 보조)

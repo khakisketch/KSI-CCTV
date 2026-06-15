@@ -3,11 +3,10 @@ KSI-CCTV 환경 점검 스크립트 (Phase 4)
 
 설치 및 실행 전에 시스템 환경을 점검합니다.
 """
-import sys
-import os
 import shutil
-import subprocess
-from pathlib import Path
+import sys
+from pathlib import Path  # noqa: I001
+
 
 # 색상 정의
 class Color:
@@ -112,7 +111,7 @@ def check_env():
 
 def check_directories():
     """필수 디렉토리 확인/생성"""
-    required_dirs = ["logs", "data", "data/captures"]
+    required_dirs = ["logs", "data", "data/captures", "models/uploaded"]
     for d in required_dirs:
         p = Path(d)
         if not p.exists():
@@ -152,7 +151,14 @@ def check_ollama():
 
 
 def check_gpu():
-    """GPU 확인 (선택사항)"""
+    """GPU 확인 및 ONNX Runtime CUDA provider 점검 (DGX Spark cu130/ARM64 대응)
+
+    pynvml로 GPU 존재만 확인하는 것을 넘어,
+    onnxruntime의 실제 CUDAExecutionProvider 가용 여부를 함께 점검한다.
+    CLAUDE.md 운영 주의: cu130 휠·ARM64 전용 설치가 필요하며 batch=-1 금지.
+    """
+    # 1. pynvml로 GPU 하드웨어 존재 확인
+    gpu_name = None
     try:
         import pynvml
         pynvml.nvmlInit()
@@ -160,11 +166,48 @@ def check_gpu():
         name = pynvml.nvmlDeviceGetName(handle)
         if isinstance(name, bytes):
             name = name.decode()
+        gpu_name = name
         ok(f"GPU 감지됨: {name}")
-        return True
     except Exception:
-        warn("GPU 미감지 (CPU 모드로 실행)")
-        return True  # GPU는 선택사항
+        warn("GPU 미감지 (CPU 모드로 실행됨)")
+
+    # 2. onnxruntime CUDAExecutionProvider 실제 가용 여부 확인
+    # DGX Spark(ARM64/sm_121/cu130): GPU가 있어도 잘못된 휠이면 CUDAProvider가 없음
+    try:
+        import onnxruntime as ort
+        available_providers = ort.get_available_providers()
+        has_cuda = "CUDAExecutionProvider" in available_providers
+        if has_cuda:
+            ok(f"ONNX Runtime CUDAExecutionProvider 사용 가능 (providers: {available_providers})")
+        else:
+            if gpu_name:
+                # GPU 하드웨어는 있지만 ORT CUDA provider가 없음 = cu130/ARM64 휠 불일치 가능성
+                warn(
+                    f"GPU({gpu_name})가 있지만 onnxruntime CUDAExecutionProvider를 찾을 수 없습니다. "
+                    "DGX Spark ARM64에서는 cu130/aarch64 전용 onnxruntime-gpu 휠이 필요합니다. "
+                    "CPU fallback으로 실행됩니다."
+                )
+            else:
+                warn(
+                    "onnxruntime CUDAExecutionProvider 미사용 — CPU fallback으로 실행됩니다. "
+                    f"(가용 providers: {available_providers})"
+                )
+    except ImportError:
+        # onnxruntime 미설치는 check_dependencies()에서 이미 오류로 잡힌다.
+        # GPU 점검 자체는 선택사항이므로 warn으로 처리하고 계속 진행.
+        warn("onnxruntime 미설치 — GPU provider 점검 불가. check_dependencies 결과를 확인하세요.")
+    except Exception as e:
+        warn(f"onnxruntime provider 점검 실패: {e}")
+
+    # 3. DGX Spark 운영 제약 안내
+    # batch=-1 금지: OOM 유발. check_environment 점검 범위에서 안내 제공.
+    warn(
+        "[DGX Spark 운영 주의] batch=-1 절대 금지 (통합메모리 OOM 유발). "
+        "학습/추론 시 고정 batch 값을 명시하세요. "
+        "PyTorch는 cu130 휠(--index-url https://download.pytorch.org/whl/cu126 이상)로 설치."
+    )
+
+    return True  # GPU/CUDA는 선택사항 (CPU fallback 지원)
 
 
 def main():
@@ -182,7 +225,7 @@ def main():
         ("디렉토리", check_directories),
         ("디스크 공간", check_disk_space),
         ("Ollama (VLM)", check_ollama),
-        ("GPU", check_gpu),
+        ("GPU / ONNX Runtime provider", check_gpu),
     ]
 
     all_ok = True
@@ -193,11 +236,11 @@ def main():
 
     print("\n" + "=" * 60)
     if all_ok:
-        print(f"{Color.GREEN}✅ 모든 점검 통과! KSI-CCTV를 실행할 수 있습니다.{Color.NC}")
+        print(f"{Color.GREEN}모든 점검 통과! KSI-CCTV를 실행할 수 있습니다.{Color.NC}")
         print("\n실행: ./scripts/run_dashboard.sh")
         return 0
     else:
-        print(f"{Color.YELLOW}⚠️  일부 점검 실패. 위의 경고/오류를 확인하세요.{Color.NC}")
+        print(f"{Color.YELLOW}일부 점검 실패. 위의 경고/오류를 확인하세요.{Color.NC}")
         print("\n설치: ./scripts/install.sh")
         return 1
 

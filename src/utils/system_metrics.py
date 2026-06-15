@@ -6,11 +6,9 @@ CPU, RAM, GPU, 디스크 사용량 수집 및 헬스체크 정보 제공.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +23,12 @@ class SystemMetrics:
     disk_percent: float = 0.0
     disk_used_gb: float = 0.0
     disk_total_gb: float = 0.0
-    gpu_percent: Optional[float] = None
-    gpu_memory_percent: Optional[float] = None
-    gpu_temperature: Optional[float] = None
+    gpu_percent: float | None = None
+    gpu_memory_percent: float | None = None
+    gpu_temperature: float | None = None
     timestamp: float = field(default_factory=time.time)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "cpu_percent": round(self.cpu_percent, 1),
             "memory_percent": round(self.memory_percent, 1),
@@ -54,7 +52,7 @@ def get_cpu_percent() -> float:
     except ImportError:
         # psutil 없으면 /proc/stat 기반 간단 계산
         try:
-            with open("/proc/stat", "r") as f:
+            with open("/proc/stat") as f:
                 line = f.readline()
             parts = line.split()
             total = sum(int(x) for x in parts[1:])
@@ -64,7 +62,7 @@ def get_cpu_percent() -> float:
             return 0.0
 
 
-def get_memory_info() -> Dict[str, float]:
+def get_memory_info() -> dict[str, float]:
     """메모리 사용 정보 조회"""
     try:
         import psutil
@@ -76,7 +74,7 @@ def get_memory_info() -> Dict[str, float]:
         }
     except ImportError:
         try:
-            with open("/proc/meminfo", "r") as f:
+            with open("/proc/meminfo") as f:
                 lines = f.readlines()
             info = {}
             for line in lines:
@@ -94,7 +92,7 @@ def get_memory_info() -> Dict[str, float]:
             return {"percent": 0, "used_mb": 0, "total_mb": 0}
 
 
-def get_disk_info(path: str = "/") -> Dict[str, float]:
+def get_disk_info(path: str = "/") -> dict[str, float]:
     """디스크 사용 정보 조회"""
     try:
         usage = shutil.disk_usage(path)
@@ -109,25 +107,78 @@ def get_disk_info(path: str = "/") -> Dict[str, float]:
         return {"percent": 0, "used_gb": 0, "total_gb": 0}
 
 
-def get_gpu_info() -> Dict[str, Optional[float]]:
-    """GPU 정보 조회 (pynvml 사용)"""
+def get_dir_size(path: str) -> float:
+    """디렉터리 전체 크기를 바이트 단위로 반환.
+
+    디렉터리가 없거나 접근 불가 시 0.0을 반환한다.
+    심볼릭 링크는 따라가지 않아 이중 집계를 방지한다.
+    """
+    import os
+    total = 0.0
+    try:
+        for dirpath, _dirnames, filenames in os.walk(path, followlinks=False):
+            for fname in filenames:
+                try:
+                    fp = os.path.join(dirpath, fname)
+                    total += os.path.getsize(fp)
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    return total
+
+
+def get_gpu_info() -> dict[str, float | None]:
+    """GPU 정보 조회 (pynvml 사용).
+
+    호출 실패를 세분화한다:
+    - util 조회 실패 시 percent=None, 다른 필드는 계속 시도한다.
+    - mem 조회 실패 시 memory_percent=None (0 오보고 방지).
+    - GPU 자체가 없으면(pynvml 예외) 전부 None 반환.
+    이렇게 하면 "GPU 없음"과 "GPU 있으나 일부 조회 실패"를 구분할 수 있다.
+    """
     try:
         import pynvml
         pynvml.nvmlInit()
+    except Exception:
+        # GPU 없음 또는 pynvml 초기화 실패
+        return {"percent": None, "memory_percent": None, "temperature": None}
+
+    try:
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-        mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        try:
-            temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
-        except Exception:
-            temp = None
-        return {
-            "percent": util.gpu,
-            "memory_percent": (mem.used / mem.total * 100) if mem.total > 0 else 0,
-            "temperature": float(temp) if temp is not None else None,
-        }
     except Exception:
         return {"percent": None, "memory_percent": None, "temperature": None}
+
+    # 각 지표를 독립적으로 조회해 부분 실패를 허용
+    gpu_percent: float | None = None
+    memory_percent: float | None = None
+    temperature: float | None = None
+
+    try:
+        util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+        gpu_percent = float(util.gpu)
+    except Exception:
+        gpu_percent = None
+
+    try:
+        mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        if mem.total > 0:
+            memory_percent = mem.used / mem.total * 100
+        # mem.total == 0 이면 memory_percent는 None 유지 (0 오보고 방지)
+    except Exception:
+        memory_percent = None
+
+    try:
+        temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+        temperature = float(temp)
+    except Exception:
+        temperature = None
+
+    return {
+        "percent": gpu_percent,
+        "memory_percent": memory_percent,
+        "temperature": temperature,
+    }
 
 
 def collect_metrics() -> SystemMetrics:
