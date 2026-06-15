@@ -416,22 +416,23 @@ def _record_login_failure() -> None:
 
 
 def require_dashboard_auth() -> bool:
-    """선택적 대시보드 비밀번호 보호 (해싱 기반 + rate limiting + session timeout).
+    """대시보드 비밀번호 보호 (해싱 기반 + rate limiting + session timeout).
 
-    비밀번호 미설정 또는 'change-me' 상태이면 무인증으로 통과하나,
-    운영 배포 위험을 알리는 경고 배너를 항상 표시한다.
+    비밀번호 미설정 또는 'change-me' 상태이면 **fail-closed**로 접근을 차단한다
+    (CCTV 캡처·감사 로그 무인증 노출 방지). 그 외에는 로그인 폼으로 인증을 요구한다.
     """
     ConfigLoader.load_env()
     password = os.environ.get("KSI_CCTV_DASHBOARD_PASSWORD", "").strip()
     if not password or password == "change-me":
-        # 무인증 모드: 이미지 갤러리·감사로그 등 PII가 노출될 수 있음을 경고
-        st.warning(
-            "**인증 비활성 상태** — `KSI_CCTV_DASHBOARD_PASSWORD` 환경변수가 설정되지 않았습니다. "
-            "운영 배포 시 반드시 비밀번호를 설정하고 재시작하세요. "
-            "현재 CCTV 캡처 이미지 및 감사 로그가 무인증으로 노출될 수 있습니다.",
-            icon="🔓",
+        # Fail-closed: 비밀번호 미설정/기본값이면 접근을 차단한다.
+        # (이전엔 경고만 띄우고 통과(return True)시켜 CCTV 캡처(PII)·감사 로그가 무인증 노출되는
+        #  fail-open 취약점이었다. docker-entrypoint/run_dashboard도 기동을 거부한다.)
+        st.error(
+            "**대시보드 접근 차단** — `KSI_CCTV_DASHBOARD_PASSWORD`가 설정되지 않았거나 기본값(change-me)입니다. "
+            "CCTV 캡처(PII)·감사 로그 보호를 위해 강력한 비밀번호를 설정한 뒤 재시작하세요.",
+            icon="🔒",
         )
-        return True
+        return False
 
     # Session timeout check (30 min inactivity)
     last_activity = st.session_state.get("last_activity")
@@ -665,7 +666,8 @@ def start_pipeline():
             blur_faces=bool(alerts_cfg.get("blur_faces", True)),
             face_blur_strength=int(alerts_cfg.get("face_blur_strength", 35)),
             log_max_bytes=int(alerts_cfg.get("log_max_bytes", 10 * 1024 * 1024)),
-            log_backup_count=int(alerts_cfg.get("log_backup_count", 5))
+            log_backup_count=int(alerts_cfg.get("log_backup_count", 5)),
+            encrypt_images=bool(alerts_cfg.get("encrypt_images", False)),
         )
         alert_manager = AlertManager(alert_config)
 
@@ -2044,6 +2046,12 @@ def _load_capture_fernet():
 def render_image_gallery():
     """캡처 이미지 갤러리 (Phase 3)"""
     st.subheader("📸 캡처 이미지 갤러리")
+
+    # PII 보호 게이트(defense-in-depth): 캡처 이미지는 얼굴 등 PII를 포함하고 .enc도 복호화 표시되므로
+    # 인증된(실 비밀번호) 세션만 조회 허용. require_dashboard_auth의 fail-closed와 별개로 이중 차단.
+    if not is_admin_model_management_allowed():
+        st.warning("🔒 캡처 이미지(PII)는 인증된 관리자만 조회할 수 있습니다. 대시보드 비밀번호 설정 후 로그인하세요.")
+        return
 
     from pathlib import Path
     image_dir = Path("./data/captures")

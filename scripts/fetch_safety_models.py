@@ -55,6 +55,9 @@ SAFETY_MODELS: dict[str, dict[str, any]] = {
     "fire_smoke_yolo": {
         # Flare Guard YOLO11n (Fire, Smoke, 일반 장면). GitHub raw 직접 다운로드.
         "url": "https://raw.githubusercontent.com/sayedgamal99/Real-Time-Smoke-Fire-Detection-YOLO11/main/models/best_nano_111.pt",
+        # 다운로드 무결성 검증용 SHA-256(2026-06-15 확인본). 업스트림이 변경되면 불일치로 거부되며,
+        # 검토 후 새 다이제스트로 갱신한다(MITM·임의 변경 방지).
+        "expected_sha256": "3cbeb9569d8c4057734a81437b90c3e95e55ebdd40a5c5ea7dd7873a247cef13",
         "output_name": "yolo26_fire_smoke.onnx",
         "imgsz": 640,
         "half": True,
@@ -210,10 +213,20 @@ def fetch_model(name: str, config: dict[str, any], skip_existing: bool = True) -
         _print_manual_instructions(name, source, config["output_name"])
         return False
 
+    # 다운로드 무결성: expected_sha256이 지정된 모델은 다이제스트가 일치해야 한다(MITM/임의변경 거부).
+    expected = config.get("expected_sha256")
+    if expected:
+        import hashlib
+        actual = hashlib.sha256(Path(pt_path).read_bytes()).hexdigest()
+        if actual != expected:
+            logger.error("[%s] SHA-256 불일치 — 다운로드 거부. expected=%s actual=%s", name, expected, actual)
+            return False
+        logger.info("[%s] SHA-256 검증 통과", name)
+
     logger.info("[%s] Found checkpoint: %s", name, pt_path)
 
     if not _export_to_onnx(pt_path, output_path, imgsz=config.get("imgsz", 640), half=config.get("half", True)):
-        _print_manual_instructions(name, repo_id, config["output_name"])
+        _print_manual_instructions(name, source, config["output_name"])
         return False
 
     if not _validate_onnx(output_path):

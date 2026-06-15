@@ -30,10 +30,11 @@ services:
     container_name: ksi-cctv
     environment:
       <<: *common-env
-      KSI_CCTV_MODE: daemon   # src/run.py 데몬 — 파이프라인 자동 기동 + /health(8081)
-    ports:
-      # 외부 모니터링/오케스트레이터가 헬스 프로브할 수 있도록 8081 노출
-      - "8081:8081"
+      KSI_CCTV_MODE: daemon   # src/run.py 데몬 — 파이프라인 자동 기동 + /health(8081, loopback)
+      # 컨테이너 내부 HEALTHCHECK(curl localhost:8081)용으로 loopback 바인드면 충분하다.
+      # 외부 모니터링이 필요하면 KSI_CCTV_HEALTH_HOST=0.0.0.0 설정 + 아래 ports에 "8081:8081" 추가.
+      KSI_CCTV_HEALTH_HOST: "127.0.0.1"
+    # 헬스 포트(8081)는 외부 노출하지 않는다(/health 운영상태 정보 보호). 필요 시 명시 opt-in.
     # GPU 설정(Compose Spec 표준). CPU-only 배포는 이 deploy 블록을 주석 처리.
     deploy:
       resources:

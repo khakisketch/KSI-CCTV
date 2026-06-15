@@ -621,7 +621,7 @@ class HealthHTTPHandler(BaseHTTPRequestHandler):
 
 
 def start_health_server(
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",  # 기본 loopback — /health 운영상태 정보의 외부노출 방지. 외부 모니터링은 0.0.0.0 opt-in.
     port: int = 8081,
     checker: HealthChecker | None = None,
 ) -> HTTPServer:

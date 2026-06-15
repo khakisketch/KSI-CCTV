@@ -157,6 +157,31 @@ def validate_file_size(file_path: Path, max_bytes: int = MAX_FILE_SIZE_BYTES) ->
         return False
 
 
+def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
+    """external-data(별도 파일에서 weight 로드)를 참조하는 ONNX를 거부한다.
+
+    악성 모델이 external_data location='../../.env' 같은 경로로 모델 디렉토리 밖 파일을
+    weight로 읽어 추론 출력으로 유출하는 arbitrary file read를 차단한다(onnxruntime<1.26은
+    path-escape 가드가 없음). 업로드 모델은 self-contained ONNX만 허용한다. InferenceSession을
+    만들기 **전에** 그래프만 파싱(load_external_data=False)해 검사하므로 외부 파일을 읽지 않는다.
+    """
+    try:
+        import onnx
+
+        model = onnx.load(str(file_path), load_external_data=False)
+    except Exception as exc:
+        return False, f"ONNX 파싱 실패: {exc}"
+
+    external = onnx.TensorProto.EXTERNAL
+    for init in model.graph.initializer:
+        if init.data_location == external:
+            return False, (
+                "외부 데이터(external data)를 참조하는 ONNX는 보안상 허용되지 않습니다. "
+                "self-contained ONNX(가중치 내장)만 업로드하세요."
+            )
+    return True, ""
+
+
 def validate_onnx_load(file_path: Path) -> tuple[bool, str]:
     """Check that ONNX Runtime can load the model and sees inputs/outputs."""
 
@@ -332,6 +357,11 @@ def upload_model(
         tmp_dir.mkdir(parents=True, exist_ok=True)
         with open(tmp_file, "wb") as f:
             f.write(file_bytes)
+
+        # 보안: InferenceSession 생성(외부 파일 읽기 발생) 전에 external-data 참조부터 차단한다.
+        ext_ok, ext_error = validate_onnx_no_external_data(tmp_file)
+        if not ext_ok:
+            return UploadResult(success=False, error=ext_error)
 
         load_ok, load_error = validate_onnx_load(tmp_file)
         if not load_ok:

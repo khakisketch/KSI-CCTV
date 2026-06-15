@@ -81,9 +81,20 @@ def create_vlm_provider(vlm_config: dict[str, Any] | None) -> VLMProvider | None
         return None
     provider_name = str(cfg.get("provider", "ollama")).strip().lower()
     if provider_name in {"ollama", ""}:
+        base_url = cfg.get("base_url", "http://localhost:11434")
+        # base_url 스킴 검증 — CCTV 프레임(PII)을 의도치 않은 스킴/대상으로 전송하지 않도록.
+        # (file://·gopher:// 등 SSRF성 스킴 차단. http/https만 허용.)
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            logger.warning(
+                "VLM base_url 스킴이 유효하지 않습니다(%s) — VLM 비활성. http(s)://host[:port] 형식이어야 합니다.",
+                base_url,
+            )
+            return None
         from src.vlm.ollama_provider import OllamaProvider
         return OllamaProvider(
-            base_url=cfg.get("base_url", "http://localhost:11434"),
+            base_url=base_url,
             model=cfg.get("model_name", "qwen3-vl:latest"),
             timeout_sec=float(cfg.get("timeout_sec", 60)),
             max_retries=int(cfg.get("max_retries", 2)),

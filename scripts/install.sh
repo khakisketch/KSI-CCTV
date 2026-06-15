@@ -78,6 +78,7 @@ mkdir -p data/captures logs data/sample models/uploaded
 if [ ! -f ".env" ]; then
     log_info ".env 파일 생성 중..."
     cp .env.example .env
+    chmod 600 .env   # 비밀 파일 — 소유자만 읽기(group/other 노출 차단)
     log_warn ".env 파일을 편집하여 RTSP URL과 비밀번호를 설정하세요."
 fi
 

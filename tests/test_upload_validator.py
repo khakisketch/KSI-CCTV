@@ -49,7 +49,9 @@ class TestUploadValidator(unittest.TestCase):
             profiles_path = Path(tmp) / "model_profiles.yaml"
             profiles_path.write_text("models: {}\n", encoding="utf-8")
 
-            with patch.object(uv, "validate_onnx_load", return_value=(True, "")), patch.object(
+            with patch.object(uv, "validate_onnx_no_external_data", return_value=(True, "")), patch.object(
+                uv, "validate_onnx_load", return_value=(True, "")
+            ), patch.object(
                 uv, "validate_onnx_shape_metadata", return_value=(True, "")
             ), patch.object(uv, "validate_onnx_inference", return_value=(True, "")):
                 result = uv.upload_model(
@@ -90,7 +92,9 @@ class TestUploadValidator(unittest.TestCase):
 
     def test_shape_metadata_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(uv, "validate_onnx_load", return_value=(True, "")), patch.object(
+            with patch.object(uv, "validate_onnx_no_external_data", return_value=(True, "")), patch.object(
+                uv, "validate_onnx_load", return_value=(True, "")
+            ), patch.object(
                 uv, "validate_onnx_shape_metadata", return_value=(False, "shape mismatch")
             ), patch.object(uv, "validate_onnx_inference") as inference_mock:
                 result = uv.upload_model(
@@ -110,7 +114,9 @@ class TestUploadValidator(unittest.TestCase):
             profiles_path = Path(tmp) / "model_profiles.yaml"
             profiles_path.write_text("models: {}\n", encoding="utf-8")
 
-            with patch.object(uv, "validate_onnx_load", return_value=(True, "")), patch.object(
+            with patch.object(uv, "validate_onnx_no_external_data", return_value=(True, "")), patch.object(
+                uv, "validate_onnx_load", return_value=(True, "")
+            ), patch.object(
                 uv, "validate_onnx_shape_metadata", return_value=(True, "")
             ), patch.object(uv, "validate_onnx_inference", return_value=(True, "")):
                 result = uv.upload_model(
@@ -635,6 +641,48 @@ class TestGetUploadedModelsEdgeCases(unittest.TestCase):
 
     def test_returns_empty_when_base_missing(self):
         self.assertEqual(uv.get_uploaded_models(Path("/nonexistent/uploaded")), [])
+
+
+@unittest.skipUnless(_HAS_ONNX_BUILDER, "onnx 패키지 없음 — skip")
+class TestValidateOnnxNoExternalData(unittest.TestCase):
+    """보안 회귀: external-data 참조 ONNX(arbitrary file read PoC)를 거부해야 한다."""
+
+    def test_self_contained_onnx_passes(self):
+        """가중치 내장 ONNX는 통과한다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clean.onnx"
+            path.write_bytes(_make_minimal_onnx_bytes(h=320, w=320))
+            ok, err = uv.validate_onnx_no_external_data(path)
+            self.assertTrue(ok, err)
+
+    def test_external_data_onnx_is_rejected(self):
+        """external_data location으로 모델 밖 파일을 가리키는 ONNX는 거부한다."""
+        from onnx import TensorProto, helper
+
+        # 임의 파일(../../.env 등)을 weight 출처로 지정한 external-data initializer
+        ext = helper.make_tensor(
+            name="w", data_type=TensorProto.FLOAT, dims=[1], vals=[0.0]
+        )
+        ext.data_location = TensorProto.EXTERNAL
+        del ext.float_data[:]
+        for key, val in (("location", "../../../../etc/passwd"), ("offset", "0"), ("length", "64")):
+            entry = ext.external_data.add()
+            entry.key = key
+            entry.value = val
+
+        input_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1])
+        output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])
+        node = helper.make_node("Add", inputs=["input", "w"], outputs=["output"])
+        graph = helper.make_graph([node], "evil", [input_info], [output_info], initializer=[ext])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
+        model.ir_version = 7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "evil.onnx"
+            path.write_bytes(model.SerializeToString())
+            ok, err = uv.validate_onnx_no_external_data(path)
+            self.assertFalse(ok)
+            self.assertIn("외부 데이터", err)
 
 
 class TestSetProfileEnabledWrongSource(unittest.TestCase):

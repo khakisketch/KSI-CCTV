@@ -117,6 +117,7 @@ def build_pipeline(config: AppConfig) -> tuple[SafetyPipeline, AlertManager, Mul
         face_blur_strength=int(alerts_cfg.get("face_blur_strength", 35)),
         log_max_bytes=int(alerts_cfg.get("log_max_bytes", 10 * 1024 * 1024)),
         log_backup_count=int(alerts_cfg.get("log_backup_count", 5)),
+        encrypt_images=bool(alerts_cfg.get("encrypt_images", False)),
     ))
 
     def on_alert(event: SafetyEvent) -> None:
@@ -187,7 +188,9 @@ def main() -> int:
     checker.register("memory_usage", check_memory_usage)
     checker.register("ollama", check_ollama_available)
     register_pipeline_health_checks(checker, pipeline)
-    health_host = os.environ.get("KSI_CCTV_HEALTH_HOST", "0.0.0.0")
+    # 기본 loopback — /health 운영상태 외부노출 방지. 컨테이너 내부 HEALTHCHECK(curl localhost)는
+    # 이걸로 충분하며, 외부 모니터링이 필요하면 KSI_CCTV_HEALTH_HOST=0.0.0.0로 명시 opt-in.
+    health_host = os.environ.get("KSI_CCTV_HEALTH_HOST", "127.0.0.1")
     health_port = int(os.environ.get("KSI_CCTV_HEALTH_PORT", "8081"))
     try:
         start_health_server(host=health_host, port=health_port, checker=checker)

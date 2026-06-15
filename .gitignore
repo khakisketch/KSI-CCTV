@@ -1,9 +1,13 @@
 # KSI-CCTV
-# Model files are tracked via Git LFS (see .gitattributes)
-# *.onnx
-# *.pt
-# *.pth
-# *.weights
+# 모델 가중치는 저장소에 커밋하지 않는다 — (1) 60MB+ 바이너리 repo 비대화,
+# (2) Ultralytics YOLO .pt/.onnx는 AGPL-3.0 파생물(상용 비공개 배포 시 라이선스 위험),
+# (3) scripts/fetch_safety_models.py로 재현 가능한 산출물이지 소스가 아님.
+# models/.gitkeep만 추적해 디렉터리 구조를 유지한다.
+*.onnx
+*.pt
+*.pth
+*.weights
+models/backup/
 data/captures/
 logs/
 models/uploaded/

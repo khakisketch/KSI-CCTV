@@ -553,29 +553,29 @@ class TestRenderCocoWarning:
 # ──────────────────────────────────────────────
 
 class TestAuthBanner:
-    def test_no_password_shows_warning_and_returns_true(self):
-        """비밀번호 미설정 시 True 반환 + 경고 배너."""
+    def test_no_password_blocks_access_fail_closed(self):
+        """비밀번호 미설정 시 fail-closed로 접근 차단(False) + 오류 배너."""
         _st_stub.session_state.clear()
-        _st_stub.warning = MagicMock()
+        _st_stub.error = MagicMock()
         with (
             patch.dict("os.environ", {"KSI_CCTV_DASHBOARD_PASSWORD": ""}, clear=False),
             patch("src.dashboard.app.ConfigLoader.load_env"),
         ):
             result = app.require_dashboard_auth()
-        assert result is True
-        _st_stub.warning.assert_called()
+        assert result is False
+        _st_stub.error.assert_called()
 
-    def test_change_me_password_shows_warning(self):
-        """'change-me' 비밀번호이면 경고 배너 표시."""
+    def test_change_me_password_blocks_access_fail_closed(self):
+        """'change-me' 기본값이면 fail-closed로 접근 차단(False) + 오류 배너."""
         _st_stub.session_state.clear()
-        _st_stub.warning = MagicMock()
+        _st_stub.error = MagicMock()
         with (
             patch.dict("os.environ", {"KSI_CCTV_DASHBOARD_PASSWORD": "change-me"}, clear=False),
             patch("src.dashboard.app.ConfigLoader.load_env"),
         ):
             result = app.require_dashboard_auth()
-        assert result is True
-        _st_stub.warning.assert_called()
+        assert result is False
+        _st_stub.error.assert_called()
 
 
 # ──────────────────────────────────────────────
