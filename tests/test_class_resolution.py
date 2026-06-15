@@ -93,30 +93,33 @@ _FIRE_MODEL = _MODELS_DIR / "yolo26_fire_smoke.onnx"
 class TestMetadataIntegration(unittest.TestCase):
     """실제 ONNX 모델로 메타데이터 자동 인식이 동작하는지 검증."""
 
+    # 공개 PPE 모델(Hansung-Cho/yolov8-ppe-detection, 10-class) 메타데이터
+    _PPE_NAMES = {
+        0: "Hardhat", 1: "Mask", 2: "NO-Hardhat", 3: "NO-Mask", 4: "NO-Safety Vest",
+        5: "Person", 6: "Safety Cone", 7: "Safety Vest", 8: "machinery", 9: "vehicle",
+    }
+
     def test_ppe_classes_auto_detected_from_metadata(self):
         det = YOLODetector(
             model_path=str(_PPE_MODEL), classes=None, class_profile="safety_custom", device="cpu"
         )
-        self.assertEqual(det.classes, {0: "Hardhat", 1: "NO-Hardhat"})
+        self.assertEqual(det.classes, self._PPE_NAMES)
 
     def test_fire_classes_auto_detected_from_metadata(self):
         det = YOLODetector(
             model_path=str(_FIRE_MODEL), classes=None, class_profile="custom", device="cpu"
         )
-        self.assertEqual(
-            det.classes,
-            {0: "fire-smoke", 1: "fog", 2: "sol", 3: "fire", 4: "factory-smoke"},
-        )
+        self.assertEqual(det.classes, {0: "Fire", 1: "Smoke"})
 
     def test_wrong_config_classes_overridden_by_metadata(self):
-        # 일부러 틀린 classes(3개)를 줘도 메타데이터(2개)가 이긴다 → 오라벨 방지
+        # 일부러 틀린 classes(3개)를 줘도 모델 메타데이터(10개)가 이긴다 → 오라벨 방지
         det = YOLODetector(
             model_path=str(_PPE_MODEL),
             classes=["person", "helmet", "vest"],
             class_profile="safety_custom",
             device="cpu",
         )
-        self.assertEqual(det.classes, {0: "Hardhat", 1: "NO-Hardhat"})
+        self.assertEqual(det.classes, self._PPE_NAMES)
 
 
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requires cv2/onnxruntime/numpy")

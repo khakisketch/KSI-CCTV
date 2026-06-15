@@ -34,28 +34,32 @@ ROOT = Path(__file__).resolve().parents[1]
 MODELS_DIR = ROOT / "models"
 
 # Model definitions: model_id → config
+# 추천 공개 모델(docs/model-sourcing.md). ⚠️ Ultralytics 가중치는 AGPL-3.0 — 상용 배포 시 검토.
+# repo_id=Hugging Face 다운로드, url=직접 .pt 다운로드(GitHub raw 등).
 SAFETY_MODELS: dict[str, dict[str, any]] = {
     "ppe_yolo": {
-        "repo_id": "keremberke/yolov8n-hard-hat-detection",
+        # Hansung-Cho/yolov8-ppe-detection (10-class, helmet+vest 지원). ungated.
+        "repo_id": "Hansung-Cho/yolov8-ppe-detection",
         "output_name": "yolo26_ppe.onnx",
         "imgsz": 640,
         "half": True,
         "class_map": {
             "Hardhat": "helmet",
             "NO-Hardhat": "no_helmet",
-            "Helmet": "helmet",
-            "NO-Helmet": "no_helmet",
+            "Safety Vest": "vest",
+            "NO-Safety Vest": "no_vest",
+            "Person": "person",
+            # Mask/NO-Mask/Safety Cone/machinery/vehicle는 KSI 표준 외 → 미매핑
         },
     },
     "fire_smoke_yolo": {
-        "repo_id": "touati-kamel/yolov8s-forest-fire-detection",
+        # Flare Guard YOLO11n (Fire, Smoke, 일반 장면). GitHub raw 직접 다운로드.
+        "url": "https://raw.githubusercontent.com/sayedgamal99/Real-Time-Smoke-Fire-Detection-YOLO11/main/models/best_nano_111.pt",
         "output_name": "yolo26_fire_smoke.onnx",
         "imgsz": 640,
         "half": True,
         "class_map": {
-            "fire": "fire",
             "Fire": "fire",
-            "smoke": "smoke",
             "Smoke": "smoke",
         },
     },
@@ -88,6 +92,21 @@ def _download_hf(repo_id: str, local_dir: Path) -> Path | None:
         return Path(path)
     except Exception as exc:
         logger.error("Failed to download %s: %s", repo_id, exc)
+        return None
+
+
+def _download_url(url: str, dest_dir: Path) -> Path | None:
+    """직접 URL(.pt)을 다운로드해 저장 경로를 반환(GitHub raw 등 HF 외 출처)."""
+    try:
+        import urllib.request
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / Path(url).name
+        logger.info("Downloading %s ...", url)
+        urllib.request.urlretrieve(url, dest)  # noqa: S310 (신뢰된 모델 URL)
+        logger.info("Downloaded to %s", dest)
+        return dest
+    except Exception as exc:
+        logger.error("URL download failed: %s", exc)
         return None
 
 
@@ -162,31 +181,33 @@ def fetch_model(name: str, config: dict[str, any], skip_existing: bool = True) -
         logger.info("[%s] ONNX model already exists: %s", name, output_path)
         return _validate_onnx(output_path)
 
-    repo_id = config["repo_id"]
-    logger.info("[%s] Fetching %s ...", name, repo_id)
-
-    if not _has_hf_hub():
-        logger.warning("huggingface_hub not installed. Cannot auto-download.")
-        _print_manual_instructions(name, repo_id, config["output_name"])
-        return False
+    repo_id = config.get("repo_id")
+    url = config.get("url")
+    source = repo_id or url
+    logger.info("[%s] Fetching %s ...", name, source)
 
     if not _has_ultralytics():
         logger.warning("ultralytics not installed. Cannot export to ONNX.")
-        _print_manual_instructions(name, repo_id, config["output_name"])
+        _print_manual_instructions(name, source, config["output_name"])
         return False
 
     download_dir = MODELS_DIR / f"_download_{name}"
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    model_dir = _download_hf(repo_id, download_dir)
-    if model_dir is None:
-        _print_manual_instructions(name, repo_id, config["output_name"])
-        return False
+    if url:
+        # 직접 URL(.pt) 다운로드 (GitHub raw 등)
+        pt_path = _download_url(url, download_dir)
+    else:
+        if not _has_hf_hub():
+            logger.warning("huggingface_hub not installed. Cannot auto-download.")
+            _print_manual_instructions(name, source, config["output_name"])
+            return False
+        model_dir = _download_hf(repo_id, download_dir)
+        pt_path = _find_best_ckpt(model_dir) if model_dir is not None else None
 
-    pt_path = _find_best_ckpt(model_dir)
     if pt_path is None:
-        logger.error("No .pt checkpoint found in %s", model_dir)
-        _print_manual_instructions(name, repo_id, config["output_name"])
+        logger.error("[%s] 체크포인트 다운로드 실패", name)
+        _print_manual_instructions(name, source, config["output_name"])
         return False
 
     logger.info("[%s] Found checkpoint: %s", name, pt_path)

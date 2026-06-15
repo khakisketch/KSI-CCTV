@@ -24,8 +24,9 @@ models:
     model_path: "./models/yolo26_ppe.onnx"
     class_profile: safety_custom
     # classes는 ONNX 모델에 내장된 names 메타데이터에서 자동 인식한다(null 권장).
-    # 실측 메타데이터: {0: Hardhat, 1: NO-Hardhat} — 2 classes, output [1,6,8400]. vest 미지원.
-    # 아래 class_map이 모델 클래스명 → KSI-CCTV 표준명으로 변환한다.
+    # 실측 메타데이터(Hansung-Cho/yolov8-ppe-detection, 10-class, output [1,14,8400]):
+    #   {0:Hardhat,1:Mask,2:NO-Hardhat,3:NO-Mask,4:NO-Safety Vest,5:Person,6:Safety Cone,7:Safety Vest,8:machinery,9:vehicle}
+    # 아래 class_map이 모델 클래스명 → KSI-CCTV 표준명으로 변환한다(helmet+vest 모두 지원).
     classes: null
     input_size: [640, 640]
     conf_threshold: 0.30
@@ -33,11 +34,14 @@ models:
     postprocess_mode: auto
     device: cuda
     fp16: true
-    description: "Pre-trained hard-hat model (keremberke/yolov8n-hard-hat-detection). 2-class Hardhat/NO-Hardhat → helmet/no_helmet. 조끼는 미지원(커스텀 모델 필요)."
-    # 모델 실제 클래스명 → KSI-CCTV 표준 클래스명
+    description: "공개 pretrained PPE 모델(Hansung-Cho/yolov8-ppe-detection, 10-class). helmet+vest 지원(no_helmet/no_vest 탐지). mAP@50 0.744. ⚠️가중치 AGPL-3.0 — 상용 배포 시 라이선스 검토(docs/model-sourcing.md)."
+    # 모델 실제 클래스명 → KSI-CCTV 표준 클래스명 (Mask/NO-Mask/Safety Cone/machinery/vehicle는 표준 외 → 미매핑)
     class_map:
       Hardhat: helmet
       NO-Hardhat: no_helmet
+      Safety Vest: vest
+      NO-Safety Vest: no_vest
+      Person: person
 
   fire_smoke_yolo:
     enabled: true
@@ -46,22 +50,20 @@ models:
     model_path: "./models/yolo26_fire_smoke.onnx"
     class_profile: custom
     # classes는 ONNX 모델에 내장된 names 메타데이터에서 자동 인식한다(null 권장).
-    # 실측 메타데이터: {0: fire-smoke, 1: fog, 2: sol, 3: fire, 4: factory-smoke}
-    #   — 5 classes, output [1,9,8400]. (touati-kamel/yolov8s-forest-fire-detection)
-    # 아래 class_map이 fire-smoke/fire → fire, factory-smoke → smoke로 변환(fog/sol은 미매핑).
+    # 실측 메타데이터(Flare Guard YOLO11n, output [1,6,8400]): {0: Fire, 1: Smoke} — 일반 장면.
+    # 아래 class_map이 Fire → fire, Smoke → smoke로 변환.
     classes: null
     input_size: [640, 640]
-    conf_threshold: 0.20
-    iou_threshold: 0.40
+    conf_threshold: 0.25
+    iou_threshold: 0.45
     postprocess_mode: auto
     device: cuda
     fp16: true
-    description: "Pre-trained forest-fire model (touati-kamel/yolov8s-forest-fire-detection), 5-class. fire-smoke/fire → fire, factory-smoke → smoke. fog/sol은 무관(미매핑)."
-    # 모델 실제 클래스명 → KSI-CCTV 표준 클래스명 (fog, sol은 의도적으로 미매핑 = 어떤 정책도 트리거 안 함)
+    description: "공개 pretrained 화재/연기 모델(Flare Guard YOLO11n, fire+smoke). 일반 장면(forest-only 아님). mAP@50 0.770. ⚠️가중치 AGPL-3.0/LICENSE 부재 — 상용 배포 시 검토(docs/model-sourcing.md)."
+    # 모델 실제 클래스명 → KSI-CCTV 표준 클래스명
     class_map:
-      fire-smoke: fire
-      fire: fire
-      factory-smoke: smoke
+      Fire: fire
+      Smoke: smoke
 
   pose_fall_model:
     enabled: false
