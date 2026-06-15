@@ -456,5 +456,34 @@ class TestPromptSelectorUnmappedWarning(unittest.TestCase):
         self.assertIn("주차", prompt)
 
 
+class TestCreateVlmProvider(unittest.TestCase):
+    """create_vlm_provider 팩토리 — config의 provider 키를 따라 생성/비활성."""
+
+    def test_disabled_returns_none(self):
+        from src.vlm.vlm_inference import create_vlm_provider
+        self.assertIsNone(create_vlm_provider({"enabled": False}))
+        self.assertIsNone(create_vlm_provider(None))
+
+    def test_unknown_provider_returns_none(self):
+        from src.vlm.vlm_inference import create_vlm_provider
+        self.assertIsNone(create_vlm_provider({"enabled": True, "provider": "foobar"}))
+
+    def test_ollama_provider_created(self):
+        from src.vlm.ollama_provider import OllamaProvider
+        from src.vlm.vlm_inference import create_vlm_provider
+        p = create_vlm_provider({
+            "enabled": True, "provider": "ollama",
+            "model_name": "qwen3-vl:latest", "base_url": "http://localhost:11434",
+        })
+        self.assertIsInstance(p, OllamaProvider)
+
+    def test_default_provider_is_ollama(self):
+        from src.vlm.ollama_provider import OllamaProvider
+        from src.vlm.vlm_inference import create_vlm_provider
+        # provider 키 생략 시 ollama 기본
+        p = create_vlm_provider({"enabled": True})
+        self.assertIsInstance(p, OllamaProvider)
+
+
 if __name__ == "__main__":
     unittest.main()

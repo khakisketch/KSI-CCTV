@@ -106,19 +106,32 @@
 - [x] 사이트별 하드닝 (read-only healthcheck, least-privilege systemd paths)
 - [x] docs/deployment-guide.md
 
-## Phase 8. 커스텀 안전 모델 학습 및 통합 ⏳
+## Phase 8. Safety 모델 통합 ✅
 
-상태: 진행 중. 코드 인프라 준비 완료, 실제 학습은 추후 실행.
+> **1차 모델 전략**: 적합 공개 pretrained 모델 큐레이션 + 사용자 업로드 ONNX 모델.
+> `MultiModelRegistry` / `class_adapter` / 업로드 검증(`upload_validator`) / ONNX 메타데이터-우선 클래스 인식이 이 전략을 지원한다.
+>
+> **from-scratch 커스텀 학습은 project-definition.md 명시적 비목표(현재 버전)다.**
+> 데이터셋/GPU 인프라가 준비된 경우의 선택적 후속 작업으로 분리해 Phase D(`docs/phase-cd-readiness.md`)에 runbook을 두었다.
+
+상태: 핵심 모델 통합 완료. from-scratch 학습(M4)은 선택/후순위로 분류.
 
 작업:
 
-### Milestone 1: 사전학습 모델 통합 ✅
-- [x] `src/detection/class_adapter.py` — 클래스 매핑 어댑터
-- [x] `scripts/fetch_safety_models.py` — Hugging Face 모델 다운로드/ONNX 변환
-- [x] `config/model_profiles.yaml` — ppe_yolo, fire_smoke_yolo 활성화
+### Milestone 1: 공개 pretrained 모델 큐레이션 및 통합 ✅
+
+> **현재 운영 모델 전략** — 학습 없이 바로 사용 가능한 공개 pretrained ONNX 모델을 큐레이션해 연동한다.
+> 사용자는 동일 경로로 자체 ONNX 모델을 업로드해 대체할 수 있다(Phase 6 사용자 업로드).
+
+- [x] `src/detection/class_adapter.py` — 클래스 매핑 어댑터 (ONNX 메타데이터 우선, config fallback)
+- [x] `scripts/fetch_safety_models.py` — Hugging Face 공개 모델 다운로드/ONNX 변환 (ppe_yolo, fire_smoke_yolo)
+- [x] `config/model_profiles.yaml` — ppe_yolo(`Hardhat/NO-Hardhat`), fire_smoke_yolo(`fire`) 활성화
 - [x] `config/event_policies.yaml` — smoke 이벤트 fallback 수정
 
 ### Milestone 2: 데이터셋 인프라 ✅
+
+> 공개 데이터셋 탐색·변환·검증 도구. from-scratch 학습이 필요해지는 경우의 사전 인프라로도 활용 가능.
+
 - [x] `scripts/download_datasets.py` — Kaggle/Roboflow/URL 데이터셋 다운로드
 - [x] `scripts/convert_to_yolo.py` — VOC/COCO/CSV/Labelme → YOLO 변환
 - [x] `scripts/validate_dataset.py` — 데이터셋 무결성 검증
@@ -133,9 +146,12 @@
 - [x] docs/deployment-guide.md
 - [x] docs/custom-model-training.md
 
-### Milestone 4: 커스텀 학습 (대기) ⏳
-- [ ] scripts/train_ppe.py
-- [ ] scripts/train_fire_smoke.py
-- [ ] scripts/export_to_onnx.py
-- [ ] 실제 데이터셋 다운로드 및 학습 실행
-- [ ] 학습된 모델로 사전학습 모델 교체
+### Milestone 4: from-scratch 커스텀 학습 (선택/후순위) ⏳
+
+> **비고**: `project-definition.md`의 명시적 비목표(자동 모델 학습 파이프라인 — 현재 버전).
+> 1차 전략(공개 pretrained + 사용자 업로드)으로 커버되지 않는 현장 정확도 요구가 확인된 경우에만 진행한다.
+> 실행 절차는 `docs/phase-cd-readiness.md` Phase D를 따른다.
+
+- [ ] 실제 데이터셋 다운로드 및 학습 실행 (인터넷/GPU 환경 + 라이선스 확인 필요)
+- [ ] 검증셋 mAP 측정 (`docs/phase-cd-readiness.md` D5 합격 기준 충족)
+- [ ] 학습된 ONNX 모델로 pretrained 모델 교체 및 e2e smoke test 재검증

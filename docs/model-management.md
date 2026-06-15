@@ -88,6 +88,28 @@ versions:
 - 업로드 모델은 기본 disabled 상태로 등록하고 smoke test 성공 후 활성화합니다.
 - 모델별 latency, detection count, error count를 수집해야 합니다.
 
+## VLM provider (2차 정밀분석) — 결정 기록
+
+YOLO 1차 탐지를 보완하는 2차 정밀분석(VLM)은 **선택적 컴포넌트**다. 없으면 1차 탐지만으로
+동작하고, 있으면 애매/위험 이벤트를 자연어로 확인한다.
+
+- **기본 = on-prem Ollama (`qwen3-vl`).** CCTV 프레임에는 얼굴 등 PII가 포함되므로 외부 API로
+  전송하지 않는 **로컬 추론**을 채택한다(ADR-0001 "외부 SaaS 미사용", 클라우드 호스팅은 제품 비목표).
+- **provider는 교체 가능(pluggable).** `src/vlm/vlm_inference.py`의 `VLMProvider`(ABC)를 구현하고
+  `config/model_profiles.yaml`의 `vlm.provider` 키 + `create_vlm_provider()` 팩토리에 분기를 추가하면
+  된다. 현재 `ollama` 지원. `vlm.enabled: false`이거나 미지원 provider면 VLM은 비활성(2차 분석 생략).
+- **개발 환경 주의:** 로컬에 Ollama 런타임이 없으면 VLM은 inert이며 실 VLM 테스트는 skip된다(정상).
+  실 VLM 종단 검증은 `KSI_CCTV_TEST_VLM=1`로 Ollama 가동 시 수행한다(`docs/phase-cd-readiness.md` C4).
+- **provider 설정:**
+  ```yaml
+  # config/model_profiles.yaml
+  vlm:
+    enabled: true        # false면 2차 분석 없이 1차 YOLO만
+    provider: ollama     # 현재 지원: ollama
+    model_name: "qwen3-vl:latest"
+    base_url: "http://localhost:11434"
+  ```
+
 ## 현재 구현 상태 (Phase 10 기준 — 통합 완료)
 
 - `src/detection/model_registry.py`에 `MultiModelRegistry` 구현 완료

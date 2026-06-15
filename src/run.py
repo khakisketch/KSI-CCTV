@@ -33,6 +33,7 @@ from src.utils.health import (
     register_pipeline_health_checks,
     start_health_server,
 )
+from src.vlm.vlm_inference import create_vlm_provider
 
 logger = logging.getLogger("ksi_cctv.run")
 
@@ -123,20 +124,20 @@ def build_pipeline(config: AppConfig) -> tuple[SafetyPipeline, AlertManager, Mul
 
     pipeline.add_alert_callback(on_alert)
 
-    # VLM 활성화 (설정 시)
+    # VLM 활성화 (설정 시) — provider 팩토리로 config의 provider 키를 따라 생성(선택적 컴포넌트).
     vlm_cfg = config.get("models", "vlm", default={}) or {}
-    if bool(vlm_cfg.get("enabled", False)):
-        from src.vlm.ollama_provider import OllamaProvider
-        provider = OllamaProvider(
-            base_url=vlm_cfg.get("base_url", "http://localhost:11434"),
-            model=vlm_cfg.get("model_name", "qwen3-vl:latest"),
-            timeout_sec=float(vlm_cfg.get("timeout_sec", 60)),
-            max_retries=int(vlm_cfg.get("max_retries", 2)),
-        )
+    provider = create_vlm_provider(vlm_cfg)
+    if provider is not None:
         pipeline.enable_vlm(
             provider, vlm_cfg.get("prompt_template", "./config/prompts/construction.yaml")
         )
-        logger.info("VLM 활성화: %s", vlm_cfg.get("model_name", "qwen3-vl:latest"))
+        logger.info(
+            "VLM 활성화: provider=%s model=%s",
+            vlm_cfg.get("provider", "ollama"),
+            vlm_cfg.get("model_name", "qwen3-vl:latest"),
+        )
+    else:
+        logger.info("VLM 비활성(2차 정밀분석 없음) — 1차 YOLO 탐지만 수행.")
 
     return pipeline, alert_manager, registry
 

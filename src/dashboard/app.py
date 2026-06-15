@@ -682,16 +682,11 @@ def start_pipeline():
         pipeline.add_alert_callback(on_event)
         pipeline.add_analysis_callback(on_analysis_event)
 
-        # VLM 활성화
+        # VLM 활성화 — provider 팩토리로 config의 provider 키를 따라 생성(선택적 컴포넌트, run.py와 동일 경로)
         vlm_cfg = config.get('models', 'vlm', default={})
-        if bool(vlm_cfg.get("enabled", False)):
-            from src.vlm.ollama_provider import OllamaProvider
-            provider = OllamaProvider(
-                base_url=vlm_cfg.get("base_url", "http://localhost:11434"),
-                model=vlm_cfg.get("model_name", "qwen3-vl:latest"),
-                timeout_sec=float(vlm_cfg.get("timeout_sec", 60)),
-                max_retries=int(vlm_cfg.get("max_retries", 2)),
-            )
+        from src.vlm.vlm_inference import create_vlm_provider
+        provider = create_vlm_provider(vlm_cfg)
+        if provider is not None:
             prompt_path = vlm_cfg.get(
                 "prompt_template", "./config/prompts/construction.yaml"
             )

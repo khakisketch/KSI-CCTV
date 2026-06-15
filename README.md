@@ -112,7 +112,8 @@ bash scripts/run_dashboard.sh
 | `docs/delivery-checklist.md` | 납품용 설치 체크리스트 + 시연 체크리스트 |
 | `docs/deployment-guide.md` | 설치·배포·systemd 상세 가이드 |
 | `docs/architecture.md` | 목표 아키텍처 (policy-mode) |
-| `docs/model-management.md` | 모델 관리 전략 |
+| `docs/model-management.md` | 모델 관리 전략 (VLM provider 결정 포함) |
+| `docs/model-sourcing.md` | **공개 사전학습 모델 소싱 가이드** (PPE/화재 추천·AGPL 경고·교체 절차) |
 | `docs/event-policy-engine.md` | 이벤트 정책 엔진 설계 |
 | `docs/custom-model-training.md` | 커스텀 모델 학습 전체 가이드 |
 | `docs/phase-cd-readiness.md` | **Phase C/D 실행 runbook** — 실환경 검증·커스텀 모델 정량 합격 기준 |

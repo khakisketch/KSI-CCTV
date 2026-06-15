@@ -106,20 +106,38 @@
 
 - YOLO person 탐지만으로도 VLM이 안전모/조끼/쓰러짐/화재 의심 상황을 설명할 수 있다.
 
-### M2.3 커스텀 Safety YOLO26 모델 준비
+### M2.3 Safety YOLO 모델 전략 — 공개 pretrained + 사용자 업로드 (1차 전략 완료)
+
+> **1차 모델 전략**: 적합 공개 pretrained ONNX 모델 큐레이션 + 사용자 업로드 모델.
+> `MultiModelRegistry` / `class_adapter` / `upload_validator` / ONNX 메타데이터-우선 클래스 인식이 이 전략을 지원한다.
+>
+> **from-scratch 커스텀 학습은 `project-definition.md`의 명시적 비목표(현재 버전)**이므로
+> 1차 전략으로 커버되지 않는 현장 정확도 요구가 확인된 경우에만 진행하는 선택/후순위 작업이다.
+> 실행 절차는 `docs/phase-cd-readiness.md` Phase D를 따른다.
 
 목표: 안전모/조끼/화재/연기/쓰러짐을 YOLO에서 직접 탐지할 수 있게 한다.
 
-작업:
+작업 — 1차 전략(완료):
 
-- [x] 클래스 정의 확정 (Phase 9 M4: ppe_yolo=Hardhat/NO-Hardhat, fire_smoke_yolo=fire)
-- [x] 데이터셋 후보 수집 스크립트 (`scripts/download_datasets.py`)
-- [x] YOLO26 학습 스크립트 스캐폴드 — **실행은 데이터셋/GPU 준비 후 필요** (`docs/custom-model-training.md` 참조)
-- [x] ONNX export 스크립트 스캐폴드 (`docs/custom-model-training.md` 3절)
-- [ ] 실제 데이터셋 다운로드 및 학습 실행 (인터넷/GPU 필요 — 다른 프로젝트 학습 완료 후 진행)
-- [ ] 정확도 지표 측정: mAP, precision, recall
+- [x] 클래스 정의 확정 (Phase 9 M4: ppe_yolo=Hardhat/NO-Hardhat, fire_smoke_yolo=fire) (`docs/phase-cd-readiness.md` D0 SSOT)
+- [x] 공개 pretrained 모델 큐레이션: `scripts/fetch_safety_models.py --all`로 Hugging Face 모델 다운로드/ONNX 변환
+  - `models/yolo26_ppe.onnx` (Hardhat/NO-Hardhat)
+  - `models/yolo26_fire_smoke.onnx` (fire — smoke는 VLM 보조)
+- [x] `MultiModelRegistry` 통합: ppe_yolo·fire_smoke_yolo 활성화 (`config/model_profiles.yaml`)
+- [x] `class_adapter.py` — ONNX 메타데이터 우선 클래스 인식, config 불일치 시 경고
+- [x] 사용자 업로드 경로(`upload_validator.py`): 비개발자도 ONNX 모델을 업로드해 pretrained 모델 대체 가능
+- [x] 데이터셋 탐색·변환 도구 (`scripts/download_datasets.py`, `convert_to_yolo.py` 등) — from-scratch 학습 선택 시 재사용 가능
 
-> 사전학습 모델(`models/yolo26_ppe.onnx`, `models/yolo26_fire_smoke.onnx`)은 Phase 9 M4에서 Hugging Face 다운로드 완료. 커스텀 학습은 Phase D에서 별도 진행.
+작업 — 선택/후순위 (from-scratch 커스텀 학습):
+
+- [ ] 실제 데이터셋 다운로드 및 학습 실행 (인터넷/GPU + 데이터 라이선스 필요 — `docs/phase-cd-readiness.md` Phase D)
+- [ ] 검증셋 mAP 측정: `docs/phase-cd-readiness.md` D5 합격 기준(예: PPE ≥ 0.70, fire/smoke ≥ 0.60)
+
+완료 기준:
+
+- 운영자가 공개 pretrained 모델로 안전모/화재를 탐지할 수 있다.
+- 정확도가 부족한 경우 ONNX 모델을 업로드해 즉시 대체할 수 있다.
+- from-scratch 학습은 현장 데이터·GPU 확보 후 `docs/phase-cd-readiness.md` Phase D로 진행한다.
 
 ---
 
@@ -279,6 +297,7 @@
 9. M5.1 통합 테스트
 10. M6.1/M6.2 보안/개인정보 강화
 11. M7 문서/납품 패키지
-12. M2.3 커스텀 Safety YOLO26 모델 준비
+12. M2.3 from-scratch 커스텀 학습 (선택/후순위 — `project-definition.md` 비목표)
 
-커스텀 모델은 데이터셋/라이선스/학습 시간이 필요하므로 병행 가능하지만, 제품 데모와 초기 납품 가능성을 위해서는 먼저 E2E/VLM/운영 안정화를 끝내는 것이 좋습니다.
+1차 모델 전략(공개 pretrained + 사용자 업로드)이 완료되어 있으므로 제품 데모와 초기 납품은 바로 가능하다.
+from-scratch 학습은 현장 데이터·라이선스·GPU가 확보된 경우에만 `docs/phase-cd-readiness.md` Phase D 절차로 진행한다.
