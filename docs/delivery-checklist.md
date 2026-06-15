@@ -41,12 +41,35 @@ nano .env   # 또는 vi .env
 
 ### A4. 모델 준비
 
-```bash
-# 기본 YOLO 모델 확인
-ls -lh models/yolo26.onnx
+> **중요**: 모델 파일(`.onnx`)은 저장소에 포함되지 않습니다(git 미추적). 아래 방법으로 획득해야 합니다.
 
-# 사전학습 안전 모델 다운로드 (인터넷 필요)
+#### 방법 A: 사전학습 모델 자동 다운로드 (인터넷 필요)
+
+```bash
+# huggingface_hub, ultralytics 설치 필요 (requirements-dev.txt 또는 수동 설치)
+pip install huggingface_hub ultralytics
+
+# PPE 모델(keremberke/yolov8n-hard-hat-detection) + 화재/연기 모델 다운로드 및 ONNX export
 ./.venv/bin/python scripts/fetch_safety_models.py --all
+```
+
+다운로드 성공 시:
+- `models/yolo26_ppe.onnx` (Hardhat/NO-Hardhat 2-class)
+- `models/yolo26_fire_smoke.onnx` (fire-smoke/fire/fog/sol/factory-smoke 5-class)
+
+#### 방법 B: YOLO 기본 모델 수동 준비
+
+```bash
+# YOLOv8/YOLOv9 등 공개 모델에서 ONNX export 후 복사 (scripts/prepare_yolo26.py 참조)
+# 또는 ultralytics CLI: yolo export model=yolov8n.pt format=onnx
+cp /path/to/model.onnx models/yolo26.onnx
+```
+
+```bash
+# 확인
+ls -lh models/yolo26.onnx
+ls -lh models/yolo26_ppe.onnx        # PPE 사용 시
+ls -lh models/yolo26_fire_smoke.onnx # 화재/연기 사용 시
 ```
 
 - [ ] `models/yolo26.onnx` 존재 확인
@@ -78,7 +101,7 @@ ls -lh models/yolo26.onnx
 ./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q
 ```
 
-- [ ] `333 passed, 1 skipped` (또는 이상 없음) 확인
+- [ ] 전체 단위 테스트 통과, 1 skipped (VLM opt-in) 확인 — 실패·추가 skip 없음
 
 ### A8. E2E 스모크 테스트
 
@@ -208,7 +231,7 @@ sudo systemctl status ksi-cctv
 
 | 항목 | 기준 |
 |---|---|
-| 단위 테스트 | 333 passed (또는 이상 없음) |
+| 단위 테스트 | 전체 통과, 1 skipped (VLM opt-in). 실패·추가 skip 없음 |
 | E2E 스모크 테스트 | `ok: true`, `failed_models: {}` |
 | 헬스체크 | `overall_healthy: true` |
 | 대시보드 기동 | `http://localhost:8080` 접속 성공, 로그인 성공 |

@@ -1,7 +1,7 @@
 # E2E 스모크 테스트 결과
 
 > **이력 기준선 (2026-05-27)**: 아래 "2026-05-27 기준 이력" 섹션은 Phase 4 이전 32 tests 기준 기록입니다.  
-> **현재 기준선 (Phase 10 M1, 2026-06-14)**: 333 passed (1 skipped), policy-mode 기본 실행.
+> **현재 기준선 (Phase 10 M1, 2026-06-14)**: 전체 단위/통합 테스트 통과 (`./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider`, 1건 VLM opt-in skip), policy-mode 기본 실행.
 
 ---
 
@@ -22,7 +22,7 @@
 
 ### 결과 요약
 
-- 단위 테스트: **333 passed, 1 skipped** (VLM opt-in 테스트 skip)
+- 단위 테스트: **전체 통과, 1 skipped** (VLM opt-in 테스트 skip). 실제 수는 `./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q` 실행으로 확인한다.
 - E2E 스모크 테스트 (policy-mode): `ok: true`, `failed_models: {}`
 - 헬스체크: `ok: true`, 12 passes, 1 warning (CUDA unavailable — CPU fallback 정상)
 
@@ -35,7 +35,7 @@
 | `fire_smoke_yolo` | `models/yolo26_fire_smoke.onnx` | 로드 성공 (Phase 9 M4 다운로드) |
 
 - ONNX provider: `CPUExecutionProvider` (로컬 환경 기준, DGX Spark에서는 CUDAExecutionProvider)
-- `ppe_yolo` 실제 추론: person 클래스 0.74 신뢰도로 감지 확인
+- `general_yolo` 실제 추론: person 클래스(COCO) 감지. `ppe_yolo`는 Hardhat/NO-Hardhat(2-class) 전용으로 person 클래스 없음 — class_map 적용 후 helmet/no_helmet 이벤트로 변환됨 (config/model_profiles.yaml 참조)
 
 ### 실모델·실영상 종단 검증 (sample.mp4 기준)
 

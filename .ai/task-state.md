@@ -3,7 +3,7 @@
 ## Current milestone
 
 Phase 10 M1 완료 (탐지 클래스 정합성 + Phase A 잔여 결함 수정, 2026-06-14).  
-현재 기준선: **333 passed, 1 skipped** (캐시클린 pytest), policy-mode 기본 실행.  
+현재 기준선: **전체 통과, 1 skipped** (캐시클린 pytest; VLM opt-in skip), policy-mode 기본 실행.  
 다음 우선순위: Phase B (실 ONNX+VLM 종단 자동검증 게이트) → Phase C (DGX CUDA·실 RTSP) → Phase D (커스텀 모델 학습).
 
 ## Completed
@@ -630,7 +630,7 @@ Phase 10 M1 완료 (탐지 클래스 정합성 + Phase A 잔여 결함 수정, 2
   - `huggingface_hub>=0.20.0` 추가
 - **추론 검증** (`scripts/e2e_smoke_test.py --policy-mode`)
   - 3개 모델 모두 로드/추론 성공, `failed_models={}`
-  - `ppe_yolo`가 person 클래스 0.74 신뢰도로 감지
+  - `ppe_yolo` 추론 성공 — 실제 클래스는 Hardhat/NO-Hardhat (person 클래스 없음, 오기였음; config/model_profiles.yaml 및 class_adapter 참조)
 
 ### Verification (Phase 9 M4)
 - `python3 -m compileall -q src tests scripts` — passed

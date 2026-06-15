@@ -151,6 +151,21 @@ find data/captures/ -name "*.jpg.enc" -mtime +30 -delete
 업로드된 모델은 `models/uploaded/{model_id}/model.onnx`에 격리 저장되며  
 기본 `enabled: false` 상태로 등록됩니다. 관리자가 활성화해야 추론에 사용됩니다.
 
+### 현재 탐지 모델 한계 (운영자 필독)
+
+> **경고**: 기본 제공 모델은 아래 한계를 가집니다. 실제 현장에서 탐지 결과를 정상으로 오인하지 마십시오.
+
+| 모델 | 탐지 가능 클래스 | 한계 |
+|---|---|---|
+| `general_yolo` (COCO pretrained) | person, car, truck 등 COCO 80종 | 안전모·조끼·화재·연기·쓰러짐 **직접 탐지 불가**. VLM(Ollama) 사용 시 보조 분석 가능. |
+| `ppe_yolo` (공개 pre-trained) | Hardhat, NO-Hardhat → helmet/no_helmet | **조끼(vest) 미지원** — no_vest 이벤트 비활성 상태. 일반 현장에서 false positive 발생 가능. |
+| `fire_smoke_yolo` (공개 pre-trained) | fire-smoke, fire, factory-smoke 등 5종 | 산불·특수 연기 모델로 일반 공장·실내에서 false positive 위험. smoke 이벤트는 추가 VLM 확인 권장. |
+| `pose_fall_model` | person, fall | 현재 `disabled` 상태. 실제 쓰러짐 탐지에는 커스텀 학습 모델 필요. |
+
+**신뢰성 있는 안전 이벤트 탐지**(안전모/조끼/화재/연기/쓰러짐)를 위해서는  
+커스텀 safety 모델 학습(Phase D, `scripts/train_*.py`)이 필요합니다.  
+학습 방법: `docs/custom-model-training.md` 참조.
+
 ---
 
 ## 성능 모니터링
@@ -238,12 +253,63 @@ KSI_CCTV_SMTP_RECIPIENTS=admin@example.com,security@example.com
 
 ---
 
+## 네트워크 보안 (HTTPS/TLS)
+
+> **경고**: `scripts/run_dashboard.sh`는 기본값으로 평문 HTTP, `0.0.0.0:8080`에 바인딩합니다.  
+> LAN에서 비밀번호·캡처 이미지 등 PII가 평문으로 노출됩니다. **운영 환경에서는 반드시 아래 조치를 취하십시오.**
+
+### 권장 구성
+
+1. **대시보드 바인딩을 루프백으로 변경** — `scripts/run_dashboard.sh`의 `--server.address=0.0.0.0`을 `--server.address=127.0.0.1`로 교체하고, 리버스 프록시(아래)를 통해서만 접근.
+2. **리버스 프록시 + TLS 종단** — nginx 또는 Caddy로 443 포트 TLS 종단 후 `localhost:8080`으로 프록시.
+3. **방화벽으로 8080/8081 포트 외부 차단** — 프록시 포트(443)만 외부에 열고 Streamlit/헬스체크 포트는 LAN 노출 금지.
+
+### nginx 예시 (간략)
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name cctv.example.internal;
+
+    ssl_certificate     /etc/ssl/certs/ksi-cctv.crt;
+    ssl_certificate_key /etc/ssl/private/ksi-cctv.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+    }
+}
+server {
+    listen 80;
+    server_name cctv.example.internal;
+    return 301 https://$host$request_uri;
+}
+```
+
+### Caddy 예시 (간략)
+
+```
+cctv.example.internal {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+> Caddy는 Let's Encrypt/ACME를 통해 TLS 인증서를 자동으로 취득·갱신합니다.  
+> 내부망에서는 자체 CA 또는 사설 인증서를 사용하십시오.
+
+---
+
 ## 운영 보안 체크리스트
 
 - [ ] `KSI_CCTV_DASHBOARD_PASSWORD`를 강력한 비밀번호로 설정함
 - [ ] `.env` 또는 `/etc/ksi-cctv/ksi-cctv.env`의 파일 권한이 소유자 읽기 전용(`600`)임
 - [ ] RTSP URL, SMTP 비밀번호가 저장소에 커밋되지 않음
-- [ ] 대시보드가 공개 네트워크에 직접 노출되지 않음 (리버스 프록시 또는 VPN 경유 권장)
+- [ ] 대시보드가 공개 네트워크에 직접 노출되지 않음 (리버스 프록시 + TLS 또는 VPN 경유)
+- [ ] `scripts/run_dashboard.sh`의 바인딩 주소가 `127.0.0.1`로 설정됨 (운영 시)
+- [ ] 방화벽에서 8080/8081 포트를 외부 네트워크에서 차단함
 - [ ] `encrypt_images: true` 활성화 시 `KSI_CCTV_CAPTURE_KEY` 백업 완료
 - [ ] 감사 로그(`logs/audit.log`) 정기 검토
 

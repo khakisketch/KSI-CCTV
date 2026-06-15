@@ -1,5 +1,5 @@
 [Unit]
-Description=KSI-CCTV Streamlit dashboard
+Description=KSI-CCTV headless detection daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -14,11 +14,13 @@ WorkingDirectory=/opt/ksi-cctv
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=TZ=Asia/Seoul
-# Site-specific secrets/env file. Keep owner-readable only, do not commit it.
-EnvironmentFile=-/etc/ksi-cctv/ksi-cctv.env
-# 헬스체크 서버(8081) + 대시보드(8080)는 래퍼 스크립트 한 곳에서 관리.
-# ExecStartPre의 `&` 백그라운드 패턴은 systemd cgroup 정리로 인해 프로세스가 죽을 수 있어 제거.
-ExecStart=/bin/bash /opt/ksi-cctv/scripts/docker-entrypoint.sh
+# 비밀/환경 파일 — install.sh가 생성하는 프로젝트 .env를 가리킨다(존재하지 않아도 무방: '-').
+# run.py도 WorkingDirectory의 .env를 직접 로드하므로 이중으로 보장된다.
+# (이전 /etc/ksi-cctv/ksi-cctv.env는 install.sh가 생성하지 않아 비번 미주입→crash-loop의 원인이었음.)
+EnvironmentFile=-/opt/ksi-cctv/.env
+# 무인 탐지 데몬을 직접 실행 — 대시보드 버튼 없이 파이프라인 자동 기동 + /health(8081) 제공.
+# (install.sh가 .venv 경로와 INSTALL_DIR을 치환한다.)
+ExecStart=/opt/ksi-cctv/.venv/bin/python /opt/ksi-cctv/src/run.py
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s

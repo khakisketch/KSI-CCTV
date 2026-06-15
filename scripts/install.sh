@@ -93,19 +93,16 @@ if [[ "$OSTYPE" == "linux-gnu"* ]] && command -v systemctl &> /dev/null; then
 
         TEMP_SERVICE=$(mktemp)
         # ── 경로 일괄 치환 ──────────────────────────────────────────────────
-        # 1. /opt/ksi-cctv 절대경로(ReadWritePaths 등 포함)를 실제 설치 경로로 치환
-        # 2. WorkingDirectory 치환
-        # 3. User/Group 치환 (설치 사용자로)
-        # 4. ExecStart를 래퍼 스크립트로 지정 (헬스서버 + 대시보드 통합)
-        # 주의: ExecStartPre는 서비스 파일에 더 이상 존재하지 않으므로 치환 불필요.
-        #       (헬스서버는 docker-entrypoint.sh / 래퍼 스크립트 안에서 기동됨)
+        # 1. /opt/ksi-cctv 절대경로(ExecStart의 .venv·src/run.py, EnvironmentFile .env,
+        #    ReadWritePaths 등 포함)를 실제 설치 경로로 일괄 치환
+        # 2. WorkingDirectory / User / Group 치환
+        # ExecStart(=.venv/bin/python src/run.py 데몬)와 EnvironmentFile(=.env)은 서비스 파일에
+        # /opt/ksi-cctv 기준으로 이미 정의돼 있어 1번 치환으로 INSTALL_DIR에 맞춰진다(별도 override 불필요).
         sed "s|/opt/ksi-cctv|${INSTALL_DIR}|g" \
             "systemd/${SERVICE_NAME}.service" > "$TEMP_SERVICE"
         sed -i "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|g" "$TEMP_SERVICE"
         sed -i "s|User=.*|User=${INSTALL_USER}|g" "$TEMP_SERVICE"
         sed -i "s|Group=.*|Group=${INSTALL_USER}|g" "$TEMP_SERVICE"
-        # ExecStart: 래퍼 스크립트(헬스서버 + 대시보드 통합)로 실행
-        sed -i "s|ExecStart=.*|ExecStart=/bin/bash ${INSTALL_DIR}/scripts/docker-entrypoint.sh|g" "$TEMP_SERVICE"
 
         sudo cp "$TEMP_SERVICE" "$SERVICE_FILE"
         sudo systemctl daemon-reload

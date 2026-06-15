@@ -269,7 +269,7 @@ python3 -m compileall -q src tests scripts
 
 # 단위 테스트 실행
 ./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q
-# 기대 결과: 333 passed, 1 skipped
+# 기대 결과: 전체 통과, 1 skipped (VLM opt-in). 실제 수는 실행 시마다 다를 수 있음.
 ```
 
 ---

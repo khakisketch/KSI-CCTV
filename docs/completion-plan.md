@@ -17,7 +17,7 @@
 
 최근 기준 검증 (Phase 10 M1, 2026-06-14):
 
-- `./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q` — **333 passed, 1 skipped**
+- `./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q` — **전체 통과, 1 skipped** (VLM opt-in skip; 실제 수는 위 명령 실행으로 확인)
 - `scripts/e2e_smoke_test.py --policy-mode` — `ok: true`, `failed_models: {}`
 - `scripts/healthcheck.py --json` — `ok: true`, 12 passes, 1 warning (CUDA CPU fallback)
 
