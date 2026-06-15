@@ -103,6 +103,15 @@ if [[ "$OSTYPE" == "linux-gnu"* ]] && command -v systemctl &> /dev/null; then
         sed -i "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|g" "$TEMP_SERVICE"
         sed -i "s|User=.*|User=${INSTALL_USER}|g" "$TEMP_SERVICE"
         sed -i "s|Group=.*|Group=${INSTALL_USER}|g" "$TEMP_SERVICE"
+        # ProtectHome=true는 /home,/root를 서비스 mount namespace에서 빈 디렉터리로 마스킹한다.
+        # 설치 경로가 그 아래이면 ExecStart(.venv/python)·WorkingDirectory를 찾지 못해 즉시
+        # crash-loop가 되므로 read-only로 완화한다(ReadWritePaths가 logs/data 쓰기 경로는 다시 열어줌).
+        case "$INSTALL_DIR" in
+            /home/*|/root/*)
+                sed -i "s|^ProtectHome=.*|ProtectHome=read-only|" "$TEMP_SERVICE"
+                log_warn "설치 경로가 홈 디렉터리($INSTALL_DIR) 하위 — ProtectHome=read-only로 조정(true면 crash-loop). 운영은 /opt 권장."
+                ;;
+        esac
 
         sudo cp "$TEMP_SERVICE" "$SERVICE_FILE"
         sudo systemctl daemon-reload

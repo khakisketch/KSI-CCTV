@@ -245,7 +245,8 @@ def main() -> int:
         results[name] = {
             "ok": ok,
             "output": str(MODELS_DIR / config["output_name"]),
-            "repo_id": config["repo_id"],
+            # fire_smoke_yolo는 repo_id 없이 url만 가질 수 있어 안전 접근(KeyError 방지)
+            "source": config.get("repo_id") or config.get("url"),
         }
 
     if args.json:

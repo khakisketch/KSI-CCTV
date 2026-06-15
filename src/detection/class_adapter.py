@@ -45,6 +45,7 @@ def adapt_detections(
     detections: list[Detection],
     class_map: dict[str, str] | None = None,
     model_name: str | None = None,
+    drop_unmapped: bool = True,
 ) -> list[Detection]:
     """탐지 결과의 클래스 이름을 표준 이름으로 변환.
 
@@ -52,6 +53,9 @@ def adapt_detections(
         detections: 원본 탐지 결과 목록
         class_map: 명시적 클래스 매핑 dict. None이면 model_name으로 기본 매핑 사용.
         model_name: 기본 매핑을 조회할 모델 이름 (ppe_yolo, fire_smoke_yolo 등)
+        drop_unmapped: class_map이 있을 때 매핑되지 않은 클래스를 결과에서 제외할지(기본 True).
+            KSI 표준 외 클래스(PPE 모델의 Mask/machinery 등)가 정책·대시보드로 새는 것을 막는다.
+            class_map이 None/빈 경우(예: COCO general_yolo)는 영향 없음(전체 통과).
 
     Returns:
         클래스 이름이 변환된 Detection 목록
@@ -63,16 +67,20 @@ def adapt_detections(
 
     adapted: list[Detection] = []
     for det in detections:
-        new_name = class_map.get(det.class_name, det.class_name)
-        if new_name != det.class_name:
+        if det.class_name in class_map:
+            new_name = class_map[det.class_name]
             adapted.append(
                 Detection(
                     class_id=det.class_id,
                     class_name=new_name,
                     confidence=det.confidence,
                     bbox=det.bbox,
-                )
+                ) if new_name != det.class_name else det
             )
+        elif drop_unmapped:
+            # class_map이 명시된 모델에서 매핑되지 않은 클래스(예: PPE 모델의 Mask/machinery/vehicle)는
+            # KSI 표준 외이므로 결과에서 제외한다 — 정책 미트리거 + 대시보드 noise 방지(메커니즘으로 보장).
+            continue
         else:
             adapted.append(det)
     return adapted

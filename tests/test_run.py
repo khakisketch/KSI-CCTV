@@ -5,6 +5,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -57,6 +58,45 @@ class TestRunnerModule(unittest.TestCase):
         self.assertTrue(callable(ksi_run.main))
         self.assertTrue(callable(ksi_run.build_pipeline))
         self.assertTrue(callable(ksi_run._register_cameras))
+
+
+@unittest.skipUnless(HAS_RUNTIME_DEPS, "requirements.txt 의존성 설치 후 실행 가능")
+class TestBuildPipeline(unittest.TestCase):
+    """build_pipeline 조립 로직 — mock registry/engine으로 행사(실 모델 불필요)."""
+
+    def _fake_cfg(self):
+        cfg = Mock()
+        cfg.get_detection_config.return_value = {}
+        cfg.get_alert_config.return_value = {}
+        cfg.get.return_value = {}  # models.vlm → {} → VLM 비활성
+        return cfg
+
+    def _fake_registry(self, active_models):
+        reg = Mock()
+        reg.active_model_names = active_models
+        reg.failed_models = {}
+        detector = Mock(classes={0: "person"})
+        reg.get_model.return_value = detector
+        reg.models = {"general_yolo": detector}
+        return reg
+
+    def test_raises_when_no_active_models(self):
+        reg = self._fake_registry(active_models=[])
+        with patch.object(ksi_run.MultiModelRegistry, "from_config", return_value=reg), \
+             patch.object(ksi_run.EventPolicyEngine, "from_config", return_value=Mock()), \
+             self.assertRaises(RuntimeError):
+            ksi_run.build_pipeline(self._fake_cfg())
+
+    def test_builds_with_active_models_and_vlm_disabled(self):
+        reg = self._fake_registry(active_models=["general_yolo"])
+        with patch.object(ksi_run.MultiModelRegistry, "from_config", return_value=reg), \
+             patch.object(ksi_run.EventPolicyEngine, "from_config", return_value=Mock()):
+            pipeline, alert_manager, registry = ksi_run.build_pipeline(self._fake_cfg())
+        self.assertIsNotNone(pipeline)
+        self.assertIsNotNone(alert_manager)
+        self.assertIs(registry, reg)
+        # VLM cfg가 {} → provider 미주입(선택적 컴포넌트)
+        self.assertIsNone(getattr(pipeline, "vlm_provider", None))
 
 
 if __name__ == "__main__":

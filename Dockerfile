@@ -67,9 +67,10 @@ USER appuser
 # 헬스체크 엔드포인트 (8081) + 대시보드 (8080) 동시 노출
 EXPOSE 8080 8081
 
-# HEALTHCHECK: HTTP health 엔드포인트 확인 (scripts/healthcheck.py는 배포 전 readiness 전용)
-# 런타임 liveness = /health (src/utils/health.py), 배포 readiness = scripts/healthcheck.py
+# HEALTHCHECK: liveness 전용 엔드포인트(/health/live, 프로세스 생존 시 항상 200) 사용.
+# /health는 카메라 stale·ollama 미가동 등에서 503을 반환하므로 컨테이너 liveness로 쓰면
+# 일시적 degraded에도 컨테이너가 unhealthy→재시작 루프에 빠진다. 준비도/진단은 /health, /health/ready로.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8081/health || exit 1
+    CMD curl -f http://localhost:8081/health/live || exit 1
 
 CMD ["/app/scripts/docker-entrypoint.sh"]

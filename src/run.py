@@ -180,13 +180,8 @@ def main() -> int:
         logger.error("파이프라인 조립 실패: %s", e)
         return 1
 
-    n_cameras = _register_cameras(pipeline, config)
-    if n_cameras == 0:
-        logger.error("등록된 활성 카메라가 없습니다. config/cameras.json과 .env를 확인하세요.")
-        return 1
-    logger.info("카메라 %d대 등록됨.", n_cameras)
-
-    # /health에 실 파이프라인 상태(카메라/VLM/모델/GPU/디스크) 연결 — false-green 방지
+    # /health에 실 파이프라인 상태(카메라/VLM/모델/GPU/디스크) 연결 — false-green 방지.
+    # 카메라 등록보다 **먼저** 띄워, 카메라 0대 같은 오설정에서도 /health로 원인을 진단할 수 있게 한다.
     checker = HealthChecker()
     checker.register("disk_space", check_disk_space)
     checker.register("memory_usage", check_memory_usage)
@@ -198,6 +193,18 @@ def main() -> int:
         start_health_server(host=health_host, port=health_port, checker=checker)
     except Exception as e:
         logger.warning("헬스 서버 기동 실패(탐지는 계속): %s", e)
+
+    n_cameras = _register_cameras(pipeline, config)
+    if n_cameras == 0:
+        # exit 1 + Restart=on-failure는 영구 crash-loop가 되어 /health조차 못 띄운다.
+        # 대신 데몬을 유지하고 /health(cameras 체크)가 degraded로 노출 → 운영자가 .env/cameras.json
+        # 수정 후 재시작하면 된다(조용한 crash-loop보다 진단 가능).
+        logger.error(
+            "등록된 활성 카메라가 없습니다 — /health가 degraded로 표시됩니다. "
+            "config/cameras.json(enabled)과 .env(CCTV_CAM_*_URL)를 확인하세요."
+        )
+    else:
+        logger.info("카메라 %d대 등록됨.", n_cameras)
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)

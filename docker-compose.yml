@@ -42,9 +42,10 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # 런타임 liveness — src/run.py가 등록한 pipeline-aware /health(카메라/모델/VLM 포함) 확인
+    # 런타임 liveness — /health/live(프로세스 생존 시 항상 200). /health는 카메라 stale 등에서
+    # 503이라 컨테이너 재시작 루프를 유발하므로 liveness 프로브로 부적합(준비도는 /health/ready).
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health/live"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -58,10 +59,19 @@ services:
     environment:
       <<: *common-env
       KSI_CCTV_MODE: dashboard
-      # 대시보드는 비밀번호 필수(미설정/change-me 시 엔트리포인트가 거부).
-      KSI_CCTV_DASHBOARD_PASSWORD: ${KSI_CCTV_DASHBOARD_PASSWORD:?대시보드 비밀번호(KSI_CCTV_DASHBOARD_PASSWORD)를 .env에 설정하세요}
+      # 비밀번호 강제는 entrypoint 가드(change-me/빈값 거부)에 일임한다. 여기서 `:?`(required)로 두면
+      # 비활성 profile임에도 보간이 먼저 평가돼 'docker compose up'(daemon만)까지 실패하므로 기본값을 둔다.
+      KSI_CCTV_DASHBOARD_PASSWORD: ${KSI_CCTV_DASHBOARD_PASSWORD:-change-me}
     ports:
       - "8080:8080"
+    # 대시보드는 streamlit(8080)만 띄우고 8081 health 서버를 안 띄우므로, 이미지 HEALTHCHECK(8081)를
+    # streamlit liveness(8080)로 override한다(미override 시 컨테이너가 영구 unhealthy).
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 networks:
   cctv-network:
