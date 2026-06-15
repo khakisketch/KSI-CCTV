@@ -115,6 +115,7 @@ bash scripts/run_dashboard.sh
 | `docs/model-management.md` | 모델 관리 전략 |
 | `docs/event-policy-engine.md` | 이벤트 정책 엔진 설계 |
 | `docs/custom-model-training.md` | 커스텀 모델 학습 전체 가이드 |
+| `docs/phase-cd-readiness.md` | **Phase C/D 실행 runbook** — 실환경 검증·커스텀 모델 정량 합격 기준 |
 | `docs/development-roadmap.md` | 단계별 개발 로드맵 |
 | `docs/completion-plan.md` | 납품 완성 계획 (체크박스 현행화) |
 

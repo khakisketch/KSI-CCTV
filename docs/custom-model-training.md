@@ -67,12 +67,19 @@ python scripts/validate_dataset.py \
 
 ```bash
 # Ultralytics YOLO 학습용 dataset.yaml 생성
+# 클래스명·순서는 KSI 표준(docs/phase-cd-readiness.md D0 SSOT)을 그대로 따른다.
+# PPE는 5-class: person / helmet / no_helmet / vest / no_vest
+# (train_ppe.py도 5-class를 전제. 표준명으로 학습하면 ONNX names 메타데이터로 정책에 바로 연결됨.)
 python scripts/generate_dataset_yaml.py \
     --dataset-dir data/ppe/yolo \
-    --classes person helmet vest
+    --classes person helmet no_helmet vest no_vest
 
 # 출력: data/ppe/yolo/dataset.yaml
 ```
+
+> **표준 클래스 SSOT 및 학습→배포 전 과정의 정량 합격 기준은 `docs/phase-cd-readiness.md`(Phase D)를 따른다.**
+> 학습한 모델은 표준 클래스명으로 export하면 `class_map` 없이 `config/event_policies.yaml`의
+> `no_helmet`·`no_vest`·`fire`·`smoke`·`fall` 이벤트에 그대로 연결된다(no_vest는 학습 후 `enabled: true` 재활성).
 
 ## 2. 모델 학습
 
