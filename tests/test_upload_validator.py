@@ -1,4 +1,5 @@
 """User model upload validator tests."""
+import os
 import sys
 from pathlib import Path
 
@@ -683,6 +684,39 @@ class TestValidateOnnxNoExternalData(unittest.TestCase):
             ok, err = uv.validate_onnx_no_external_data(path)
             self.assertFalse(ok)
             self.assertIn("외부 데이터", err)
+
+
+@unittest.skipUnless(_HAS_ONNX_BUILDER, "onnx 패키지 없음 — skip")
+@unittest.skipUnless(os.name == "posix", "sandbox는 POSIX 전용")
+class TestInferenceSandbox(unittest.TestCase):
+    """#6 — 업로드 추론 검증을 자원-제한 자식 프로세스에서 격리 실행한다."""
+
+    def _write_clean_model(self, tmp: str) -> Path:
+        path = Path(tmp) / "ok.onnx"
+        path.write_bytes(_make_minimal_onnx_bytes(h=320, w=320))
+        return path
+
+    def test_legit_model_passes_through_sandbox(self):
+        """정상 ONNX는 sandbox 경유로도 추론 검증을 통과한다(업로드 회귀 방지)."""
+        try:
+            import onnxruntime  # noqa: F401
+        except ImportError:
+            self.skipTest("onnxruntime 없음")
+        with tempfile.TemporaryDirectory() as tmp:
+            ok, err = uv.validate_onnx_inference(self._write_clean_model(tmp))
+            self.assertTrue(ok, err)
+
+    def test_timeout_hard_kills_child(self):
+        """wall-clock 초과 시 자식을 hard-kill하고 timeout을 반환한다(스레드와 달리 실제 종료)."""
+        try:
+            import onnxruntime  # noqa: F401
+        except ImportError:
+            self.skipTest("onnxruntime 없음")
+        with tempfile.TemporaryDirectory() as tmp:
+            # spawn 시작(>1ms)조차 못 끝내는 타임아웃 → 격리/종료 분기를 결정론적으로 친다.
+            ok, err = uv.validate_onnx_inference(self._write_clean_model(tmp), timeout_sec=0.001)
+            self.assertFalse(ok)
+            self.assertIn("timeout", err)
 
 
 class TestSetProfileEnabledWrongSource(unittest.TestCase):

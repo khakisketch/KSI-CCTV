@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import os
 import shutil
 import uuid
 from collections.abc import Callable, Iterable
@@ -29,6 +30,9 @@ MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024
 UPLOAD_BASE_DIR = Path("./models/uploaded")
 MODEL_PROFILES_PATH = Path("./config/model_profiles.yaml")
 INFERENCE_TIMEOUT_SEC = 30.0
+# 업로드 추론 검증 시 자식 프로세스 가상주소공간 상한(거대 텐서 할당 → 호스트 OOM 차단).
+# 정상 YOLO ONNX(≤500MB 파일)는 충분, BLAS/arena VA 예약을 감안해 넉넉히 잡되 폭주는 막는 균형값.
+INFERENCE_MEM_LIMIT_BYTES = 8 * 1024 * 1024 * 1024
 
 
 @dataclass
@@ -245,27 +249,102 @@ def _np_dtype(onnx_type: str):
     return np.float32
 
 
-def validate_onnx_inference(file_path: Path, timeout_sec: float = INFERENCE_TIMEOUT_SEC) -> tuple[bool, str]:
-    """Run a bounded synthetic inference smoke test."""
+def _do_inference_smoke(file_path_str: str) -> tuple[bool, str]:
+    """합성 zero 입력으로 1회 추론 smoke test (sandbox/스레드 폴백 공용 코어)."""
+    try:
+        import numpy as np
+        import onnxruntime as ort
 
-    def _run() -> tuple[bool, str]:
-        try:
-            import numpy as np
-            import onnxruntime as ort
+        session = ort.InferenceSession(file_path_str, providers=["CPUExecutionProvider"])
+        feed = {}
+        for inp in session.get_inputs():
+            shape = [_resolve_dim(dim, idx) for idx, dim in enumerate(list(inp.shape))]
+            if not shape:
+                return False, f"ONNX 입력 shape가 비어 있습니다: {inp.name}"
+            feed[inp.name] = np.zeros(shape, dtype=_np_dtype(inp.type))
+        session.run(None, feed)
+        return True, ""
+    except Exception as exc:  # pragma: no cover - exact runtime errors vary
+        return False, f"ONNX inference 실패: {exc}"
 
-            session = ort.InferenceSession(str(file_path), providers=["CPUExecutionProvider"])
-            feed = {}
-            for inp in session.get_inputs():
-                shape = [_resolve_dim(dim, idx) for idx, dim in enumerate(list(inp.shape))]
-                if not shape:
-                    return False, f"ONNX 입력 shape가 비어 있습니다: {inp.name}"
-                feed[inp.name] = np.zeros(shape, dtype=_np_dtype(inp.type))
-            session.run(None, feed)
-            return True, ""
-        except Exception as exc:  # pragma: no cover - exact runtime errors vary
-            return False, f"ONNX inference 실패: {exc}"
 
-    return _run_with_timeout(_run, timeout_sec)
+def _sandbox_inference_worker(file_path_str: str, mem_limit_bytes: int, cpu_limit_sec: int, queue) -> None:
+    """자식 프로세스: rlimit(메모리/CPU) 설정 후 추론 smoke test → 결과를 queue로 반환.
+
+    악성 ONNX가 거대 텐서 할당(OOM)·무한 연산(CPU)으로 호스트를 마비시키는 것을 막는다.
+    스레드 타임아웃과 달리 자식 프로세스는 자원상한·hard-kill이 실제로 강제된다.
+    """
+    try:
+        import resource
+
+        # RLIMIT_AS: 가상주소공간 상한(거대 텐서 차단). spawn 자식이라 baseline VA가 작아 의미 있음.
+        resource.setrlimit(resource.RLIMIT_AS, (mem_limit_bytes, mem_limit_bytes))
+        # RLIMIT_CPU: CPU 초 상한(무한 루프 차단) — soft 도달 시 SIGXCPU, hard에서 SIGKILL.
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit_sec, cpu_limit_sec))
+    except Exception:  # pragma: no cover - 일부 환경은 setrlimit 불허(상위 wall-clock이 최종 안전망)
+        pass
+
+    queue.put(_do_inference_smoke(file_path_str))
+
+
+def _run_inference_sandboxed(
+    file_path: Path, timeout_sec: float, mem_limit_bytes: int
+) -> tuple[bool, str]:
+    """추론 검증을 자원-제한 자식 프로세스에서 실행(POSIX). spawn 미지원이면 스레드로 폴백."""
+    import multiprocessing as mp
+
+    # fork는 부모의 거대한 onnxruntime VA를 물려받아 RLIMIT_AS가 즉시 깨질 수 있으므로,
+    # baseline이 깨끗한 spawn으로 자식을 띄운다(상한이 실제로 의미를 가지게).
+    try:
+        ctx = mp.get_context("spawn")
+    except ValueError:  # pragma: no cover - spawn 미지원 플랫폼
+        return _run_with_timeout(lambda: _do_inference_smoke(str(file_path)), timeout_sec)
+
+    queue = ctx.Queue()
+    cpu_limit_sec = max(1, int(timeout_sec) + 5)
+    proc = ctx.Process(
+        target=_sandbox_inference_worker,
+        args=(str(file_path), mem_limit_bytes, cpu_limit_sec, queue),
+    )
+    proc.start()
+    proc.join(timeout_sec)
+
+    if proc.is_alive():
+        # wall-clock 초과 → hard-kill(스레드 타임아웃이 못 죽이던 네이티브 연산을 실제로 종료).
+        proc.terminate()
+        proc.join(5)
+        if proc.is_alive():  # pragma: no cover - terminate 무시 시
+            proc.kill()
+            proc.join()
+        return False, f"ONNX inference timeout after {timeout_sec:.1f}s"
+
+    # 결과가 큐에 있으면(정상/추론오류) 그것을 신뢰. 없는데 비정상 종료면 자원상한 위반으로 본다.
+    try:
+        return queue.get_nowait()
+    except Exception:
+        if proc.exitcode and proc.exitcode != 0:
+            return False, (
+                f"ONNX inference가 자원 상한(메모리 {mem_limit_bytes // (1024 * 1024)}MB / "
+                f"CPU {cpu_limit_sec}s)을 초과했거나 비정상 종료했습니다(exitcode={proc.exitcode})."
+            )
+        return False, "ONNX inference 결과를 가져오지 못했습니다."
+
+
+def validate_onnx_inference(
+    file_path: Path,
+    timeout_sec: float = INFERENCE_TIMEOUT_SEC,
+    mem_limit_bytes: int = INFERENCE_MEM_LIMIT_BYTES,
+) -> tuple[bool, str]:
+    """자원-제한 sandbox에서 합성 입력 1회 추론 smoke test를 수행한다.
+
+    업로드 모델은 신뢰할 수 없다 — 악성 그래프가 거대 텐서/무한 연산으로 호스트를 DoS할 수 있어
+    POSIX에서는 **별도 프로세스 + rlimit(메모리/CPU) + wall-clock 타임아웃**으로 격리한다.
+    (스레드 타임아웃은 onnxruntime 네이티브 호출을 실제로 죽이지 못하고 메모리도 못 묶는다.)
+    비-POSIX 환경은 자원상한 API가 없어 스레드 타임아웃으로 폴백한다(완전 격리는 아님).
+    """
+    if os.name == "posix":
+        return _run_inference_sandboxed(file_path, timeout_sec, mem_limit_bytes)
+    return _run_with_timeout(lambda: _do_inference_smoke(str(file_path)), timeout_sec)
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
