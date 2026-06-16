@@ -64,8 +64,11 @@
 - ⬜ Windows Service+인스톨러 · PyInstaller · 오프라인 번들 · EP별 onnxruntime 휠 선택(P2 연계)
 - **검증 완료:** `docker build ./frontend` 성공 → 컨테이너 실기동(✓ Ready)·`/login` 200·미인증 `/`→307 로그인 리다이렉트(middleware fail-closed 컨테이너에서 동작). 엔진 Dockerfile `docker build --check` 무경고. compose config(daemon/web 양 프로파일) 통과. pytest 462 passed. [HW] Windows·macOS 설치 + 엔진 GPU 이미지 풀빌드는 타깃 검증.
 
-### P7. 정리·마이그레이션
-- ⬜ Streamlit→legacy(프론트 패리티 전까지 유지) · project-definition.md 비목표 SSOT 갱신 · docs 동기화
+### P7. 정리·마이그레이션 — 🔄 진행(SSOT 갱신·docs 동기화 완료, Streamlit 폐기는 패리티 후)
+- ✅ **project-definition.md §비목표 SSOT 갱신**: "실시간 영상 스트리밍" 비목표 제거(P5로 승격·구현), "모바일 앱"→"네이티브 모바일 앱(반응형 웹 뷰어는 제공)", 클라우드=설치형 1차의 옵션, 학습=NON-GOAL 명시. architecture-target가 지적한 SSOT 모순 해소.
+- ✅ **docs 동기화**: README 아키텍처에 엔진 API·Next.js 웹 콘솔·MediaMTX 게이트웨이 추가 + Streamlit "레거시(점진 이관)" 표기 + 웹 콘솔 Docker 기동법 + 구조(src/api·frontend) + 테스트수(462)·다음 단계(학습→패키징/이관) 갱신. project-definition 현재 상태에 제품화 진척 반영.
+- ⬜ **Streamlit 폐기(단계 4)**: 잔여 탭(모델 업로드·갤러리·감사 로그)이 웹 콘솔에 도달하면 제거. 그 전까지 무중단 병존(strangler-fig).
+- **검증:** 문서 내부 일관성 확인 + pytest 462 passed(코드 무변경, docs/config만). [HW] 실 카메라 라이브는 타깃.
 
 ---
 
@@ -89,3 +92,4 @@
 - (P6a) 2026-06-17 설치형 패키징(Docker 웹) — frontend Dockerfile(standalone·비root) + compose `ksi-cctv-web`(--profile web, 엔진 서비스명 호출·API키 공유). next standalone 중첩버그 수정(tracingRoot 고정). 실빌드→컨테이너 기동→/login 200·미인증 307 리다이렉트 E2E 검증. obsolete version 키 제거. 남음=Windows/PyInstaller/오프라인번들[HW].
 - (P5a) 2026-06-17 영상 게이트웨이 — MediaMTX 1.19.1 compose 서비스(--profile video/web) + config/mediamtx.yml(RTSP→HLS/WebRTC). ffmpeg 합성 RTSP(sample.mp4)→HLS 체인을 실HLS클라이언트로 30프레임 디코드 검증(카메라 불요). compose 마운트·4포트 확인. 남음=P5b 프론트 hls.js 플레이어 + /api/cameras/{id}/stream.
 - (P5b) 2026-06-17 프론트 라이브 플레이어 + same-origin HLS 프록시 — /api/cameras/{id}/stream(프록시 URL) + /hls/[...seg] 프록시(MediaMTX cookieCheck Secure쿠키 핸드셰이크를 서버처리→평문HTTP/교차출처 우회 + 게이트웨이주소·RTSP크리덴셜 미노출) + 카메라페이지 hls.js 플레이어(on-demand 토글). Firefox 종단 재생 검증(readyState4·currentTime진행·640x480·데스크톱+모바일 실프레임). hls.js 추가(audit high+ 0). P5 완료.
+- (P7-1) 2026-06-17 정리·마이그레이션(문서) — project-definition §비목표 SSOT 갱신(실시간영상 승격·모바일=네이티브한정·학습 NON-GOAL) + README 동기화(엔진API·웹콘솔·게이트웨이·Streamlit 레거시표기·웹 Docker 기동법·구조·테스트수 462·다음단계). Streamlit 폐기는 잔여탭 패리티 후(병존 유지). pytest 462 passed.

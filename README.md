@@ -9,7 +9,10 @@
 - **EventPolicyEngine**: 이벤트별 trigger/rule/VLM/alert 정책 YAML 기반 평가
 - **VLM Dispatcher**: Ollama Qwen3-VL — 필요한 이벤트만 분석 (TTL cache + backpressure)
 - **AlertManager**: 이벤트 로그, 캡처 이미지 저장, 얼굴 블러링, 이미지 암호화(Fernet), SMTP 알람
-- **Streamlit 대시보드 (13탭)**: 실시간 모니터링, 이벤트, 갤러리, 시스템 상태, 모델 업로드, 감사 로그 등
+- **엔진 API (FastAPI)**: 이벤트·카메라·모델·정책·설정·헬스 읽기 + 프롬프트/활성 쓰기 + 제어(start/stop). fail-closed X-API-Key 인증, 시크릿 마스킹. 데몬에 in-process 마운트(탐지+API 단일 서비스)
+- **Next.js 웹 콘솔**: 데스크톱 관제 + 모바일 뷰어(반응형, 다크·라이트). 라이브 영상·이벤트·모델 프롬프트·설정. 자체 로그인(HMAC 세션). API 키는 서버 전용(브라우저 미노출)
+- **MediaMTX 영상 게이트웨이**: RTSP → HLS/WebRTC 재발행. 웹 콘솔은 same-origin 프록시로 라이브 재생(게이트웨이 주소·RTSP 자격증명 미노출)
+- **Streamlit 대시보드 (13탭, 레거시)**: 실시간 모니터링, 이벤트, 갤러리, 모델 업로드, 감사 로그 등. 웹 콘솔로 점진 이관 중 — 미이관 기능(모델 업로드·갤러리·감사 로그)은 당분간 여기서 사용
 - **헬스체크**: `/health`, `/healthz`, `/health/live`, `/health/ready` HTTP 엔드포인트
 
 ## 핵심 기능
@@ -41,10 +44,24 @@ cp .env.example .env
 # 헬스체크
 ./.venv/bin/python scripts/healthcheck.py --json
 
-# 대시보드 실행
+# 대시보드 실행 (레거시 Streamlit — 운영자 기능 일부)
 bash scripts/run_dashboard.sh
 # http://localhost:8080 에서 접속
 ```
+
+### 웹 콘솔(Next.js) + 영상 게이트웨이 — Docker
+
+```bash
+# .env에 키 설정(엔진/웹 공유): KSI_CCTV_API_KEY, KSI_CCTV_WEB_PASSWORD
+# 엔진(데몬) + 웹 콘솔 + 영상 게이트웨이 동시 기동
+docker compose --profile web up --build
+# 웹 콘솔: http://localhost:3000  (로그인 후 카메라 페이지에서 라이브 영상)
+#   - 엔진 API/헬스(8081)와 게이트웨이(8888)는 호스트에 노출하지 않고 compose 네트워크 내부에서 연동
+#   - 원격 접속은 Tailscale 등으로 3000 포트를 tailnet에 노출
+```
+
+> 웹 콘솔 라이브 영상은 카메라(또는 RTSP 소스)가 게이트웨이에 발행/풀될 때 재생된다. 카메라 없이
+> 검증하려면 `ffmpeg`로 샘플을 합성 RTSP로 발행하면 된다(`docs/implementation-plan.md` P5 검증 참조).
 
 ## 설정 파일
 
@@ -75,12 +92,14 @@ bash scripts/run_dashboard.sh
 - `src/pipeline/`: SafetyPipeline (policy-mode / legacy 이중 경로)
 - `src/vlm/`: VLM inference (Ollama), PromptSelector, TTL cache
 - `src/alerts/`: AlertManager (로그, 캡처, 얼굴 블러, 암호화, SMTP)
-- `src/dashboard/`: Streamlit 대시보드 (13탭)
+- `src/api/`: 엔진 API (FastAPI app·service·auth) — 읽기/쓰기/제어 + compat 헬스
+- `src/dashboard/`: Streamlit 대시보드 (13탭, 레거시)
 - `src/models/`: 사용자 모델 업로드 검증기
 - `src/utils/`: 헬스체크, 시스템 메트릭, 설정 로더
-- `config/`: YAML 설정 파일, 도메인별 VLM 프롬프트
+- `frontend/`: Next.js 웹 콘솔 (App Router, Tailwind, shadcn/ui — 관제/뷰어, 라이브 영상)
+- `config/`: YAML 설정 파일, 도메인별 VLM 프롬프트, `mediamtx.yml`(영상 게이트웨이)
 - `scripts/`: 설치, 헬스체크, E2E 테스트, 프로파일링, 모델 다운로드/학습
-- `tests/`: 유닛/통합 테스트 (413 passed, 1 skipped)
+- `tests/`: 유닛/통합 테스트 (462 passed, 3 skipped)
 
 ## 개발 환경
 
@@ -89,18 +108,20 @@ bash scripts/run_dashboard.sh
 - DGX Spark 실증 기준
 - 개발 보조 모델: Qwen 3.6 27B Dense 권장
 
-## 현재 상태 (Phase 10 M1, 2026-06-14)
+## 현재 상태 (2026-06-17)
 
-- 단위 테스트: **413 passed, 1 skipped** (`./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q`)
+- 단위 테스트: **462 passed, 3 skipped** (`./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q`)
 - E2E 스모크: `ok: true`, `failed_models: {}`
-- 대시보드: policy-mode (MultiModelRegistry + EventPolicyEngine) 기본 실행
+- 엔진: policy-mode (MultiModelRegistry + EventPolicyEngine) + 데몬에 FastAPI in-process(탐지+API 단일 서비스)
+- 설치형 제품화: Next.js 웹 콘솔 + MediaMTX 영상 게이트웨이(라이브 HLS 브라우저 재생 검증 완료). 진행 트래커 = `docs/implementation-plan.md`
 - 활성 모델: `general_yolo`, `ppe_yolo`, `fire_smoke_yolo`
 
 ## 다음 단계
 
-1. 실 RTSP 카메라 또는 사람 포함 영상으로 E2E 수동 검증
-2. DGX Spark 환경에서 `CUDAExecutionProvider` 검증
-3. 커스텀 Safety YOLO 학습 (`scripts/train_ppe.py`, `scripts/train_fire_smoke.py` — 데이터셋/GPU 필요)
+1. 실 RTSP 카메라로 라이브 영상·탐지 E2E 검증 (게이트웨이 풀 + 엔진 탐지 동시)
+2. DGX Spark 환경에서 `CUDAExecutionProvider`/TensorRT 가속 검증
+3. 설치형 패키징 마무리 (Windows 서비스/인스톨러·오프라인 번들) + Streamlit 잔여 탭(모델 업로드·갤러리·감사 로그) 웹 콘솔 이관
+> 커스텀 모델 학습은 제품 비목표(범용 사전학습 + open-vocab 텍스트 탐지로 대체) — 필요 시 `scripts/train_*.py`로 별도 수행 가능(데이터셋/GPU 필요).
 
 ## 문서
 
