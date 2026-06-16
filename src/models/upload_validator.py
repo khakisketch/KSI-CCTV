@@ -162,42 +162,32 @@ def validate_file_size(file_path: Path, max_bytes: int = MAX_FILE_SIZE_BYTES) ->
         return False
 
 
-def _iter_all_tensors(model: Any, onnx: Any):
-    """모델의 모든 TensorProto를 순회한다(서브그래프 + FunctionProto 본문 포함).
+def _iter_all_tensors(model: Any):
+    """모델 protobuf 트리 전체를 리플렉션으로 순회하며 모든 TensorProto를 yield한다.
 
-    external-data 참조는 최상위 graph.initializer뿐 아니라 (a) sparse_initializer,
-    (b) 노드 attribute의 텐서(Constant value 등), (c) If/Loop/Scan 서브그래프,
-    (d) model.functions(FunctionProto 본문)의 노드에도 숨을 수 있다 — 한 곳이라도 빠뜨리면 우회된다.
+    external-data는 initializer·sparse_initializer·노드 attribute(단/복수 텐서·서브그래프)·
+    model.functions(본문 node + 기본 attribute_proto)·training_info 등 ONNX의 *어느* TensorProto에든
+    실릴 수 있다. 위치를 일일이 열거하면(이전 방식) 한 곳이라도 빠지면 우회된다 — 실제로 라운드마다
+    sparse_tensors(복수)·FunctionProto.attribute_proto·training_info 누락이 드러났다. 그래서 메시지
+    트리를 전부 훑어 TensorProto를 빠짐없이 찾는다(미래에 새 위치가 생겨도 자동 커버).
     """
-    AP = onnx.AttributeProto
-    graphs = [model.graph]
+    from onnx import TensorProto
 
-    def _walk_nodes(nodes):
-        for node in nodes:
-            for attr in node.attribute:
-                if attr.type == AP.TENSOR:
-                    yield attr.t
-                elif attr.type == AP.TENSORS:
-                    yield from attr.tensors
-                elif attr.type == AP.SPARSE_TENSOR:
-                    yield attr.sparse_tensor.values
-                    yield attr.sparse_tensor.indices
-                elif attr.type == AP.GRAPH:
-                    graphs.append(attr.g)
-                elif attr.type == AP.GRAPHS:
-                    graphs.extend(attr.graphs)
-
-    # FunctionProto 본문(initializer 없음, node만) — 서브그래프가 있으면 graphs worklist에 적재된다.
-    for fn in model.functions:
-        yield from _walk_nodes(fn.node)
-
-    while graphs:
-        g = graphs.pop()
-        yield from g.initializer
-        for sp in g.sparse_initializer:
-            yield sp.values
-            yield sp.indices
-        yield from _walk_nodes(g.node)
+    stack = [model]
+    while stack:
+        msg = stack.pop()
+        for fd, value in msg.ListFields():
+            if fd.type != fd.TYPE_MESSAGE:
+                continue
+            # 단수 메시지는 ListFields를 갖고, 복수(repeated) 메시지는 컨테이너(ListFields 없음)다.
+            # upb/pure-python 양쪽에서 동작하도록 descriptor.label 대신 값 형태로 구분한다.
+            items = [value] if hasattr(value, "ListFields") else list(value)
+            for item in items:
+                if isinstance(item, TensorProto):
+                    yield item  # TensorProto 내부엔 또 다른 TensorProto가 없어 재귀 불필요
+                elif hasattr(item, "ListFields"):
+                    stack.append(item)  # 중첩 메시지(GraphProto/SparseTensorProto/AttributeProto/…)
+                # else: map key 등 스칼라 — 무시
 
 
 def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
@@ -219,7 +209,7 @@ def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
         return False, f"ONNX 파싱 실패: {exc}"
 
     external = onnx.TensorProto.EXTERNAL
-    for tensor in _iter_all_tensors(model, onnx):
+    for tensor in _iter_all_tensors(model):
         if tensor.data_location == external:
             return False, (
                 "외부 데이터(external data)를 참조하는 ONNX는 보안상 허용되지 않습니다. "

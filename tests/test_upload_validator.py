@@ -693,6 +693,86 @@ class TestValidateOnnxNoExternalData(unittest.TestCase):
         model.ir_version = 7
         self._reject(model)
 
+    def test_external_data_in_sparse_tensors_attr_is_rejected(self):
+        """노드 attribute의 sparse_tensors(복수형)에 숨긴 external-data를 거부한다(generic walk)."""
+        from onnx import AttributeProto, SparseTensorProto, TensorProto, helper
+
+        ext = self._ext_tensor("sv")
+        idx = helper.make_tensor("si", TensorProto.INT64, [1], [0])
+        sp = SparseTensorProto()
+        sp.values.CopyFrom(ext)
+        sp.indices.CopyFrom(idx)
+        sp.dims.append(1)
+        attr = AttributeProto()
+        attr.name = "sps"
+        attr.type = AttributeProto.SPARSE_TENSORS
+        attr.sparse_tensors.append(sp)
+
+        input_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1])
+        output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])
+        node = helper.make_node("Identity", inputs=["input"], outputs=["output"])
+        node.attribute.append(attr)
+        graph = helper.make_graph([node], "evil", [input_info], [output_info])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
+        model.ir_version = 7
+        self._reject(model)
+
+    def test_external_data_in_function_default_attr_is_rejected(self):
+        """FunctionProto.attribute_proto(함수 기본 attribute 값)에 숨긴 external-data를 거부한다."""
+        from onnx import AttributeProto, TensorProto, helper
+
+        ext = self._ext_tensor("faw")
+        default_attr = AttributeProto()
+        default_attr.name = "w"
+        default_attr.type = AttributeProto.TENSOR
+        default_attr.t.CopyFrom(ext)
+
+        body = helper.make_node("Identity", inputs=["fn_in"], outputs=["fn_out"])
+        fn = helper.make_function(
+            domain="custom",
+            fname="EvilFn",
+            inputs=["fn_in"],
+            outputs=["fn_out"],
+            nodes=[body],
+            opset_imports=[helper.make_opsetid("", 11)],
+        )
+        fn.attribute_proto.append(default_attr)
+        input_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1])
+        output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])
+        call = helper.make_node("EvilFn", inputs=["input"], outputs=["output"], domain="custom")
+        graph = helper.make_graph([call], "evil", [input_info], [output_info])
+        model = helper.make_model(
+            graph,
+            opset_imports=[helper.make_opsetid("", 11), helper.make_opsetid("custom", 1)],
+            functions=[fn],
+        )
+        model.ir_version = 8
+        self._reject(model)
+
+    def test_external_data_in_training_info_is_rejected(self):
+        """model.training_info의 그래프 initializer에 숨긴 external-data를 거부한다."""
+        from onnx import TensorProto, TrainingInfoProto, helper
+
+        ext = self._ext_tensor("tw")
+        init_node = helper.make_node("Identity", inputs=["ti_in"], outputs=["ti_out"])
+        init_graph = helper.make_graph(
+            [init_node], "train_init",
+            [helper.make_tensor_value_info("ti_in", TensorProto.FLOAT, [1])],
+            [helper.make_tensor_value_info("ti_out", TensorProto.FLOAT, [1])],
+            initializer=[ext],
+        )
+        ti = TrainingInfoProto()
+        ti.algorithm.CopyFrom(init_graph)
+
+        input_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1])
+        output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])
+        node = helper.make_node("Identity", inputs=["input"], outputs=["output"])
+        graph = helper.make_graph([node], "main", [input_info], [output_info])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
+        model.training_info.append(ti)
+        model.ir_version = 8
+        self._reject(model)
+
     def test_external_data_in_function_body_is_rejected(self):
         """model.functions(FunctionProto) 본문에 숨긴 external-data를 거부한다(우회 차단)."""
         from onnx import TensorProto, helper
