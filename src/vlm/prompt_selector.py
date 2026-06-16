@@ -19,12 +19,14 @@ DEFAULT_PROMPTS_DIR = "./config/prompts"
 # 전용 yaml이 없는 도메인은 의미적으로 가장 가까운 파일을 명시적으로 지정한다.
 # 운영자가 새 도메인을 추가할 때는 여기에 항목을 추가하고 전용 yaml을 작성할 것.
 PROMPT_MAP = {
+    "general": "general.yaml",
     "construction": "construction.yaml",
     "school": "school.yaml",
     "factory": "factory.yaml",
     "warehouse": "warehouse.yaml",
     "parking": "parking.yaml",
-    "default": "construction.yaml",
+    # 미매핑 도메인 fallback — 범용 프롬프트(특정 현장 가정 없음)가 가장 안전한 기본.
+    "default": "general.yaml",
 }
 
 # 전용 프롬프트가 없어 다른 도메인 파일을 재사용하는 도메인 집합.

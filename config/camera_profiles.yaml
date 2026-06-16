@@ -2,19 +2,19 @@
 # In Phase 1 this is documentation/config foundation only.
 
 cameras:
+  # 기본(예시) 카메라 — 범용 CCTV 프로파일. 어느 현장에나 바로 동작(사람·쓰러짐·화재·연기·혼잡).
+  # 건설/공장 등 특화가 필요하면 domain을 construction/factory/parking/school로 바꾼다.
   cam_001:
-    domain: construction
+    domain: general
     enabled: true
     enabled_events:
       - person_detected
-      - no_helmet
-      - no_vest
+      - fall
       - fire
       - smoke
-      - fall
+      - crowding
     models:
       - general_yolo
-      - ppe_yolo
       - fire_smoke_yolo
     zones: {}
 
@@ -49,6 +49,11 @@ cameras:
     zones: {}
 
 domains:
+  general:
+    label: "범용 CCTV"
+    default_events: [person_detected, fall, fire, smoke, crowding]
+    default_models: [general_yolo, fire_smoke_yolo]
+
   construction:
     label: "건설현장"
     default_events: [person_detected, no_helmet, no_vest, fire, smoke, fall]

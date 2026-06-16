@@ -2,6 +2,100 @@
 # Policies map model detections to safety events.
 
 profiles:
+  # ── 범용(general) — 어느 현장에나 바로 쓰는 기본 프로파일 ──────────────────────────
+  # 사람·쓰러짐·화재·연기·혼잡 + (zone 설정 시)침입. 건설 특화 PPE(안전모/조끼)는 제외해
+  # 일반 현장 오탐을 줄인다. 임계값은 다양한 CCTV 화각에서 false alarm을 낮추도록 보수적으로 정함.
+  # 사용 모델: general_yolo(COCO 사람/객체) + fire_smoke_yolo. (ppe_yolo 불필요)
+  general:
+    policies:
+      person_detected:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          # 0.25는 다양한 현장에서 부분/가림 박스 오탐 과다 → 0.35(presence 적정 균형)
+          min_confidence: 0.35
+        rule:
+          type: direct_detection
+        vlm: never
+        alert_level: low
+        cooldown_sec: 60
+        description: "사람 감지"
+
+      fall:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.35
+        rule:
+          type: pose_anomaly
+          aspect_ratio_threshold: 2.0
+          height_drop_ratio: 0.45
+          cy_drop_ratio: 0.35
+        vlm: always
+        alert_level: high
+        cooldown_sec: 20
+        description: "쓰러짐 의심"
+
+      fire:
+        enabled: true
+        trigger:
+          models: [fire_smoke_yolo]
+          classes: [fire]
+          # critical 알람은 오탐이 매우 disruptive → 0.45로 보수적(VLM 미가동 환경도 고려).
+          min_confidence: 0.45
+        rule:
+          type: direct_detection
+        vlm: always
+        alert_level: critical
+        cooldown_sec: 15
+        description: "화재 감지"
+
+      smoke:
+        enabled: true
+        trigger:
+          models: [fire_smoke_yolo]
+          classes: [smoke]
+          # 연기는 안개/수증기/먼지와 혼동되기 쉬움 → 0.40으로 상향(오탐 억제).
+          min_confidence: 0.40
+        rule:
+          type: direct_detection
+        vlm: on_high_confidence
+        alert_level: high
+        cooldown_sec: 20
+        description: "연기 감지"
+
+      crowding:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.35
+        rule:
+          type: count_threshold
+          # 단일 카메라 화각 기준 적정값(20은 과다) — 현장 FOV에 맞춰 조정.
+          min_count: 10
+        vlm: never
+        alert_level: low
+        cooldown_sec: 60
+        description: "혼잡 감지"
+
+      restricted_area:
+        # zone(폴리곤 좌표)을 카메라별로 설정해야 발생한다(zones 비어있으면 미발생).
+        enabled: false
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.35
+        rule:
+          type: zone_intrusion
+          zone_id: restricted
+        vlm: never
+        alert_level: medium
+        cooldown_sec: 30
+        description: "제한구역 침입"
+
   construction:
     policies:
       person_detected:
@@ -166,3 +260,146 @@ profiles:
         alert_level: low
         cooldown_sec: 60
         description: "혼잡 감지"
+
+  # ── 공장(factory) — 사람·안전모·화재·연기 + (zone)침입 ─────────────────────────────
+  # camera_profiles.yaml의 factory 도메인 대응 프로파일(이전엔 프로파일 부재로 미발생하던 dead 도메인).
+  factory:
+    policies:
+      person_detected:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.35
+        rule:
+          type: direct_detection
+        vlm: never
+        alert_level: low
+        cooldown_sec: 60
+        description: "사람 감지"
+
+      no_helmet:
+        enabled: true
+        trigger:
+          models: [ppe_yolo]
+          classes: [no_helmet]
+          min_confidence: 0.35
+        rule:
+          type: direct_detection
+        vlm: on_ambiguous
+        alert_level: medium
+        cooldown_sec: 30
+        description: "안전모 미착용"
+
+      fire:
+        enabled: true
+        trigger:
+          models: [fire_smoke_yolo]
+          classes: [fire]
+          min_confidence: 0.45
+        rule:
+          type: direct_detection
+        vlm: always
+        alert_level: critical
+        cooldown_sec: 15
+        description: "화재 감지"
+
+      smoke:
+        enabled: true
+        trigger:
+          models: [fire_smoke_yolo]
+          classes: [smoke]
+          min_confidence: 0.40
+        rule:
+          type: direct_detection
+        vlm: on_high_confidence
+        alert_level: high
+        cooldown_sec: 20
+        description: "연기 감지"
+
+      restricted_area:
+        enabled: false
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.35
+        rule:
+          type: zone_intrusion
+          zone_id: restricted
+        vlm: never
+        alert_level: medium
+        cooldown_sec: 30
+        description: "제한구역 침입"
+
+  # ── 주차장/빌딩(parking) — 사람·쓰러짐·화재·연기 + (zone)침입 ──────────────────────
+  # camera_profiles.yaml의 parking 도메인 대응 프로파일(이전엔 프로파일 부재로 미발생하던 dead 도메인).
+  parking:
+    policies:
+      person_detected:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.35
+        rule:
+          type: direct_detection
+        vlm: never
+        alert_level: low
+        cooldown_sec: 60
+        description: "사람 감지"
+
+      fall:
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.35
+        rule:
+          type: pose_anomaly
+          aspect_ratio_threshold: 2.0
+          height_drop_ratio: 0.45
+          cy_drop_ratio: 0.35
+        vlm: always
+        alert_level: high
+        cooldown_sec: 20
+        description: "쓰러짐 의심"
+
+      fire:
+        enabled: true
+        trigger:
+          models: [fire_smoke_yolo]
+          classes: [fire]
+          min_confidence: 0.45
+        rule:
+          type: direct_detection
+        vlm: always
+        alert_level: critical
+        cooldown_sec: 15
+        description: "화재 감지"
+
+      smoke:
+        enabled: true
+        trigger:
+          models: [fire_smoke_yolo]
+          classes: [smoke]
+          min_confidence: 0.40
+        rule:
+          type: direct_detection
+        vlm: on_high_confidence
+        alert_level: high
+        cooldown_sec: 20
+        description: "연기 감지"
+
+      restricted_area:
+        enabled: false
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.35
+        rule:
+          type: zone_intrusion
+          zone_id: restricted
+        vlm: never
+        alert_level: medium
+        cooldown_sec: 30
+        description: "제한구역 침입"

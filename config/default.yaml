@@ -2,8 +2,10 @@
 app:
   name: "KSI-CCTV"
   version: "0.1.0"
-  debug: true
-  log_level: "DEBUG"
+  # 범용 CCTV 운영 기본값 — 디버그 OFF·INFO 로그(상시 운영 시 DEBUG는 과다·디스크 낭비).
+  # 개발 중 상세 로그가 필요하면 KSI_CCTV_LOG_LEVEL=DEBUG 환경변수로 일시 상향.
+  debug: false
+  log_level: "INFO"
   log_dir: "./logs"
   timezone: "Asia/Seoul"
 
@@ -27,7 +29,9 @@ models:
   yolo:
     model_path: "./models/yolo26.onnx"
     input_size: [640, 640]
-    conf_threshold: 0.25
+    # 범용 CCTV 기본 신뢰도 — 0.25는 다양한 현장에서 부분/가림 박스 오탐이 많아 0.30으로 상향.
+    # (정밀 게이트는 config/event_policies.yaml의 이벤트별 min_confidence가 추가로 담당)
+    conf_threshold: 0.30
     iou_threshold: 0.45
     postprocess_mode: "auto"  # auto, nms, nms_free
     class_profile: "coco"  # coco(pretrained yolo26n) 또는 safety_custom(커스텀 안전 모델)

@@ -6,6 +6,22 @@
 > **현재 상태:** 코드/도구는 준비 완료(아래 "이미 준비된 것" 참조). 남은 것은 *실행*뿐이며,
 > 각 단계에 **정량 합격 기준(acceptance)** 을 정의해 "통과/실패"를 객관적으로 판정한다.
 
+## 범용 CCTV 기본 셋업 (커스텀 학습 없이 바로 사용)
+
+> **Phase D(커스텀 학습)는 선택**이다. 기본 전략은 "공개 pretrained 모델 + 범용 프로파일 +
+> 보수적 임계값"으로 어느 현장에나 바로 운영하는 것. 학습은 특정 클래스 정확도가 현장 요구에
+> 미달할 때만 진행한다.
+
+- **기본 도메인 = `general`** (`config/camera_profiles.yaml`의 cam_001). 사람·쓰러짐·화재·연기·혼잡을
+  탐지하고, 건설 특화 PPE(안전모/조끼)는 제외해 일반 현장 오탐을 줄인다. 사용 모델은
+  general_yolo(COCO) + fire_smoke_yolo. 현장별로 domain을 `construction/factory/parking/school`로
+  바꾸면 해당 프로파일이 적용된다(전부 `config/event_policies.yaml`에 정의됨 — dead 도메인 없음).
+- **결정된 기본 임계값**(다양한 CCTV 화각에서 false alarm 최소화 목적, 현장 데이터로 미세조정):
+  사람/혼잡/쓰러짐 게이트 `0.35`, 화재 `0.45`(critical 오탐 억제), 연기 `0.40`(안개/수증기 혼동 억제).
+  운영 로그는 INFO·debug off(`config/default.yaml`).
+- **VLM(Ollama)은 선택**: 미가동이어도 1차 YOLO 탐지로 동작하며, 정책상 VLM 필요 이벤트는
+  "VLM 미확인" 표식으로 노출된다(false-green 방지). 가동 시 fire/fall 등이 2차 확인으로 enrich.
+
 ## 이미 준비된 것 (코드/도구 — 추가 개발 불필요)
 
 | 영역 | 자산 | 비고 |
@@ -59,7 +75,11 @@ curl -s http://localhost:8081/health | python3 -m json.tool   # cameras/모델/V
 ./.venv/bin/python scripts/profile_pipeline.py --video <실영상> --frames 200 --iterations 10 \
     --json-out reports/phase_c_profile.json   # --video 생략 시 합성 프레임으로 측정
 ```
-**합격:** 추론 평균 latency가 실시간 처리 가능 범위(목표 fps의 프레임 예산 내), 장시간 RSS 안정.
+**합격(정량, 결정값):**
+- [ ] GPU 추론 평균 latency **< 150ms/frame**(skip_frames=5·30fps → 처리 6fps의 166ms 예산 내). CPU-only면 best-effort.
+- [ ] p95 latency < 250ms/frame
+- [ ] 30분 stress 동안 RSS 증가가 선형 누수가 아님(시작 대비 **< 15%** 증가, 평탄화)
+- [ ] dropped_frames < 5%(C2와 동일 기준)
 
 ## C4. VLM 2차 분석 종단
 ```bash
@@ -131,9 +151,10 @@ python scripts/generate_dataset_yaml.py --dataset-dir data/ppe/yolo \
 4. 재검증: `./.venv/bin/python scripts/e2e_smoke_test.py --policy-mode` → `failed_models: {}` +
    `KSI_CCTV_TEST_VLM`/실영상으로 해당 이벤트 실제 발생 확인.
 
-## D5. 합격 기준
-- [ ] 검증셋 mAP@0.5 ≥ 목표(예: PPE ≥ 0.70, fire/smoke ≥ 0.60 — 현장 요구에 맞춰 조정)
-- [ ] 클래스별 precision/recall이 운영 허용치(특히 false positive를 낮게 — fire의 오탐은 critical 알람)
+## D5. 합격 기준 (결정값 — 현장 요구로 조정 가능)
+- [ ] 검증셋 mAP@0.5: **PPE ≥ 0.70**, **fire/smoke ≥ 0.60**, fall(전용 모델 시) ≥ 0.60
+- [ ] 클래스별 **precision ≥ 0.80**(특히 fire — critical 알람의 오탐은 신뢰도를 크게 떨어뜨림), recall ≥ 0.70
+- [ ] 공개 pretrained 베이스라인 대비 현장 영상에서 **오탐률이 개선**(학습의 명분 = 베이스라인 초과)
 - [ ] 교체 후 `e2e_smoke_test --policy-mode` 통과, 실영상에서 해당 안전 이벤트가 정상 탐지·오탐 허용 범위
 
 ---
