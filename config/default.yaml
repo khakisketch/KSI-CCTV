@@ -23,6 +23,9 @@ cameras:
   max_channels: 16
   reconnect_interval_sec: 5
   timeout_sec: 10
+  # 마지막 프레임 수신 후 이 시간(초) 초과 시 stale(프레임 지연)로 판정 → /health unhealthy.
+  # 네트워크/카메라 fps에 맞춰 조정(저fps 카메라는 상향). 이전엔 코드 고정(30s)이라 조정 불가였음.
+  stale_threshold_sec: 30
 
 # 모델 설정
 models:

@@ -273,6 +273,20 @@ class TestCheckCameras(unittest.TestCase):
         self.assertIn("cam1", result.metadata["cameras"])
         self.assertTrue(len(result.metadata["cameras"]["cam1"]["issues"]) > 0)
 
+    def test_stale_sec_fallback_when_is_stale_absent(self):
+        """is_stale 필드가 없으면 stale_sec 임계로 fallback 판정한다(이전 dead 파라미터 활성화)."""
+        from src.utils.health import check_cameras
+        # is_stale 미제공 + 경과 20초 > stale_sec(10) → unhealthy
+        unhealthy = check_cameras(
+            {"cam1": {"connected": True, "seconds_since_last_frame": 20.0}}, stale_sec=10.0
+        )
+        self.assertFalse(unhealthy.healthy)
+        # 동일 상태라도 stale_sec를 크게(30) 주면 healthy
+        healthy = check_cameras(
+            {"cam1": {"connected": True, "seconds_since_last_frame": 20.0}}, stale_sec=30.0
+        )
+        self.assertTrue(healthy.healthy)
+
     def test_disconnected_camera_is_unhealthy(self):
         from src.utils.health import check_cameras
         status = {

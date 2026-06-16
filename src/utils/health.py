@@ -197,9 +197,13 @@ def check_cameras(
 
     for cam_id, status in manager_status.items():
         issues: list[str] = []
-        # is_stale 필드 우선 사용 (rtsp_capture.py stale_threshold 기반)
-        if status.get("is_stale", False):
-            elapsed = status.get("seconds_since_last_frame")
+        elapsed = status.get("seconds_since_last_frame")
+        # is_stale(카메라가 자신의 stale_threshold로 계산)를 1차로 신뢰하고, 필드가 없으면(미제공)
+        # stale_sec를 fallback 임계로 직접 판정한다(이전엔 stale_sec가 미사용 dead 파라미터였음).
+        is_stale = status.get("is_stale")
+        if is_stale is None:
+            is_stale = elapsed is not None and elapsed > stale_sec
+        if is_stale:
             elapsed_str = f"{elapsed:.1f}초" if elapsed is not None else "알 수 없음"
             issues.append(f"프레임 지연 {elapsed_str}")
         elif not status.get("connected", True):

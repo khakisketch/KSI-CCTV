@@ -168,6 +168,8 @@ def _register_cameras(pipeline: SafetyPipeline, config: AppConfig) -> int:
     """config의 활성 카메라를 파이프라인에 등록. 등록된 카메라 수 반환."""
     cameras = [c for c in config.load_cameras() if c.get("enabled")]
     profiles = ConfigLoader.load("./config/camera_profiles.yaml")
+    # stale 판정 임계(초) — config 기반(이전엔 코드 고정 30s라 현장 조정 불가였음).
+    stale_threshold = float(config.get("cameras", "stale_threshold_sec", default=30.0))
     registered = 0
     for cam in cameras:
         cam_id = cam.get("id", "unknown")
@@ -177,7 +179,11 @@ def _register_cameras(pipeline: SafetyPipeline, config: AppConfig) -> int:
             logger.error("[%s] stream_url 환경변수 미설정 — 이 카메라를 건너뜁니다.", cam_id)
             continue
         pipeline.set_camera_profile(cam_id, _camera_policy_profile(cam, profiles))
-        pipeline.add_camera(cam_id, stream_url, target_fps=int(cam.get("fps", 30)))
+        pipeline.add_camera(
+            cam_id, stream_url,
+            target_fps=int(cam.get("fps", 30)),
+            stale_threshold=stale_threshold,
+        )
         registered += 1
     return registered
 
@@ -208,7 +214,11 @@ def main() -> int:
     checker.register("disk_space", check_disk_space)
     checker.register("memory_usage", check_memory_usage)
     checker.register("ollama", check_ollama_available)
-    register_pipeline_health_checks(checker, pipeline)
+    # 카메라 stale 임계를 config 값으로 통일(카메라 add_camera와 동일 SSOT — 10s/30s 불일치 제거).
+    register_pipeline_health_checks(
+        checker, pipeline,
+        stale_sec=float(config.get("cameras", "stale_threshold_sec", default=30.0)),
+    )
     # 기본 loopback — /health 운영상태 외부노출 방지. 컨테이너 내부 HEALTHCHECK(curl localhost)는
     # 이걸로 충분하며, 외부 모니터링이 필요하면 KSI_CCTV_HEALTH_HOST=0.0.0.0로 명시 opt-in.
     health_host = os.environ.get("KSI_CCTV_HEALTH_HOST", "127.0.0.1")
