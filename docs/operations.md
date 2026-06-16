@@ -224,28 +224,21 @@ find data/captures/ -name "*.jpg.enc" -mtime +30 -delete
 
 ---
 
-## 백업
+## 백업 / 복구
 
-운영 환경에서 정기적으로 백업할 항목:
+설정·업로드모델 백업과 복구는 `scripts/backup.sh`로 자동화한다(시크릿·PII는 자동 제외).
 
 ```bash
-# 설정 파일 (비밀 제외)
-config/default.yaml
-config/model_profiles.yaml
-config/event_policies.yaml
-config/camera_profiles.yaml
-config/alert_preferences.yaml
-
-# 모델 파일
-models/*.onnx
-models/uploaded/
-
-# 로그 (장기 보관 필요 시)
-logs/alerts.log
-logs/audit.log
+scripts/backup.sh                  # backups/ksi-cctv-config-<ts>.tar.gz 생성(perms 600)
+scripts/backup.sh backup --with-logs   # 로그도 포함(PII 주의)
+scripts/backup.sh list             # 백업 목록
+scripts/backup.sh restore <tarball>    # 복구(확인 후, 복구 전 현재상태 자동백업) + 환경 재검증
 ```
 
-`.env`, `/etc/ksi-cctv/ksi-cctv.env`는 별도 비밀 관리 시스템으로 백업합니다.
+- **포함**: `config/`(default·model_profiles·event_policies·camera_profiles·alert_preferences·cameras.json)·`models/uploaded/`.
+- **자동 제외(의도적)**: `.env`(시크릿)·`data/captures`(PII 이미지)·`cameras.local.json`. 기본 모델 `.onnx`는
+  `scripts/fetch_safety_models.py`로 재현 가능하므로 백업 대상 아님(용량·AGPL).
+- **시크릿**: `.env`, `KSI_CCTV_CAPTURE_KEY`(encrypt_images 사용 시)는 별도 비밀 관리 시스템으로 백업한다.
 
 ---
 
