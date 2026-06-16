@@ -23,7 +23,8 @@
 ### P1. 엔진 API (FastAPI) — 키스톤 ✅(읽기 API 완료·검증)
 - ✅ FastAPI 앱 골격(`src/api/`: app·service·auth) — 인증(fail-closed X-API-Key) + 시크릿 마스킹
 - ✅ 읽기 엔드포인트: events(alerts.log 파싱·마스킹) · config(큐레이션) · cameras(url 마스킹) · models · policies · health
-- ⏭ 제어/실시간: control(start/stop) · 이벤트 SSE/WS — **P1b(데몬 통합 시)** 로 분리
+- ✅ **P1b 쓰기 엔드포인트**: POST /api/models/{name}/prompts(open-vocab 프롬프트 설정 — 학습 없이 탐지대상 변경, 정제·검증·model_profiles 안전 갱신) + PUT /api/models/{name}/enabled. 인증 필수. 테스트 8.
+- ⏭ 제어/실시간: control(start/stop) · 이벤트 SSE/WS — 데몬 통합 시(엔진 프로세스에 API mount 필요)
 - ✅ 테스트 12종(TestClient) + 실 uvicorn 서빙 스모크
 - **검증 완료:** ruff·mypy clean(33 files)·pytest 429 passed. 실 uvicorn: live=200(비인증)·models 401→200(키)·정책 5프로파일 노출. 시크릿 마스킹·fail-closed 확인.
 
@@ -70,3 +71,4 @@
 - (P3) 2026-06-16 open-vocab(YOLO-World) OpenVocabDetector + registry open_vocab 타입 + model_profiles 엔트리. "텍스트로 학습없이 탐지" 실추론 PASS. 테스트 7.
 - (P4) 2026-06-17 프론트 scaffold(Next16/React19/Tailwind4/shadcn) + 다크라이트 테마 + 반응형 셸(데스크톱 사이드바/모바일 하단탭) + 대시보드/스텁. npm build 성공.
 - (P4b) 2026-06-17 엔진 API 연동(읽기) — lib/engine.ts 서버사이드(키 미노출) + 5화면 실데이터 Server Component. 엔진+Next E2E SSR 실데이터 렌더 + 다크/라이트/모바일 스크린샷 검증. P4c=쓰기·인증.
+- (P1b) 2026-06-17 엔진 API 쓰기 — POST /api/models/{name}/prompts(open-vocab 프롬프트, 정제·검증·안전 갱신) + PUT enabled. 인증·테스트 8. P4c(프롬프트 UI)의 백엔드 전제 완료.

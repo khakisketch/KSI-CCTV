@@ -132,5 +132,95 @@ class TestServiceMaskingAndEvents(unittest.TestCase):
         self.assertNotIn("pw", cams[0]["stream_url"])
 
 
+@unittest.skipUnless(_HAS_API, "fastapi 미설치 — skip")
+class TestApiWritePrompts(unittest.TestCase):
+    """P1b 쓰기 엔드포인트 — open-vocab 프롬프트 설정·모델 토글(인증·검증·안전 갱신)."""
+
+    def _profiles(self, tmp):
+        import yaml
+        p = Path(tmp) / "model_profiles.yaml"
+        p.write_text(
+            yaml.safe_dump({"models": {
+                "ov": {"type": "open_vocab", "enabled": False, "classes": []},
+                "yo": {"type": "yolo_onnx", "enabled": True},
+            }}, allow_unicode=True),
+            encoding="utf-8",
+        )
+        return p
+
+    def test_set_prompts_service_cleans_input(self):
+        import yaml
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._profiles(tmp)
+            out = service.set_model_prompts(
+                ["person", " 지게차 ", "person", ""], model_name="ov", enabled=True, profiles_path=p
+            )
+            self.assertEqual(out["classes"], ["person", "지게차"])  # trim+dedup+빈값 제거
+            self.assertTrue(out["enabled"])
+            cfg = yaml.safe_load(p.read_text(encoding="utf-8"))
+            self.assertEqual(cfg["models"]["ov"]["classes"], ["person", "지게차"])
+            self.assertTrue(cfg["models"]["ov"]["enabled"])
+
+    def test_non_openvocab_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._profiles(tmp)
+            with self.assertRaises(ValueError):
+                service.set_model_prompts(["x"], model_name="yo", profiles_path=p)
+
+    def test_missing_model_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._profiles(tmp)
+            with self.assertRaises(KeyError):
+                service.set_model_prompts(["x"], model_name="nope", profiles_path=p)
+
+    def test_empty_prompts_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._profiles(tmp)
+            with self.assertRaises(ValueError):
+                service.set_model_prompts(["  ", ""], model_name="ov", profiles_path=p)
+
+    def test_set_enabled_service(self):
+        import yaml
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._profiles(tmp)
+            service.set_model_enabled("yo", False, profiles_path=p)
+            cfg = yaml.safe_load(p.read_text(encoding="utf-8"))
+            self.assertFalse(cfg["models"]["yo"]["enabled"])
+
+    def test_endpoint_requires_auth(self):
+        app = create_app()
+        client = TestClient(app)
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = client.post("/api/models/ov/prompts", json={"classes": ["person"]})  # 키 없음
+        self.assertEqual(r.status_code, 401)
+
+    def test_endpoint_sets_prompts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._profiles(tmp)
+            with patch.object(service, "_MODEL_PROFILES", p), patch.dict(
+                os.environ, {"KSI_CCTV_API_KEY": _KEY}
+            ):
+                client = TestClient(create_app())
+                r = client.post(
+                    "/api/models/ov/prompts",
+                    headers={"X-API-Key": _KEY},
+                    json={"classes": ["fire", "smoke"], "enabled": True},
+                )
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.json()["classes"], ["fire", "smoke"])
+
+    def test_endpoint_400_for_non_openvocab(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._profiles(tmp)
+            with patch.object(service, "_MODEL_PROFILES", p), patch.dict(
+                os.environ, {"KSI_CCTV_API_KEY": _KEY}
+            ):
+                client = TestClient(create_app())
+                r = client.post(
+                    "/api/models/yo/prompts", headers={"X-API-Key": _KEY}, json={"classes": ["x"]}
+                )
+            self.assertEqual(r.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

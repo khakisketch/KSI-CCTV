@@ -142,6 +142,78 @@ def list_policies(policies_path: Path | None = None) -> dict[str, Any]:
     return {"profiles": profiles_out}
 
 
+MAX_PROMPTS = 100
+MAX_PROMPT_LEN = 64
+
+
+def _write_yaml(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+
+
+def _clean_prompts(classes: list[str]) -> list[str]:
+    """프롬프트 정제 — 공백 strip, 빈/과길이 제거, 중복 제거(순서 보존), 개수 상한."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in classes or []:
+        if not isinstance(c, str):
+            continue
+        s = c.strip()
+        if not s or len(s) > MAX_PROMPT_LEN:
+            continue
+        if any(ord(ch) < 32 for ch in s):  # 제어문자 거부
+            continue
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out[:MAX_PROMPTS]
+
+
+def set_model_prompts(
+    classes: list[str],
+    model_name: str = "open_vocab_yolo",
+    enabled: bool | None = None,
+    profiles_path: Path | None = None,
+) -> dict[str, Any]:
+    """open_vocab 모델의 탐지 프롬프트(classes)를 설정한다(학습 없이 즉시 탐지 대상 변경).
+
+    model_profiles.yaml을 안전 갱신한다. open_vocab 타입만 허용. 반환은 갱신된 모델 요약.
+    KeyError(모델 없음)·ValueError(타입 불가/유효 프롬프트 없음)를 발생시킨다(라우트가 4xx로 변환).
+    """
+    path = profiles_path or _MODEL_PROFILES
+    cfg = _load_yaml(path)
+    models = cfg.get("models")
+    if not isinstance(models, dict) or model_name not in models:
+        raise KeyError(f"모델을 찾을 수 없습니다: {model_name}")
+    m = models[model_name]
+    if not isinstance(m, dict) or m.get("type") != "open_vocab":
+        raise ValueError("open_vocab 타입 모델만 프롬프트를 설정할 수 있습니다.")
+    cleaned = _clean_prompts(classes)
+    if not cleaned:
+        raise ValueError("유효한 프롬프트가 없습니다(빈 문자열/64자 초과만 입력됨).")
+    m["classes"] = cleaned
+    if enabled is not None:
+        m["enabled"] = bool(enabled)
+    _write_yaml(path, cfg)
+    return {"name": model_name, "classes": cleaned, "enabled": bool(m.get("enabled", False))}
+
+
+def set_model_enabled(
+    model_name: str, enabled: bool, profiles_path: Path | None = None
+) -> dict[str, Any]:
+    """모델 활성/비활성 토글(model_profiles.yaml 갱신). 반환은 갱신된 상태."""
+    path = profiles_path or _MODEL_PROFILES
+    cfg = _load_yaml(path)
+    models = cfg.get("models")
+    if not isinstance(models, dict) or model_name not in models:
+        raise KeyError(f"모델을 찾을 수 없습니다: {model_name}")
+    models[model_name]["enabled"] = bool(enabled)
+    _write_yaml(path, cfg)
+    return {"name": model_name, "enabled": bool(enabled)}
+
+
 def config_sanitized(config: Any) -> dict[str, Any]:
     """대시보드/프론트가 쓰는 비밀 제거 설정 뷰. 큐레이션 + 마스킹(원본 덤프 금지)."""
     det = config.get_detection_config() if hasattr(config, "get_detection_config") else {}

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from src.api import service
 from src.api.auth import require_api_key
@@ -20,6 +21,17 @@ from src.utils.health import (
     check_memory_usage,
     register_pipeline_health_checks,
 )
+
+
+class PromptsBody(BaseModel):
+    """open-vocab 탐지 프롬프트 설정 요청."""
+
+    classes: list[str] = Field(..., description="탐지할 텍스트 프롬프트 목록(학습 불필요)")
+    enabled: bool | None = Field(default=None, description="설정과 함께 모델 활성화 여부")
+
+
+class EnabledBody(BaseModel):
+    enabled: bool
 
 
 def create_app(config: Any | None = None, pipeline: Any | None = None) -> FastAPI:
@@ -80,6 +92,24 @@ def create_app(config: Any | None = None, pipeline: Any | None = None) -> FastAP
     @app.get("/api/config", tags=["config"], dependencies=auth)
     def config_view() -> dict[str, Any]:
         return service.config_sanitized(app.state.config)
+
+    # ── 쓰기: open-vocab 프롬프트 설정(학습 없이 탐지 대상 변경) ──────────
+    @app.post("/api/models/{name}/prompts", tags=["models"], dependencies=auth)
+    def set_prompts(name: str, body: PromptsBody) -> dict[str, Any]:
+        try:
+            return service.set_model_prompts(body.classes, model_name=name, enabled=body.enabled)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    # ── 쓰기: 모델 활성/비활성 ───────────────────────────────────────────
+    @app.put("/api/models/{name}/enabled", tags=["models"], dependencies=auth)
+    def set_enabled(name: str, body: EnabledBody) -> dict[str, Any]:
+        try:
+            return service.set_model_enabled(name, body.enabled)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
 
     return app
 
