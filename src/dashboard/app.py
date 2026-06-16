@@ -102,11 +102,15 @@ def load_config():
 
 
 def _blur_for_display(image):
-    """대시보드 표시 직전 얼굴 블러 — blur_faces 설정을 저장 경로와 동일하게 적용(#11).
+    """저장된 이벤트 이미지 표시 직전 얼굴 블러 — blur_faces 설정을 저장 경로와 동일 적용(#11).
 
-    in-memory event.image는 원본(미블러)이라, 저장 이미지는 블러되는데 라이브/검색 뷰는
-    얼굴 PII가 노출되던 불일치를 닫는다. 설정/cascade는 1회 캐시한다(핫 렌더 경로 비용 최소화).
+    in-memory event.image는 원본(미블러)이라, 저장본은 블러되는데 알람로그/검색 뷰의 이벤트
+    이미지는 얼굴 PII가 노출되던 불일치를 닫는다. 설정/cascade는 1회 캐시(핫 렌더 비용 최소화).
     cascade 로드 실패 시 입력 그대로 반환 — 저장 경로와 동일한 fail-open(정책 일관성).
+
+    적용 대상: **저장 이벤트 이미지**(알람로그·검색). 실시간 스트림 프리뷰는 의도적 제외 —
+    미영속 실시간 감시 화면이라 얼굴 가시성이 대응에 필요하고, 매 rerun Haar 검출은 다수·고해상도
+    카메라에서 refresh를 초과하는 비용이다(blur_faces는 저장/로그/export PII 정책에 적용).
     """
     if image is None:
         return image
@@ -963,9 +967,10 @@ def render_stream_view():
                     frame = capture.get_latest_frame()
 
             if frame is not None:
-                # 라이브 뷰도 blur_faces 설정을 따른다(#11/#4) — 원본 프레임에 먼저 블러를 걸고
-                # 그 위에 detection 박스를 그린다(박스가 흐려지지 않도록 순서 주의).
-                display_frame = _blur_for_display(frame.image)
+                # 실시간 스트림 프리뷰는 얼굴 블러 미적용(의도적) — 미영속 실시간 감시 화면이고,
+                # 매 rerun Haar 검출은 다수·고해상도 카메라에서 refresh를 초과하는 비용이다(#5).
+                # blur_faces는 저장 이미지/로그/export(저장 PII)에 적용된다. _blur_for_display docstring 참조.
+                display_frame = frame.image
                 detections = pipeline.get_latest_detections(cam['id']) if pipeline else []
                 if detections and pipeline:
                     if getattr(pipeline, "detector", None) is not None:
@@ -1111,7 +1116,8 @@ def render_alert_log():
         with st.container():
             is_vlm_candidate = event.event_type == "vlm_analysis_candidate"
             icon = "🤖" if is_vlm_candidate else "🚨"
-            vlm_desc = getattr(event, "description", "") or ""
+            # 화면 표시도 로그/export와 동일하게 PII/자격증명 마스킹(#3 — 형제 표시 경로)
+            vlm_desc = mask_text(getattr(event, "description", "") or "")
             vlm_risk = getattr(event, "vlm_risk_level", None)
             vlm_conf = getattr(event, "vlm_confidence", None)
 
@@ -1156,9 +1162,10 @@ def render_alert_log():
 
             # VLM 상세 결과: recommended_action / detected_events (신규 필드)
             vlm_parse_success = getattr(event, "vlm_parse_success", None)
+            # 화면 표시도 PII/자격증명 마스킹(#3) — 로그(_mask_event_payload)·export와 정합화
             vlm_detected_events = getattr(event, "vlm_detected_events", None)
-            vlm_recommended_action = getattr(event, "vlm_recommended_action", None)
-            vlm_raw_response = getattr(event, "vlm_raw_response", None)
+            vlm_recommended_action = mask_text(getattr(event, "vlm_recommended_action", None) or "")
+            vlm_raw_response = mask_text(getattr(event, "vlm_raw_response", None) or "")
 
             if vlm_parse_success is False:
                 # 파싱 실패 배지 + 원문 expander
@@ -1169,7 +1176,7 @@ def render_alert_log():
             elif vlm_parse_success is True:
                 # 파싱 성공: detected_events / recommended_action 표시
                 if vlm_detected_events:
-                    events_str = ", ".join(str(e) for e in vlm_detected_events)
+                    events_str = ", ".join(mask_text(str(e)) for e in vlm_detected_events)
                     st.caption(f"🔍 감지된 이벤트: {events_str}")
                 if vlm_recommended_action:
                     st.info(f"💡 **권고 조치:** {vlm_recommended_action}")

@@ -50,11 +50,7 @@ class TestUploadValidator(unittest.TestCase):
             profiles_path = Path(tmp) / "model_profiles.yaml"
             profiles_path.write_text("models: {}\n", encoding="utf-8")
 
-            with patch.object(uv, "validate_onnx_no_external_data", return_value=(True, "")), patch.object(
-                uv, "validate_onnx_load", return_value=(True, "")
-            ), patch.object(
-                uv, "validate_onnx_shape_metadata", return_value=(True, "")
-            ), patch.object(uv, "validate_onnx_inference", return_value=(True, "")):
+            with patch.object(uv, "validate_onnx_runtime_sandboxed", return_value=(True, "")):
                 result = uv.upload_model(
                     b"fake onnx bytes",
                     "../dangerous.onnx",
@@ -91,13 +87,10 @@ class TestUploadValidator(unittest.TestCase):
             self.assertFalse(result.success)
             self.assertIn("classes", result.error)
 
-    def test_shape_metadata_mismatch_is_rejected(self):
+    def test_runtime_validation_failure_is_rejected(self):
+        """sandbox 런타임 검증이 실패(shape 불일치 등)하면 업로드를 거부하고 에러를 전파한다."""
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(uv, "validate_onnx_no_external_data", return_value=(True, "")), patch.object(
-                uv, "validate_onnx_load", return_value=(True, "")
-            ), patch.object(
-                uv, "validate_onnx_shape_metadata", return_value=(False, "shape mismatch")
-            ), patch.object(uv, "validate_onnx_inference") as inference_mock:
+            with patch.object(uv, "validate_onnx_runtime_sandboxed", return_value=(False, "shape mismatch")):
                 result = uv.upload_model(
                     b"fake",
                     "model.onnx",
@@ -107,7 +100,6 @@ class TestUploadValidator(unittest.TestCase):
 
             self.assertFalse(result.success)
             self.assertEqual(result.error, "shape mismatch")
-            inference_mock.assert_not_called()
 
     def test_activate_deactivate_and_delete_uploaded_model(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -115,11 +107,7 @@ class TestUploadValidator(unittest.TestCase):
             profiles_path = Path(tmp) / "model_profiles.yaml"
             profiles_path.write_text("models: {}\n", encoding="utf-8")
 
-            with patch.object(uv, "validate_onnx_no_external_data", return_value=(True, "")), patch.object(
-                uv, "validate_onnx_load", return_value=(True, "")
-            ), patch.object(
-                uv, "validate_onnx_shape_metadata", return_value=(True, "")
-            ), patch.object(uv, "validate_onnx_inference", return_value=(True, "")):
+            with patch.object(uv, "validate_onnx_runtime_sandboxed", return_value=(True, "")):
                 result = uv.upload_model(
                     b"fake",
                     "model.onnx",
@@ -703,6 +691,32 @@ class TestValidateOnnxNoExternalData(unittest.TestCase):
         graph = helper.make_graph([const_node, add], "evil", [input_info], [output_info])
         model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
         model.ir_version = 7
+        self._reject(model)
+
+    def test_external_data_in_function_body_is_rejected(self):
+        """model.functions(FunctionProto) 본문에 숨긴 external-data를 거부한다(우회 차단)."""
+        from onnx import TensorProto, helper
+
+        ext = self._ext_tensor("fw")
+        const_node = helper.make_node("Constant", [], ["fn_out"], value=ext)
+        fn = helper.make_function(
+            domain="custom",
+            fname="EvilFn",
+            inputs=["fn_in"],
+            outputs=["fn_out"],
+            nodes=[const_node],
+            opset_imports=[helper.make_opsetid("", 11)],
+        )
+        input_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1])
+        output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])
+        call = helper.make_node("EvilFn", inputs=["input"], outputs=["output"], domain="custom")
+        graph = helper.make_graph([call], "evil", [input_info], [output_info])
+        model = helper.make_model(
+            graph,
+            opset_imports=[helper.make_opsetid("", 11), helper.make_opsetid("custom", 1)],
+            functions=[fn],
+        )
+        model.ir_version = 8  # model-local functions는 IR>=8
         self._reject(model)
 
     def test_external_data_in_subgraph_is_rejected(self):

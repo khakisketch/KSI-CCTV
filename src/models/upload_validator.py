@@ -162,33 +162,42 @@ def validate_file_size(file_path: Path, max_bytes: int = MAX_FILE_SIZE_BYTES) ->
         return False
 
 
-def _iter_all_tensors(graph: Any, onnx: Any):
-    """그래프의 모든 TensorProto를 순회한다(서브그래프 재귀 포함).
+def _iter_all_tensors(model: Any, onnx: Any):
+    """모델의 모든 TensorProto를 순회한다(서브그래프 + FunctionProto 본문 포함).
 
     external-data 참조는 최상위 graph.initializer뿐 아니라 (a) sparse_initializer,
-    (b) 노드 attribute의 텐서(Constant value 등), (c) If/Loop/Scan 서브그래프에도 숨을 수
-    있다 — initializer만 검사하면 우회된다. worklist로 모든 그래프를 BFS 순회한다.
+    (b) 노드 attribute의 텐서(Constant value 등), (c) If/Loop/Scan 서브그래프,
+    (d) model.functions(FunctionProto 본문)의 노드에도 숨을 수 있다 — 한 곳이라도 빠뜨리면 우회된다.
     """
-    stack = [graph]
-    while stack:
-        g = stack.pop()
+    AP = onnx.AttributeProto
+    graphs = [model.graph]
+
+    def _walk_nodes(nodes):
+        for node in nodes:
+            for attr in node.attribute:
+                if attr.type == AP.TENSOR:
+                    yield attr.t
+                elif attr.type == AP.TENSORS:
+                    yield from attr.tensors
+                elif attr.type == AP.SPARSE_TENSOR:
+                    yield attr.sparse_tensor.values
+                    yield attr.sparse_tensor.indices
+                elif attr.type == AP.GRAPH:
+                    graphs.append(attr.g)
+                elif attr.type == AP.GRAPHS:
+                    graphs.extend(attr.graphs)
+
+    # FunctionProto 본문(initializer 없음, node만) — 서브그래프가 있으면 graphs worklist에 적재된다.
+    for fn in model.functions:
+        yield from _walk_nodes(fn.node)
+
+    while graphs:
+        g = graphs.pop()
         yield from g.initializer
         for sp in g.sparse_initializer:
             yield sp.values
             yield sp.indices
-        for node in g.node:
-            for attr in node.attribute:
-                if attr.type == onnx.AttributeProto.TENSOR:
-                    yield attr.t
-                elif attr.type == onnx.AttributeProto.TENSORS:
-                    yield from attr.tensors
-                elif attr.type == onnx.AttributeProto.SPARSE_TENSOR:
-                    yield attr.sparse_tensor.values
-                    yield attr.sparse_tensor.indices
-                elif attr.type == onnx.AttributeProto.GRAPH:
-                    stack.append(attr.g)
-                elif attr.type == onnx.AttributeProto.GRAPHS:
-                    stack.extend(attr.graphs)
+        yield from _walk_nodes(g.node)
 
 
 def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
@@ -199,8 +208,8 @@ def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
     path-escape 가드가 없음). 업로드 모델은 self-contained ONNX만 허용한다. InferenceSession을
     만들기 **전에** 그래프만 파싱(load_external_data=False)해 검사하므로 외부 파일을 읽지 않는다.
 
-    최상위 initializer만이 아니라 sparse_initializer·노드 attribute 텐서·서브그래프(If/Loop/Scan)
-    까지 전부 검사한다 — 그 경로들로 external-data를 숨기는 우회를 막는다.
+    최상위 initializer만이 아니라 sparse_initializer·노드 attribute 텐서·서브그래프(If/Loop/Scan)·
+    model.functions(FunctionProto 본문)까지 전부 검사한다 — 그 경로들로 external-data를 숨기는 우회를 막는다.
     """
     try:
         import onnx
@@ -210,7 +219,7 @@ def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
         return False, f"ONNX 파싱 실패: {exc}"
 
     external = onnx.TensorProto.EXTERNAL
-    for tensor in _iter_all_tensors(model.graph, onnx):
+    for tensor in _iter_all_tensors(model, onnx):
         if tensor.data_location == external:
             return False, (
                 "외부 데이터(external data)를 참조하는 ONNX는 보안상 허용되지 않습니다. "
@@ -312,30 +321,51 @@ def _do_inference_smoke(file_path_str: str) -> tuple[bool, str]:
         return False, f"ONNX inference 실패: {exc}"
 
 
-def _sandbox_inference_worker(file_path_str: str, mem_limit_bytes: int, cpu_limit_sec: int, queue) -> None:
-    """자식 프로세스: rlimit(메모리/CPU) 설정 후 추론 smoke test → 결과를 queue로 반환.
-
-    악성 ONNX가 거대 텐서 할당(OOM)·무한 연산(CPU)으로 호스트를 마비시키는 것을 막는다.
-    스레드 타임아웃과 달리 자식 프로세스는 자원상한·hard-kill이 실제로 강제된다.
-    """
+def _apply_sandbox_rlimits(mem_limit_bytes: int, cpu_limit_sec: int) -> None:
+    """자식 프로세스 자원 상한(메모리/CPU) 설정. 실패 시 stderr로 노출(silent 금지)."""
     try:
         import resource
 
-        # RLIMIT_AS: 가상주소공간 상한(거대 텐서 차단). spawn 자식이라 baseline VA가 작아 의미 있음.
+        # RLIMIT_AS: 가상주소공간 상한(거대 텐서/거대 protobuf 적재 차단). spawn 자식이라 baseline VA가 작아 의미 있음.
         resource.setrlimit(resource.RLIMIT_AS, (mem_limit_bytes, mem_limit_bytes))
         # RLIMIT_CPU: CPU 초 상한(무한 루프 차단) — soft 도달 시 SIGXCPU, hard에서 SIGKILL.
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit_sec, cpu_limit_sec))
     except Exception as exc:  # 일부 환경은 setrlimit 불허(상위 wall-clock+프로세스격리가 최종 안전망)
-        # silent pass 금지 — rlimit 계층이 빠진 사실을 stderr로 노출(운영자 격리약화 인지).
         print(f"[sandbox] setrlimit 실패, wall-clock/프로세스 격리만 적용: {exc}", file=sys.stderr)
 
+
+def _sandbox_inference_worker(file_path_str: str, mem_limit_bytes: int, cpu_limit_sec: int, queue) -> None:
+    """자식 프로세스: rlimit 설정 후 추론 smoke test → 결과를 queue로 반환."""
+    _apply_sandbox_rlimits(mem_limit_bytes, cpu_limit_sec)
     queue.put(_do_inference_smoke(file_path_str))
 
 
-def _run_inference_sandboxed(
-    file_path: Path, timeout_sec: float, mem_limit_bytes: int
-) -> tuple[bool, str]:
-    """추론 검증을 자원-제한 자식 프로세스에서 실행(POSIX). spawn 미지원이면 스레드로 폴백."""
+def _sandbox_validate_worker(
+    file_path_str: str, input_size: list, mem_limit_bytes: int, cpu_limit_sec: int, queue
+) -> None:
+    """자식 프로세스: rlimit 설정 후 external-data→load→shape→smoke를 순차 검증, 첫 실패를 반환.
+
+    onnx.load(protobuf 파싱, 파일 크기의 ~2배 peak 메모리)와 InferenceSession 생성을 모두
+    rlimit 자식 안에서 수행해, 악성 거대 모델이 부모(데몬/대시보드) 프로세스를 OOM시키는 것을 막는다(#2).
+    """
+    _apply_sandbox_rlimits(mem_limit_bytes, cpu_limit_sec)
+    p = Path(file_path_str)
+    checks = (
+        lambda: validate_onnx_no_external_data(p),
+        lambda: validate_onnx_load(p),
+        lambda: validate_onnx_shape_metadata(p, input_size),
+        lambda: _do_inference_smoke(file_path_str),
+    )
+    for check in checks:
+        ok, err = check()
+        if not ok:
+            queue.put((ok, err))
+            return
+    queue.put((True, ""))
+
+
+def _run_worker_sandboxed(worker, worker_args, timeout_sec: float, mem_limit_bytes: int, fallback):
+    """worker를 자원-제한 spawn 자식에서 실행하고 (ok, err)를 반환(POSIX). spawn 미지원이면 fallback()."""
     import multiprocessing as mp
 
     # fork는 부모의 거대한 onnxruntime VA를 물려받아 RLIMIT_AS가 즉시 깨질 수 있으므로,
@@ -343,14 +373,11 @@ def _run_inference_sandboxed(
     try:
         ctx = mp.get_context("spawn")
     except ValueError:  # pragma: no cover - spawn 미지원 플랫폼
-        return _run_with_timeout(lambda: _do_inference_smoke(str(file_path)), timeout_sec)
+        return fallback()
 
     queue = ctx.Queue()
     cpu_limit_sec = max(1, int(timeout_sec) + 5)
-    proc = ctx.Process(
-        target=_sandbox_inference_worker,
-        args=(str(file_path), mem_limit_bytes, cpu_limit_sec, queue),
-    )
+    proc = ctx.Process(target=worker, args=(*worker_args, mem_limit_bytes, cpu_limit_sec, queue))
     proc.start()
     proc.join(timeout_sec)
 
@@ -361,18 +388,63 @@ def _run_inference_sandboxed(
         if proc.is_alive():  # pragma: no cover - terminate 무시 시
             proc.kill()
             proc.join()
-        return False, f"ONNX inference timeout after {timeout_sec:.1f}s"
+        return False, f"ONNX 검증 timeout after {timeout_sec:.1f}s"
 
-    # 결과가 큐에 있으면(정상/추론오류) 그것을 신뢰. 없는데 비정상 종료면 자원상한 위반으로 본다.
+    # 결과가 큐에 있으면(정상/검증오류) 그것을 신뢰. 없는데 비정상 종료면 자원상한 위반으로 본다.
     try:
         return queue.get_nowait()
     except Exception:
         if proc.exitcode and proc.exitcode != 0:
             return False, (
-                f"ONNX inference가 자원 상한(메모리 {mem_limit_bytes // (1024 * 1024)}MB / "
+                f"ONNX 검증이 자원 상한(메모리 {mem_limit_bytes // (1024 * 1024)}MB / "
                 f"CPU {cpu_limit_sec}s)을 초과했거나 비정상 종료했습니다(exitcode={proc.exitcode})."
             )
-        return False, "ONNX inference 결과를 가져오지 못했습니다."
+        return False, "ONNX 검증 결과를 가져오지 못했습니다."
+
+
+def _run_inference_sandboxed(
+    file_path: Path, timeout_sec: float, mem_limit_bytes: int
+) -> tuple[bool, str]:
+    """추론 검증을 자원-제한 자식 프로세스에서 실행(POSIX). spawn 미지원이면 스레드로 폴백."""
+    return _run_worker_sandboxed(
+        _sandbox_inference_worker,
+        (str(file_path),),
+        timeout_sec,
+        mem_limit_bytes,
+        fallback=lambda: _run_with_timeout(lambda: _do_inference_smoke(str(file_path)), timeout_sec),
+    )
+
+
+def validate_onnx_runtime_sandboxed(
+    file_path: Path,
+    input_size: Iterable[int],
+    timeout_sec: float = INFERENCE_TIMEOUT_SEC,
+    mem_limit_bytes: int = INFERENCE_MEM_LIMIT_BYTES,
+) -> tuple[bool, str]:
+    """업로드 ONNX의 런타임 검증 전체(external-data→load→shape→smoke)를 단일 sandbox 자식에서 수행한다.
+
+    onnx.load 파싱·InferenceSession 생성의 메모리/CPU를 모두 rlimit 자식에 가둬, 악성 거대 모델의
+    부모 프로세스 OOM·CPU 폭주를 막는다(#2). 비-POSIX/spawn 미지원은 in-process 순차 검증으로 폴백.
+    """
+    sizes = list(input_size)
+
+    def _inproc() -> tuple[bool, str]:
+        for check in (
+            lambda: validate_onnx_no_external_data(file_path),
+            lambda: validate_onnx_load(file_path),
+            lambda: validate_onnx_shape_metadata(file_path, sizes),
+            lambda: _do_inference_smoke(str(file_path)),
+        ):
+            ok, err = check()
+            if not ok:
+                return ok, err
+        return True, ""
+
+    if os.name != "posix":
+        return _inproc()
+    return _run_worker_sandboxed(
+        _sandbox_validate_worker, (str(file_path), sizes), timeout_sec, mem_limit_bytes, fallback=_inproc
+    )
 
 
 def validate_onnx_inference(
@@ -482,22 +554,14 @@ def upload_model(
         with open(tmp_file, "wb") as f:
             f.write(file_bytes)
 
-        # 보안: InferenceSession 생성(외부 파일 읽기 발생) 전에 external-data 참조부터 차단한다.
-        ext_ok, ext_error = validate_onnx_no_external_data(tmp_file)
-        if not ext_ok:
-            return UploadResult(success=False, error=ext_error)
-
-        load_ok, load_error = validate_onnx_load(tmp_file)
-        if not load_ok:
-            return UploadResult(success=False, error=load_error)
-
-        shape_ok, shape_error = validate_onnx_shape_metadata(tmp_file, normalized["input_size"])
-        if not shape_ok:
-            return UploadResult(success=False, error=shape_error)
-
-        smoke_ok, smoke_error = validate_onnx_inference(tmp_file, timeout_sec=inference_timeout_sec)
-        if not smoke_ok:
-            return UploadResult(success=False, error=smoke_error)
+        # 보안: 런타임 검증 전체(external-data 차단 → load → shape → smoke 추론)를 단일 자원-제한
+        # sandbox 자식에서 수행한다. onnx.load 파싱·세션 생성의 메모리/CPU까지 rlimit에 가둬,
+        # 악성 거대/외부참조 ONNX가 부모(데몬/대시보드) 프로세스를 OOM·DoS시키는 것을 막는다(#2).
+        runtime_ok, runtime_error = validate_onnx_runtime_sandboxed(
+            tmp_file, normalized["input_size"], timeout_sec=inference_timeout_sec
+        )
+        if not runtime_ok:
+            return UploadResult(success=False, error=runtime_error)
 
         model_dir.mkdir(parents=True, exist_ok=False)
         shutil.move(str(tmp_file), str(target_file))
