@@ -4,6 +4,7 @@ import { Bell, Boxes, Camera, LayoutDashboard, Settings, ShieldCheck } from "luc
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { LogoutButton } from "@/components/logout-button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,8 @@ const NAV = [
 /** 데스크톱 관제 콘솔 레이아웃 — 좌측 사이드바(md+) + 상단 헤더. 모바일은 헤더만(경량 뷰어). */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  // 로그인 페이지는 셸(사이드바/헤더) 없이 단독 렌더
+  if (pathname === "/login") return <>{children}</>;
   return (
     <div className="flex min-h-screen">
       {/* 사이드바 (데스크톱) */}
@@ -57,7 +60,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="font-semibold">KSI-CCTV</span>
           </div>
           <div className="hidden text-sm text-muted-foreground md:block">관제 대시보드</div>
-          <ThemeToggle />
+          <div className="flex items-center gap-1">
+            <ThemeToggle />
+            <LogoutButton />
+          </div>
         </header>
         <main className="flex-1 overflow-auto p-4 md:p-6">{children}</main>
         {/* 모바일 하단 탭 (경량 내비) */}

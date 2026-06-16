@@ -48,7 +48,8 @@
 - ✅ `npm run build` 성공(6라우트, TS·eslint clean). node_modules gitignore.
 - ✅ **P4b 엔진 API 연동(읽기)**: `lib/engine.ts` 서버사이드 페치(API 키 서버 전용·브라우저 미노출, AbortSignal 타임아웃, 미연결 graceful) + 대시보드·이벤트·모델·카메라·설정을 force-dynamic Server Component로 실데이터 렌더 + EngineStatus 배지.
 - ✅ **브라우저 렌더 E2E 검증(스크린샷)**: 엔진(uvicorn) + Next 동시 기동 → SSR이 실데이터 렌더 확인. 데스크톱 다크/라이트·모바일(하단탭) 스크린샷 육안 검증 — 메트릭(카메라1·모델3 실값)·모델5카드(open_vocab 포함)·"엔진 연결됨".
-- 🔄 **P4c 진행**: ✅ 프롬프트 관리 UI(PromptManager + Next route handler `/api/models/[name]/{prompts,enabled}` — 브라우저→Next(키 서버보관)→엔진). E2E 검증: UI 경유 POST→엔진 config 실제 갱신·비-openvocab 400. ⬜ start/stop 제어(데몬 통합 의존) ⬜ **프론트 자체 인증(외부 노출 전 필수)**.
+- ✅ **P4c 프롬프트 UI + 인증**: 프롬프트 관리(PromptManager + Next route, 키 서버보관, E2E POST→config 실갱신·비-openvocab 400). **프론트 인증**: HMAC 서명 세션쿠키(lib/auth, Web Crypto) + middleware fail-closed 게이트 + /login + 로그아웃. E2E: 미인증/→307·틀린비번 401·맞는비번 200+쿠키·인증후 200·보호 API proxy 307·로그아웃 후 307. frontend/.env.example 추가.
+- ⬜ **남음: start/stop 제어** — 엔진 API를 데몬 프로세스에 mount해 라이브 파이프라인 제어(P1의 보류 control/SSE와 동일 — 별도 통합 단계).
 - ⚠️ **알려진 한계(P1b 쓰기):** set_model_prompts가 yaml.safe_dump로 model_profiles.yaml을 재작성하며 **주석을 제거**한다(라이선스 경고 등). 후속: ruamel.yaml round-trip 또는 경고를 docs로 이전.
 - **검증 완료:** build·lint clean·SSR 실데이터 + 쓰기 E2E·다크/라이트·반응형. start/stop·영상·인증은 후속.
 
@@ -74,3 +75,4 @@
 - (P4b) 2026-06-17 엔진 API 연동(읽기) — lib/engine.ts 서버사이드(키 미노출) + 5화면 실데이터 Server Component. 엔진+Next E2E SSR 실데이터 렌더 + 다크/라이트/모바일 스크린샷 검증. P4c=쓰기·인증.
 - (P1b) 2026-06-17 엔진 API 쓰기 — POST /api/models/{name}/prompts(open-vocab 프롬프트, 정제·검증·안전 갱신) + PUT enabled. 인증·테스트 8. P4c(프롬프트 UI)의 백엔드 전제 완료.
 - (P4c-1) 2026-06-17 프론트 프롬프트 관리 UI — PromptManager + Next route handler(키 서버보관). E2E: UI→Next→엔진 POST로 config 실갱신·비-openvocab 400 확인. 남음=프론트 인증·start/stop·yaml 주석보존.
+- (P4c-2) 2026-06-17 프론트 인증 — HMAC 세션쿠키(Web Crypto)+middleware fail-closed 게이트+/login+로그아웃. 전 플로우 E2E 검증(307/401/200/쿠키/proxy차단/로그아웃). .env.example. 남음=start/stop(데몬 통합).
