@@ -68,6 +68,23 @@ models:
       Fire: fire
       Smoke: smoke
 
+  # open-vocab(YOLO-World) — 학습 없이 classes의 텍스트 프롬프트로 즉시 탐지. 비활성 기본.
+  # 활성화: enabled:true + classes에 원하는 객체(한글/영문) 나열 → 재학습 없이 탐지.
+  # ⚠️ ultralytics+clip 필요(pip; clip은 ultralytics가 자동 설치). 가중치 yolov8s-world.pt는
+  #   첫 사용 시 자동 다운로드(GPLv3 — 상용 배포 시 라이선스 검토, docs/roadmap-capability.md).
+  #   실시간성은 GPU 의존(CPU는 초 단위) — 저사양은 skip_frames 상향/트리거 호출 권장.
+  open_vocab_yolo:
+    enabled: false
+    type: open_vocab
+    source: pre_trained
+    model_path: "yolov8s-world.pt"
+    # 프롬프트=출력 클래스명(=KSI 표준명, class_adapter는 identity). 예시(현장에 맞게 교체):
+    classes: [person, helmet, "no helmet", forklift, "fire extinguisher", fire, smoke]
+    conf_threshold: 0.05
+    iou_threshold: 0.45
+    device: auto
+    description: "Open-vocab YOLO-World — 학습 없이 텍스트 프롬프트로 임의 객체 탐지(검증: CPU 실추론 PASS)."
+
   pose_fall_model:
     enabled: false
     type: future_pose_or_yolo

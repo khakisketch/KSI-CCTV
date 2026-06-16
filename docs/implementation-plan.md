@@ -33,12 +33,13 @@
 - ✅ 단위 테스트 10종(선택 로직)
 - **검증 완료:** EP 선택 10 테스트 통과·실모델 3종 auto 로드(CPU 폴백) 회귀 없음·439 passed. [HW] DGX/Win/macOS 실가속은 타깃 검증(P6 패키지가 EP별 onnxruntime 휠 설치 담당).
 
-### P3. open-vocab 탐지(YOLO-World) — CPU 검증 가능
-- ⬜ `OpenVocabDetector` + registry `open_vocab_onnx` 타입 + class_adapter identity 경로
-- ⬜ YOLO-World ONNX + CLIP text encoder 획득(fetch 스크립트)
-- ⬜ "텍스트 프롬프트 → 탐지" 실동작 검증(실 이미지, CPU)
-- ⬜ 프롬프트→정책 자동배선(신규 클래스 vlm:on_ambiguous 기본) + 테스트
-- **수용:** 임의 텍스트로 실 이미지에서 탐지 1건 이상 실증 / [HW] 실시간 FPS는 DGX 검증
+### P3. open-vocab 탐지(YOLO-World) — ✅(핵심 검증 완료)
+- ✅ `OpenVocabDetector`(YOLO-World 래퍼, lazy import) + registry `open_vocab` 타입 + class_adapter identity(프롬프트명=표준명, 무수정 pass-through)
+- ✅ 가중치 ultralytics 자동 다운로드(yolov8s-world.pt) + clip 자동 설치. (ONNX cross-platform export는 후속 — roadmap-capability)
+- ✅ **"텍스트 프롬프트 → 탐지" 실증**: 학습 0, classes=['traffic light','car','person']로 sample.mp4 프레임 탐지 PASS(원시 PoC + 통합 detector 실추론 both)
+- ✅ model_profiles `open_vocab_yolo`(비활성, 즉시 enable 가능) + API /models 노출 + 테스트 6(모의)+1(opt-in 실추론)
+- ⏭ 프롬프트→정책 자동배선 UX는 P4(프론트)/API 쓰기에서(신규 클래스 vlm:on_ambiguous 기본 규칙은 설계 확정)
+- **검증 완료:** ruff·mypy clean(34)·445 passed. CPU 1.49s/frame(실시간은 [HW] GPU 필요 — 연구 예측 일치).
 
 ### P4. 프론트엔드(Next.js+Tailwind+shadcn) — Node 있음, 빌드 가능
 - ⬜ scaffold + 디자인 토큰(다크/라이트) + 레이아웃(데스크톱 콘솔/모바일 뷰어)
@@ -63,3 +64,4 @@
 - (P0) 2026-06-16 cleanup: OUTSIDE_SECRET.bin·임시 스크린샷 스크립트 제거, 본 계획 문서 작성
 - (P1) 2026-06-16 엔진 API(FastAPI) 읽기 엔드포인트 + fail-closed 인증 + 시크릿 마스킹 + 테스트 12 + 실서빙 스모크. P1b(제어/SSE)는 데몬 통합 시.
 - (P2) 2026-06-16 크로스플랫폼 EP 선택(_select_providers, auto 기본) + 테스트 10. 실모델 auto 로드 회귀 없음.
+- (P3) 2026-06-16 open-vocab(YOLO-World) OpenVocabDetector + registry open_vocab 타입 + model_profiles 엔트리. "텍스트로 학습없이 탐지" 실추론 PASS. 테스트 7.

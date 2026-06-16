@@ -119,13 +119,13 @@ class MultiModelRegistry:
     """여러 탐지 모델을 관리하고 모델별 추론 결과를 반환한다.
 
     - `enabled: true` 모델만 로드한다.
-    - 현재 지원 type은 `yolo_onnx`만이다.
+    - 지원 type: `yolo_onnx`(closed-set ONNX) · `open_vocab`(YOLO-World 텍스트 프롬프트, 학습 없이 탐지).
     - strict=False(기본)에서는 개별 모델 로드 실패가 전체 시스템 중단으로
       이어지지 않고 `load_status`에 기록된다.
     - 모델별 latency/error metrics는 `get_model_metrics()`로 조회한다.
     """
 
-    SUPPORTED_TYPES = {"yolo_onnx"}
+    SUPPORTED_TYPES = {"yolo_onnx", "open_vocab"}
     # 연속 실패 이 횟수를 초과하면 runtime_error를 load_status에 반영
     CONSECUTIVE_ERROR_THRESHOLD = 3
 
@@ -189,9 +189,12 @@ class MultiModelRegistry:
                 continue
 
             try:
-                self.models[name] = self._create_yolo_detector(profile)
+                if model_type == "open_vocab":
+                    self.models[name] = self._create_openvocab_detector(profile)
+                else:
+                    self.models[name] = self._create_yolo_detector(profile)
                 status.loaded = True
-                logger.info("모델 로드 완료: %s", name)
+                logger.info("모델 로드 완료: %s (type=%s)", name, model_type)
             except Exception as exc:
                 status.error = str(exc)
                 logger.error("모델 로드 실패 [%s]: %s", name, exc)
@@ -210,6 +213,21 @@ class MultiModelRegistry:
             fp16=bool(profile.get("fp16", True)),
             postprocess_mode=profile.get("postprocess_mode", "auto"),
             class_profile=profile.get("class_profile", "coco"),
+        )
+
+    def _create_openvocab_detector(self, profile: dict[str, Any]):
+        """open_vocab(YOLO-World) 탐지기 생성 — classes=프롬프트 목록(학습 없이 즉시 탐지).
+
+        ultralytics는 lazy import(미설치면 이 모델만 로드 실패, 나머지 시스템은 정상).
+        """
+        from src.detection.openvocab_detector import DEFAULT_WEIGHTS, OpenVocabDetector
+
+        return OpenVocabDetector(
+            model_path=profile.get("model_path") or DEFAULT_WEIGHTS,
+            classes=profile.get("classes") or [],
+            conf_threshold=float(profile.get("conf_threshold", 0.05)),
+            iou_threshold=float(profile.get("iou_threshold", 0.45)),
+            device=profile.get("device", "auto"),
         )
 
     @property
