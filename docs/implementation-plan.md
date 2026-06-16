@@ -57,9 +57,11 @@
 - ⬜ compose 서비스(RTSP→WebRTC/HLS) + 프론트 플레이어
 - **수용:** 게이트웨이 기동·헬스 / [DATA] 실 RTSP 재생은 카메라 필요
 
-### P6. 설치형 패키징 — 작성(Windows 테스트는 [HW] 보류)
-- ⬜ Docker(현존 강화) · Windows Service+인스톨러 · PyInstaller · 오프라인 번들 · EP 패키지 선택
-- **수용:** Linux/Docker 검증 / [HW] Windows·macOS 설치는 타깃에서
+### P6. 설치형 패키징 — 🔄 진행(Docker 웹 컨테이너 검증 완료, Windows/PyInstaller [HW] 보류)
+- ✅ **P6a 웹 UI Docker 이미지**: `frontend/Dockerfile`(멀티스테이지 standalone, 비root nextjs:1001) + `.dockerignore`. next.config.ts `output:"standalone"` + `outputFileTracingRoot`/`turbopack.root`를 frontend/로 고정(상위 lockfile 오추론으로 standalone이 절대경로 미러로 중첩되는 버그 수정 — 평면 server.js 확인).
+- ✅ **P6a compose 와이어링**: `ksi-cctv-web` 서비스(`--profile web`) — 엔진(ksi-cctv:8081)을 서비스명으로 서버사이드 호출(API 키 브라우저 미노출), depends_on healthy, node 헬스프로브(alpine curl 부재). 엔진 `KSI_CCTV_HEALTH_HOST` 기본 0.0.0.0(호스트 미매핑 → compose 네트워크 내부만 도달) + `KSI_CCTV_API_KEY`를 common-env로 승격(엔진/웹 동일 키 공유). obsolete `version` 키 제거.
+- ⬜ Windows Service+인스톨러 · PyInstaller · 오프라인 번들 · EP별 onnxruntime 휠 선택(P2 연계)
+- **검증 완료:** `docker build ./frontend` 성공 → 컨테이너 실기동(✓ Ready)·`/login` 200·미인증 `/`→307 로그인 리다이렉트(middleware fail-closed 컨테이너에서 동작). 엔진 Dockerfile `docker build --check` 무경고. compose config(daemon/web 양 프로파일) 통과. pytest 462 passed. [HW] Windows·macOS 설치 + 엔진 GPU 이미지 풀빌드는 타깃 검증.
 
 ### P7. 정리·마이그레이션
 - ⬜ Streamlit→legacy(프론트 패리티 전까지 유지) · project-definition.md 비목표 SSOT 갱신 · docs 동기화
@@ -83,3 +85,4 @@
 - (P4c-2) 2026-06-17 프론트 인증 — HMAC 세션쿠키(Web Crypto)+middleware fail-closed 게이트+/login+로그아웃. 전 플로우 E2E 검증(307/401/200/쿠키/proxy차단/로그아웃). .env.example. 남음=start/stop(데몬 통합).
 - (P1c-1) 2026-06-17 엔진 API 제어 엔드포인트(/api/control/{status,start,stop}) + compat /health*(http.server 대체). 테스트 9. 462 passed. P1c-2(run.py 와이어링) 다음.
 - (P1c-2) 2026-06-17 run.py가 uvicorn(FastAPI)로 단일 서빙 — 탐지+API+제어 1프로세스. 데몬 smoke로 /api/control/status connected=True·SIGTERM exit 0 검증. http.server 제거.
+- (P6a) 2026-06-17 설치형 패키징(Docker 웹) — frontend Dockerfile(standalone·비root) + compose `ksi-cctv-web`(--profile web, 엔진 서비스명 호출·API키 공유). next standalone 중첩버그 수정(tracingRoot 고정). 실빌드→컨테이너 기동→/login 200·미인증 307 리다이렉트 E2E 검증. obsolete version 키 제거. 남음=Windows/PyInstaller/오프라인번들[HW].
