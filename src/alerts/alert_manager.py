@@ -28,6 +28,8 @@ import cv2
 
 from src.pipeline.pipeline import SafetyEvent
 from src.utils.config import mask_text  # Phase 8 M5.3 S3: URL 마스킹
+from src.utils.privacy import blur_faces as _blur_faces  # #11: 얼굴 블러 SSOT
+from src.utils.privacy import get_face_cascades
 
 logger = logging.getLogger(__name__)
 
@@ -665,65 +667,21 @@ class AlertManager:
             logger.error("이미지 저장 실패: %s", e)
 
     def _load_face_cascades(self) -> list:
-        """얼굴 검출기를 복수 로드한다.
+        """얼굴 검출기를 로드한다(공용 SSOT src.utils.privacy에 위임).
 
-        CCTV 환경(상방·측방 설치)에서 정면 단일 cascade 누락을 보완하기 위해
-        haarcascade_frontalface_default + haarcascade_profileface를 병행 사용한다.
-
+        저장(여기)과 대시보드 표시가 동일한 cascade/블러 로직을 쓰도록 분리했다(#11).
         반환: 로드에 성공한 CascadeClassifier 목록 (빈 목록이면 블러링 비활성)
         """
-        cascade_names = [
-            "haarcascade_frontalface_default.xml",
-            "haarcascade_profileface.xml",
-        ]
-        loaded = []
-        # cv2.data.haarcascades는 런타임 유효(번들 cascade 경로)이나 cv2 스텁이 불완전해 mypy가
-        # 잘못 플래그한다 — 실동작은 확인됨(얼굴 블러 테스트 통과).
-        data_dir = Path(cv2.data.haarcascades)  # type: ignore[attr-defined]
-        for name in cascade_names:
-            path = data_dir / name
-            cascade = cv2.CascadeClassifier(str(path))
-            if cascade.empty():
-                logger.warning("얼굴 블러링 검출기 로드 실패: %s", name)
-            else:
-                loaded.append(cascade)
-
-        if not loaded:
-            logger.warning("사용 가능한 얼굴 검출기가 없습니다. 블러링 비활성.")
-        return loaded
+        return get_face_cascades()
 
     def _prepare_image_for_storage(self, image):
-        """저장 전 개인정보 보호 처리.
+        """저장 전 개인정보 보호 처리(공용 SSOT src.utils.privacy.blur_faces에 위임).
 
-        여러 cascade(정면 + 측면)에서 검출한 얼굴 영역을 모두 블러링한다.
-        중복 영역은 NMS 없이 각 cascade 결과를 순서대로 적용한다.
+        대시보드 표시 경로와 동일한 블러 로직을 공유한다(#11).
         """
         if not self.config.blur_faces or not self._face_cascades:
             return image
-
-        protected = image.copy()
-        gray = cv2.cvtColor(protected, cv2.COLOR_BGR2GRAY)
-
-        kernel = max(3, int(self.config.face_blur_strength))
-        if kernel % 2 == 0:
-            kernel += 1
-
-        for cascade in self._face_cascades:
-            # scaleFactor=1.05 (기존 1.1보다 촘촘하게 — 원거리/소형 얼굴 검출)
-            # minSize=(20, 20) (기존 30×30보다 작은 얼굴도 검출)
-            faces = cascade.detectMultiScale(
-                gray,
-                scaleFactor=1.05,
-                minNeighbors=4,
-                minSize=(20, 20),
-            )
-            for (x, y, w, h) in (faces if len(faces) > 0 else []):
-                roi = protected[y:y + h, x:x + w]
-                if roi.size == 0:
-                    continue
-                protected[y:y + h, x:x + w] = cv2.GaussianBlur(roi, (kernel, kernel), 0)
-
-        return protected
+        return _blur_faces(image, self._face_cascades, self.config.face_blur_strength)
 
     # ------------------------------------------------------------------
     # 이미지 조회 / 정리

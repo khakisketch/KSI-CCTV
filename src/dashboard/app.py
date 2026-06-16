@@ -100,6 +100,35 @@ def load_config():
         logger.error(f"설정 로드 실패: {e}")
         return None
 
+
+def _blur_for_display(image):
+    """대시보드 표시 직전 얼굴 블러 — blur_faces 설정을 저장 경로와 동일하게 적용(#11).
+
+    in-memory event.image는 원본(미블러)이라, 저장 이미지는 블러되는데 라이브/검색 뷰는
+    얼굴 PII가 노출되던 불일치를 닫는다. 설정/cascade는 1회 캐시한다(핫 렌더 경로 비용 최소화).
+    cascade 로드 실패 시 입력 그대로 반환 — 저장 경로와 동일한 fail-open(정책 일관성).
+    """
+    if image is None:
+        return image
+    try:
+        from src.utils.privacy import blur_faces, get_face_cascades
+
+        prefs = st.session_state.get("_display_privacy")
+        if prefs is None:
+            cfg = load_config()
+            alerts_cfg = cfg.get_alert_config() if cfg else {}
+            prefs = (
+                bool(alerts_cfg.get("blur_faces", True)),
+                int(alerts_cfg.get("face_blur_strength", 35)),
+            )
+            st.session_state["_display_privacy"] = prefs
+        enabled, strength = prefs
+        if not enabled:
+            return image
+        return blur_faces(image, get_face_cascades(), strength)
+    except Exception:
+        return image
+
 def init_session_state():
     """세션 상태 초기화"""
     if 'initialized' not in st.session_state:
@@ -1143,9 +1172,9 @@ def render_alert_log():
                 # 공개 모델 false positive가 AI 확인 없이 알람될 수 있으므로 수동 확인을 유도.
                 st.warning("⚠️ **VLM 미확인** — AI 2차 확인 없이 발생(VLM 미가동/지연). 수동 확인이 필요합니다.")
 
-            # 이미지 표시 (있는 경우)
+            # 이미지 표시 (있는 경우) — 저장 경로와 동일하게 얼굴 블러 적용(#11)
             if event.image is not None:
-                st.image(event.image, caption=f"{event.camera_id} - {event.timestamp}", width=400)
+                st.image(_blur_for_display(event.image), caption=f"{event.camera_id} - {event.timestamp}", width=400)
 
 def render_event_log():
     """이벤트 로그 뷰어 — alerts.log 파일 기반 히스토리"""
@@ -2217,7 +2246,8 @@ def render_enhanced_event_search():
                 "alert_level": alert_level,
             })
             if hasattr(event, 'image') and event.image is not None:
-                st.image(event.image, caption=f"{event.camera_id} - {event.timestamp}")
+                # 저장 경로와 동일하게 얼굴 블러 적용(#11)
+                st.image(_blur_for_display(event.image), caption=f"{event.camera_id} - {event.timestamp}")
 
 
 def render_health_check():

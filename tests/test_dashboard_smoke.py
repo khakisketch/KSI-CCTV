@@ -582,6 +582,54 @@ class TestAuthBanner:
 # 12. load_config smoke
 # ──────────────────────────────────────────────
 
+class TestBlurForDisplay:
+    """#11 — 대시보드 이미지 표시 시 blur_faces 설정을 저장 경로와 동일하게 적용."""
+
+    def _cfg(self, blur: bool):
+        cfg = MagicMock()
+        cfg.get_alert_config.return_value = {"blur_faces": blur, "face_blur_strength": 35}
+        return cfg
+
+    def test_none_passthrough(self):
+        _st_stub.session_state.clear()
+        assert app._blur_for_display(None) is None
+
+    def test_blur_applied_when_enabled(self):
+        _st_stub.session_state.clear()
+        sentinel = object()
+        with (
+            patch("src.dashboard.app.load_config", return_value=self._cfg(True)),
+            patch("src.utils.privacy.blur_faces", return_value=sentinel) as blur_mock,
+            patch("src.utils.privacy.get_face_cascades", return_value=[]),
+        ):
+            out = app._blur_for_display("raw-image")
+        assert out is sentinel
+        blur_mock.assert_called_once()
+
+    def test_no_blur_when_disabled(self):
+        _st_stub.session_state.clear()
+        with (
+            patch("src.dashboard.app.load_config", return_value=self._cfg(False)),
+            patch("src.utils.privacy.blur_faces") as blur_mock,
+            patch("src.utils.privacy.get_face_cascades", return_value=[]),
+        ):
+            out = app._blur_for_display("raw-image")
+        assert out == "raw-image"  # 원본 그대로
+        blur_mock.assert_not_called()
+
+    def test_prefs_cached_in_session(self):
+        """설정은 1회만 읽어 session_state에 캐시한다(핫 렌더 경로 비용)."""
+        _st_stub.session_state.clear()
+        with (
+            patch("src.dashboard.app.load_config", return_value=self._cfg(False)) as cfg_mock,
+            patch("src.utils.privacy.blur_faces"),
+            patch("src.utils.privacy.get_face_cascades", return_value=[]),
+        ):
+            app._blur_for_display("a")
+            app._blur_for_display("b")
+        cfg_mock.assert_called_once()
+
+
 class TestLoadConfigSmoke:
     def test_returns_none_on_failure(self):
         with patch("src.dashboard.app.AppConfig", side_effect=Exception("no config")):
