@@ -36,7 +36,7 @@ models:
     # (정밀 게이트는 config/event_policies.yaml의 이벤트별 min_confidence가 추가로 담당)
     conf_threshold: 0.30
     iou_threshold: 0.45
-    postprocess_mode: "auto"  # auto, nms, nms_free
+    postprocess_mode: "nms_free"  # auto|nms|nms_free — yolo26은 end-to-end NMS-free [1,300,6]
     class_profile: "coco"  # coco(pretrained yolo26n) 또는 safety_custom(커스텀 안전 모델)
     # YOLO26은 end-to-end NMS-free 구조로 추론 속도가 더 빠름
     # Ultralytics: yolo export model=yolo26n.pt format=onnx imgsz=640 half=True device=0

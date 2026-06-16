@@ -32,8 +32,11 @@ jobs:
       - name: Ruff lint (blocking)
         run: ruff check src/ tests/ scripts/
 
-      - name: Pytest (blocking, cache-clean)
-        run: python -B -m pytest tests/ -q -p no:cacheprovider
+      - name: Pytest + coverage gate (blocking, cache-clean)
+        # scripts/test.sh와 동일 게이트 — 커버리지 50% 미만이면 실패(가짜 green 방지).
+        run: >
+          python -B -m pytest tests/ -q -p no:cacheprovider
+          --cov=src --cov-report=term-missing --cov-fail-under=50
 
       - name: Mypy (advisory)
         run: mypy src/ || echo "mypy 타입 경고 — 점진 해소 대상(게이트 차단 아님)"
