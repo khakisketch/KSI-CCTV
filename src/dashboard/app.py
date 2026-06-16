@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from queue import Empty, Queue
 from typing import Any
 
@@ -157,7 +157,7 @@ def init_session_state():
         # Phase 8 M5.1: Auto-refresh + Security
         st.session_state.auto_refresh_enabled = True
         st.session_state.auto_refresh_interval = 5
-        st.session_state.last_activity = datetime.utcnow().timestamp()
+        st.session_state.last_activity = time.time()
         st.session_state.login_attempts = []  # List[Dict] for rate limiting
         st.session_state.login_locked_until = None
 
@@ -403,7 +403,7 @@ def _is_rate_limited() -> bool:
     5회 실패 / 60초 윈도우 → 60초 lockout.
     세션 state도 병행 관리(빠른 검사 경로).
     """
-    now = datetime.utcnow().timestamp()
+    now = time.time()
 
     # 전역 lockout 우선 확인 (세션 삭제로 우회 불가)
     global_locked = _GLOBAL_LOGIN_STATE.get("locked_until")
@@ -430,7 +430,7 @@ def _is_rate_limited() -> bool:
 
 def _record_login_failure() -> None:
     """Record a failed login attempt for rate limiting (세션 + 전역 dual track)."""
-    now = datetime.utcnow().timestamp()
+    now = time.time()
     window = _GLOBAL_LOGIN_WINDOW_SEC
 
     # 전역 카운터 업데이트
@@ -471,24 +471,24 @@ def require_dashboard_auth() -> bool:
 
     # Session timeout check (30 min inactivity)
     last_activity = st.session_state.get("last_activity")
-    if last_activity and (datetime.utcnow().timestamp() - last_activity) > 1800:
+    if last_activity and (time.time() - last_activity) > 1800:
         st.session_state.authenticated = False
         st.warning("세션이 만료되었습니다. 다시 로그인해 주세요.")
         _write_audit_log({
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": "session_timeout",
         })
         st.rerun()
 
     if st.session_state.get("authenticated"):
         # Update activity on every call
-        st.session_state.last_activity = datetime.utcnow().timestamp()
+        st.session_state.last_activity = time.time()
         # 로그아웃 버튼 (사이드바)
         with st.sidebar:
             if st.button("🚪 로그아웃", key="logout_btn"):
                 st.session_state.authenticated = False
                 _write_audit_log({
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "event": "logout",
                 })
                 st.rerun()
@@ -508,9 +508,9 @@ def require_dashboard_auth() -> bool:
             st.session_state.authenticated = True
             st.session_state.login_attempts = []
             st.session_state.login_locked_until = None
-            st.session_state.last_activity = datetime.utcnow().timestamp()
+            st.session_state.last_activity = time.time()
             _write_audit_log({
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "event": "login_success",
                 "session_id": str(uuid.uuid4()),
             })
@@ -518,7 +518,7 @@ def require_dashboard_auth() -> bool:
         else:
             _record_login_failure()
             _write_audit_log({
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "event": "login_failure",
             })
             st.error("비밀번호가 올바르지 않습니다")
@@ -535,7 +535,7 @@ def is_admin_model_management_allowed() -> bool:
 def audit_model_action(event: str, **extra: Any) -> None:
     """모델 관리 작업 감사 로그 기록."""
     _write_audit_log({
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "event": event,
         **extra,
     })
@@ -1204,8 +1204,11 @@ def render_event_log():
         """)
         return
 
-    # 로그 파싱
-    events = []
+    # 로그 파싱 — alerts.log는 append-only라 최근 N건만 메모리에 유지(deque maxlen)해
+    # 장기운영으로 로그가 커져도(최대 10MB×backup) 대시보드가 전체를 적재해 느려지지 않게 한다.
+    from collections import deque
+    max_events = 2000
+    buf: deque = deque(maxlen=max_events)
     try:
         with open(log_path, encoding="utf-8") as f:
             for line in f:
@@ -1215,17 +1218,20 @@ def render_event_log():
                 try:
                     event = parse_alert_log_line(line)
                     if event is not None:
-                        events.append(event)
+                        buf.append(event)
                 except Exception:
                     continue
     except Exception as exc:
         st.error(f"로그 파일 읽기 실패: {exc}")
         return
 
+    events = list(buf)
     if not events:
         st.info("📭 파싱된 이벤트가 없습니다")
         return
 
+    if len(events) >= max_events:
+        st.caption(f"⚡ 최근 {max_events}건만 표시합니다(전체 기록은 logs/alerts.log 참조).")
     st.success(f"총 {len(events)}개 이벤트 로드")
 
     # 필터
@@ -1972,7 +1978,7 @@ def render_alert_settings():
                 "per_event_email_enabled": st.session_state.per_event_email_enabled,
             })
             _write_audit_log({
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "event": "alert_preferences_saved",
                 "threshold": st.session_state.email_alert_level_threshold,
                 "enabled_count": enabled_count,
@@ -2120,7 +2126,7 @@ def render_image_gallery():
     if st.session_state.get("_last_gallery_audit_date") != selected_date:
         st.session_state["_last_gallery_audit_date"] = selected_date
         _write_audit_log({
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": "image_gallery_viewed",
             "date": selected_date,
         })
