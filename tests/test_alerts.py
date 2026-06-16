@@ -412,6 +412,28 @@ class TestLogMasking(unittest.TestCase):
             log_content = Path(log_file).read_text(encoding="utf-8")
             self.assertNotIn("secret123", log_content, "비밀번호가 로그에 노출되면 안 됨")
 
+    def test_field_level_masking_preserves_structured_fields(self):
+        """#7 — description의 PII는 가리되 event_id의 timestamp 등 구조 필드는 보존한다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            log_file = str(Path(tmp) / "alerts.log")
+            mgr = AlertManager(AlertConfig(
+                enabled=True, save_images=False, blur_faces=False,
+                console_output=False, log_file=log_file,
+            ))
+            event = _make_event(
+                event_id="cam01_fall_1781893381",  # 10자리 timestamp 포함 — 오탐 금지
+                description="작업자 연락처 010-1234-5678, hong@corp.com",
+            )
+            mgr.handle_event(event)
+            for h in mgr.alert_logger.handlers:
+                h.flush()
+            log_content = Path(log_file).read_text(encoding="utf-8")
+            # PII는 가려짐
+            self.assertNotIn("010-1234-5678", log_content)
+            self.assertNotIn("hong@corp.com", log_content)
+            # event_id(타임스탬프 포함)는 그대로 보존
+            self.assertIn("cam01_fall_1781893381", log_content)
+
 
 @unittest.skipUnless(HAS_ALERTS and HAS_CV2, "runtime deps 없음")
 class TestVlmEmailFields(unittest.TestCase):

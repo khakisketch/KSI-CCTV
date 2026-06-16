@@ -16,6 +16,7 @@ import concurrent.futures
 import logging
 import os
 import shutil
+import sys
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -161,6 +162,35 @@ def validate_file_size(file_path: Path, max_bytes: int = MAX_FILE_SIZE_BYTES) ->
         return False
 
 
+def _iter_all_tensors(graph: Any, onnx: Any):
+    """그래프의 모든 TensorProto를 순회한다(서브그래프 재귀 포함).
+
+    external-data 참조는 최상위 graph.initializer뿐 아니라 (a) sparse_initializer,
+    (b) 노드 attribute의 텐서(Constant value 등), (c) If/Loop/Scan 서브그래프에도 숨을 수
+    있다 — initializer만 검사하면 우회된다. worklist로 모든 그래프를 BFS 순회한다.
+    """
+    stack = [graph]
+    while stack:
+        g = stack.pop()
+        yield from g.initializer
+        for sp in g.sparse_initializer:
+            yield sp.values
+            yield sp.indices
+        for node in g.node:
+            for attr in node.attribute:
+                if attr.type == onnx.AttributeProto.TENSOR:
+                    yield attr.t
+                elif attr.type == onnx.AttributeProto.TENSORS:
+                    yield from attr.tensors
+                elif attr.type == onnx.AttributeProto.SPARSE_TENSOR:
+                    yield attr.sparse_tensor.values
+                    yield attr.sparse_tensor.indices
+                elif attr.type == onnx.AttributeProto.GRAPH:
+                    stack.append(attr.g)
+                elif attr.type == onnx.AttributeProto.GRAPHS:
+                    stack.extend(attr.graphs)
+
+
 def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
     """external-data(별도 파일에서 weight 로드)를 참조하는 ONNX를 거부한다.
 
@@ -168,6 +198,9 @@ def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
     weight로 읽어 추론 출력으로 유출하는 arbitrary file read를 차단한다(onnxruntime<1.26은
     path-escape 가드가 없음). 업로드 모델은 self-contained ONNX만 허용한다. InferenceSession을
     만들기 **전에** 그래프만 파싱(load_external_data=False)해 검사하므로 외부 파일을 읽지 않는다.
+
+    최상위 initializer만이 아니라 sparse_initializer·노드 attribute 텐서·서브그래프(If/Loop/Scan)
+    까지 전부 검사한다 — 그 경로들로 external-data를 숨기는 우회를 막는다.
     """
     try:
         import onnx
@@ -177,8 +210,8 @@ def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
         return False, f"ONNX 파싱 실패: {exc}"
 
     external = onnx.TensorProto.EXTERNAL
-    for init in model.graph.initializer:
-        if init.data_location == external:
+    for tensor in _iter_all_tensors(model.graph, onnx):
+        if tensor.data_location == external:
             return False, (
                 "외부 데이터(external data)를 참조하는 ONNX는 보안상 허용되지 않습니다. "
                 "self-contained ONNX(가중치 내장)만 업로드하세요."
@@ -186,13 +219,27 @@ def validate_onnx_no_external_data(file_path: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def _hardened_session(file_path_str: str):
+    """검증용 onnxruntime 세션 — 그래프 최적화 OFF + 스레드 캡으로 자원 폭주를 줄인다.
+
+    검증엔 그래프 최적화가 불필요한데, 기본(ORT_ENABLE_ALL)은 악성 그래프의 constant-folding
+    폭발로 부모 프로세스 메모리를 터뜨릴 수 있다 → ORT_DISABLE_ALL. intra/inter-op 스레드를
+    묶어 고코어(ARM/DGX) 환경에서 스레드별 arena/BLAS VA 예약이 RLIMIT_AS를 깨는 것도 줄인다.
+    """
+    import onnxruntime as ort
+
+    so = ort.SessionOptions()
+    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    so.intra_op_num_threads = 2
+    so.inter_op_num_threads = 1
+    return ort.InferenceSession(file_path_str, sess_options=so, providers=["CPUExecutionProvider"])
+
+
 def validate_onnx_load(file_path: Path) -> tuple[bool, str]:
     """Check that ONNX Runtime can load the model and sees inputs/outputs."""
 
     try:
-        import onnxruntime as ort
-
-        session = ort.InferenceSession(str(file_path), providers=["CPUExecutionProvider"])
+        session = _hardened_session(str(file_path))
         if not session.get_inputs() or not session.get_outputs():
             return False, "ONNX 모델에 입력/출력 노드가 없습니다."
         return True, ""
@@ -204,10 +251,8 @@ def validate_onnx_shape_metadata(file_path: Path, input_size: Iterable[int]) -> 
     """Validate static ONNX input H/W against declared metadata when available."""
 
     try:
-        import onnxruntime as ort
-
         expected = list(input_size)
-        session = ort.InferenceSession(str(file_path), providers=["CPUExecutionProvider"])
+        session = _hardened_session(str(file_path))
         inputs = session.get_inputs()
         if not inputs:
             return False, "ONNX 모델 입력 노드가 없습니다."
@@ -253,9 +298,8 @@ def _do_inference_smoke(file_path_str: str) -> tuple[bool, str]:
     """합성 zero 입력으로 1회 추론 smoke test (sandbox/스레드 폴백 공용 코어)."""
     try:
         import numpy as np
-        import onnxruntime as ort
 
-        session = ort.InferenceSession(file_path_str, providers=["CPUExecutionProvider"])
+        session = _hardened_session(file_path_str)
         feed = {}
         for inp in session.get_inputs():
             shape = [_resolve_dim(dim, idx) for idx, dim in enumerate(list(inp.shape))]
@@ -281,8 +325,9 @@ def _sandbox_inference_worker(file_path_str: str, mem_limit_bytes: int, cpu_limi
         resource.setrlimit(resource.RLIMIT_AS, (mem_limit_bytes, mem_limit_bytes))
         # RLIMIT_CPU: CPU 초 상한(무한 루프 차단) — soft 도달 시 SIGXCPU, hard에서 SIGKILL.
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit_sec, cpu_limit_sec))
-    except Exception:  # pragma: no cover - 일부 환경은 setrlimit 불허(상위 wall-clock이 최종 안전망)
-        pass
+    except Exception as exc:  # 일부 환경은 setrlimit 불허(상위 wall-clock+프로세스격리가 최종 안전망)
+        # silent pass 금지 — rlimit 계층이 빠진 사실을 stderr로 노출(운영자 격리약화 인지).
+        print(f"[sandbox] setrlimit 실패, wall-clock/프로세스 격리만 적용: {exc}", file=sys.stderr)
 
     queue.put(_do_inference_smoke(file_path_str))
 

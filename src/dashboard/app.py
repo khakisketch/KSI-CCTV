@@ -24,7 +24,7 @@ import streamlit as st
 
 from src.alerts.alert_manager import AlertConfig, AlertManager, parse_alert_log_line
 from src.pipeline.pipeline import SafetyEvent, SafetyPipeline
-from src.utils.config import AppConfig, ConfigLoader
+from src.utils.config import AppConfig, ConfigLoader, mask_text
 
 try:
     from src.detection.model_registry import MultiModelRegistry  # noqa: F401
@@ -126,7 +126,9 @@ def _blur_for_display(image):
         if not enabled:
             return image
         return blur_faces(image, get_face_cascades(), strength)
-    except Exception:
+    except Exception as exc:
+        # 블러 실패를 silent로 두면 미블러 PII가 조용히 표시된다 — 최소한 가시화한다.
+        logger.warning("표시 블러 실패(원본 표시됨, blur_faces 설정 확인): %s", exc)
         return image
 
 def init_session_state():
@@ -961,7 +963,9 @@ def render_stream_view():
                     frame = capture.get_latest_frame()
 
             if frame is not None:
-                display_frame = frame.image
+                # 라이브 뷰도 blur_faces 설정을 따른다(#11/#4) — 원본 프레임에 먼저 블러를 걸고
+                # 그 위에 detection 박스를 그린다(박스가 흐려지지 않도록 순서 주의).
+                display_frame = _blur_for_display(frame.image)
                 detections = pipeline.get_latest_detections(cam['id']) if pipeline else []
                 if detections and pipeline:
                     if getattr(pipeline, "detector", None) is not None:
@@ -1064,7 +1068,8 @@ def render_alert_log():
                         event.event_type,
                         f"{event.confidence:.2f}",
                         getattr(event, "alert_level", "low"),
-                        getattr(event, "description", "")
+                        # 내보내기도 로그와 동일하게 PII/자격증명 마스킹(#10 — 형제 경로 누출 차단)
+                        mask_text(getattr(event, "description", "") or "")
                     ])
                 st.download_button(
                     label="CSV 다운로드",
@@ -1084,7 +1089,8 @@ def render_alert_log():
                         "event_type": event.event_type,
                         "confidence": event.confidence,
                         "alert_level": getattr(event, "alert_level", "low"),
-                        "description": getattr(event, "description", ""),
+                        # 내보내기도 로그와 동일하게 PII/자격증명 마스킹(#10 — 형제 경로 누출 차단)
+                        "description": mask_text(getattr(event, "description", "") or ""),
                         "rule_name": getattr(event, "rule_name", ""),
                         "source_models": getattr(event, "source_models", []),
                     })

@@ -83,6 +83,22 @@ class TestMaskTextPII(unittest.TestCase):
         self.assertNotIn("900101-1234567", masked)
         self.assertNotIn("1234567", masked)
 
+    def test_bare_13_digit_serial_not_masked(self):
+        """#7 — 구분자 없는 13자리(컨테이너번호·바코드·epoch-ms)는 RRN 오탐 금지(식별값 보존)."""
+        self.assertEqual(mask_text("컨테이너 번호 1234567890123"), "컨테이너 번호 1234567890123")
+        self.assertEqual(mask_text("epoch 1718500000000 ms"), "epoch 1718500000000 ms")
+
+    def test_long_token_no_redos(self):
+        """#14 — '@ 없는' 매우 긴 토큰에서 이메일 패턴이 폭주(ReDoS)하지 않는다(길이 한계)."""
+        import time
+
+        line = "x" * 200000
+        start = time.perf_counter()
+        out = mask_text(line)
+        elapsed = time.perf_counter() - start
+        self.assertEqual(out, line)
+        self.assertLess(elapsed, 1.0, f"마스킹이 너무 느림(ReDoS 의심): {elapsed:.2f}s")
+
     def test_unix_timestamp_event_id_not_corrupted(self):
         """event_id의 Unix timestamp(10자리, 17로 시작)는 전화번호로 오탐되면 안 된다."""
         line = '{"event_id": "cam01_fall_1781893381", "confidence": 0.87}'

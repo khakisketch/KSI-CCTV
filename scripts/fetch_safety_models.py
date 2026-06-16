@@ -219,9 +219,22 @@ def fetch_model(name: str, config: dict[str, any], skip_existing: bool = True) -
         import hashlib
         actual = hashlib.sha256(Path(pt_path).read_bytes()).hexdigest()
         if actual != expected:
-            logger.error("[%s] SHA-256 불일치 — 다운로드 거부. expected=%s actual=%s", name, expected, actual)
+            logger.error(
+                "[%s] SHA-256 불일치 — 다운로드 거부. expected=%s actual=%s. "
+                "업스트림이 갱신됐다면 docs/model-sourcing.md 절차대로 검토 후 SAFETY_MODELS의 "
+                "expected_sha256을 새 값으로 갱신하세요(MITM이 아닌 정상 변경 확인 필수).",
+                name, expected, actual,
+            )
             return False
         logger.info("[%s] SHA-256 검증 통과", name)
+    else:
+        # 핀 누락을 가시화 — 무결성 검증 없이 진행됨(HF etag/revision에만 의존). #6
+        import hashlib
+        actual = hashlib.sha256(Path(pt_path).read_bytes()).hexdigest()
+        logger.warning(
+            "[%s] expected_sha256 미지정 — 무결성 검증 생략. 신뢰되면 SAFETY_MODELS에 핀 추가 권장: %s",
+            name, actual,
+        )
 
     logger.info("[%s] Found checkpoint: %s", name, pt_path)
 

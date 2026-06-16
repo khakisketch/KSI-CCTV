@@ -33,6 +33,28 @@ from src.utils.privacy import get_face_cascades
 
 logger = logging.getLogger(__name__)
 
+# PII/자격증명이 실제로 들어올 수 있는 자유서술 필드. mask_text를 로그 라인 전체가 아니라
+# 이 필드들에만 적용해, event_id·bbox·timestamp 같은 수치/구조 필드가 정규식 오탐으로
+# 손상되는 것을 막는다(#7 — 감사 로그 식별값 정합성 보존).
+_MASKED_TEXT_FIELDS = ("description", "vlm_raw_response", "vlm_recommended_action", "rule_name")
+
+
+def _mask_event_payload(log_data: dict) -> dict:
+    """로그 직렬화 전 자유서술 필드의 PII/자격증명만 마스킹한 사본을 반환한다.
+
+    구조/수치 필드는 건드리지 않는다(오탐 치환 방지). vlm_detected_events(문자열 리스트)도 처리.
+    """
+    masked = dict(log_data)
+    for key in _MASKED_TEXT_FIELDS:
+        val = masked.get(key)
+        if isinstance(val, str) and val:
+            masked[key] = mask_text(val)
+    events = masked.get("vlm_detected_events")
+    if isinstance(events, list):
+        masked["vlm_detected_events"] = [mask_text(e) if isinstance(e, str) else e for e in events]
+    return masked
+
+
 # 암호화 선택적 import (cryptography 패키지가 설치된 경우에만 활성화)
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -370,12 +392,10 @@ class AlertManager:
         self._send_batch_email(events)
 
     def _log_batch(self, events: list[SafetyEvent]) -> None:
-        """배치 이벤트 일괄 로깅 (URL 마스킹 적용)"""
+        """배치 이벤트 일괄 로깅 (자유서술 필드 PII/URL 마스킹)"""
         for event in events:
-            log_data = event.to_dict()
+            log_data = _mask_event_payload(event.to_dict())
             log_line = json.dumps(log_data, ensure_ascii=False, default=str)
-            # Phase 8 M5.3 S3: RTSP/HTTP URL이 포함될 수 있는 description 등을 마스킹
-            log_line = mask_text(log_line)
             self.alert_logger.info(f"EVENT | {log_line}")
         if self.config.console_output:
             print(f"\n배치 알람: {len(events)}건 처리 완료")
@@ -613,11 +633,9 @@ class AlertManager:
     # ------------------------------------------------------------------
 
     def _log_event(self, event: SafetyEvent):
-        """이벤트 로깅 (URL 마스킹 적용)"""
-        log_data = event.to_dict()
+        """이벤트 로깅 (자유서술 필드 PII/URL 마스킹)"""
+        log_data = _mask_event_payload(event.to_dict())
         log_line = json.dumps(log_data, ensure_ascii=False, default=str)
-        # Phase 8 M5.3 S3: RTSP/HTTP URL 마스킹 (비밀 보호)
-        log_line = mask_text(log_line)
 
         self.alert_logger.info(f"EVENT | {log_line}")
 

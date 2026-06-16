@@ -656,34 +656,77 @@ class TestValidateOnnxNoExternalData(unittest.TestCase):
             ok, err = uv.validate_onnx_no_external_data(path)
             self.assertTrue(ok, err)
 
-    def test_external_data_onnx_is_rejected(self):
-        """external_data location으로 모델 밖 파일을 가리키는 ONNX는 거부한다."""
+    @staticmethod
+    def _ext_tensor(name: str, location: str = "../../../../etc/passwd"):
+        """모델 밖 파일을 가리키는 external-data TensorProto 생성."""
         from onnx import TensorProto, helper
 
-        # 임의 파일(../../.env 등)을 weight 출처로 지정한 external-data initializer
-        ext = helper.make_tensor(
-            name="w", data_type=TensorProto.FLOAT, dims=[1], vals=[0.0]
-        )
+        ext = helper.make_tensor(name=name, data_type=TensorProto.FLOAT, dims=[1], vals=[0.0])
         ext.data_location = TensorProto.EXTERNAL
         del ext.float_data[:]
-        for key, val in (("location", "../../../../etc/passwd"), ("offset", "0"), ("length", "64")):
+        for key, val in (("location", location), ("offset", "0"), ("length", "64")):
             entry = ext.external_data.add()
             entry.key = key
             entry.value = val
+        return ext
 
-        input_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1])
-        output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])
-        node = helper.make_node("Add", inputs=["input", "w"], outputs=["output"])
-        graph = helper.make_graph([node], "evil", [input_info], [output_info], initializer=[ext])
-        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
-        model.ir_version = 7
-
+    def _reject(self, model):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "evil.onnx"
             path.write_bytes(model.SerializeToString())
             ok, err = uv.validate_onnx_no_external_data(path)
             self.assertFalse(ok)
             self.assertIn("외부 데이터", err)
+
+    def test_external_data_onnx_is_rejected(self):
+        """최상위 graph.initializer의 external-data를 거부한다."""
+        from onnx import TensorProto, helper
+
+        ext = self._ext_tensor("w")
+        input_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1])
+        output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])
+        node = helper.make_node("Add", inputs=["input", "w"], outputs=["output"])
+        graph = helper.make_graph([node], "evil", [input_info], [output_info], initializer=[ext])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
+        model.ir_version = 7
+        self._reject(model)
+
+    def test_external_data_in_constant_attribute_is_rejected(self):
+        """Constant 노드 attribute(value)에 숨긴 external-data를 거부한다(우회 차단)."""
+        from onnx import TensorProto, helper
+
+        ext = self._ext_tensor("c")
+        const_node = helper.make_node("Constant", inputs=[], outputs=["w"], value=ext)
+        input_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1])
+        output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])
+        add = helper.make_node("Add", inputs=["input", "w"], outputs=["output"])
+        graph = helper.make_graph([const_node, add], "evil", [input_info], [output_info])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
+        model.ir_version = 7
+        self._reject(model)
+
+    def test_external_data_in_subgraph_is_rejected(self):
+        """If 노드 서브그래프(then_branch) initializer의 external-data를 거부한다(우회 차단)."""
+        from onnx import TensorProto, helper
+
+        ext = self._ext_tensor("sub_w")
+        sub_out = helper.make_tensor_value_info("sub_out", TensorProto.FLOAT, [1])
+        # then/else 모두 sub_out을 산출(else는 안전, then은 external initializer 보유)
+        then_id = helper.make_node("Identity", inputs=["sub_w"], outputs=["sub_out"])
+        then_g = helper.make_graph([then_id], "then", [], [sub_out], initializer=[ext])
+        safe = helper.make_tensor("safe", TensorProto.FLOAT, [1], [1.0])
+        else_id = helper.make_node("Identity", inputs=["safe"], outputs=["sub_out"])
+        else_g = helper.make_graph([else_id], "else", [], [sub_out], initializer=[safe])
+
+        cond = helper.make_tensor_value_info("cond", TensorProto.BOOL, [1])
+        output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])
+        if_node = helper.make_node(
+            "If", inputs=["cond"], outputs=["output"], then_branch=then_g, else_branch=else_g
+        )
+        graph = helper.make_graph([if_node], "evil", [cond], [output_info])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
+        model.ir_version = 7
+        self._reject(model)
 
 
 @unittest.skipUnless(_HAS_ONNX_BUILDER, "onnx 패키지 없음 — skip")

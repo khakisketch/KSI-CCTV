@@ -238,6 +238,21 @@ class YOLODetector:
                     "예: yolo export model=yolo26n.pt format=onnx imgsz=640 half=True device=0"
                 )
 
+            # 방어선 이중화(#12): 업로드 검증을 우회해 배치/교체(TOCTOU)된 모델도 런타임 로드 직전
+            # external-data 참조를 거부한다. InferenceSession 생성 전 그래프만 파싱(외부파일 미read).
+            # 정상 self-contained ONNX(기본 제공/export본)는 통과. onnx 미설치 시 검사만 생략(로드는 진행
+            # — 핵심 탐지 경로를 방어선 부재로 막지 않는다. onnx는 런타임 필수 의존이라 통상 존재).
+            try:
+                import onnx  # noqa: F401
+
+                from src.models.upload_validator import validate_onnx_no_external_data
+                ok, err = validate_onnx_no_external_data(self.model_path)
+            except ImportError:
+                logger.warning("onnx 미설치 — external-data 안전 검사 생략: %s", self.model_path)
+                ok, err = True, ""
+            if not ok:
+                raise ValueError(f"안전하지 않은 ONNX 모델 거부: {err}")
+
             available = set(ort.get_available_providers())
             providers = []
             if self.device in {"cuda", "auto"} and "CUDAExecutionProvider" in available:
