@@ -66,6 +66,10 @@
 
 ---
 
+### P1c. 데몬+API 통합(단일 서비스) — 🔄 진행
+- ✅ **P1c-1 API 추가분**: 제어 엔드포인트(/api/control/{status,start,stop} — app.state.pipeline 라이브 제어, 미연결 503) + compat 헬스(/health·/health/live·/health/ready·/healthz — 기존 http.server 대체, 비인증). 테스트 9(mock pipeline). pure-additive(데몬 무변경).
+- ⬜ **P1c-2 run.py 와이어링**: http.server → uvicorn(create_app(config,pipeline)) 스레드 서빙(같은 포트 8081, compat /health* 유지). 데몬 smoke 재검증 필수(배포 healthcheck 경로 유지). SSE(/api/events/stream)는 후속.
+
 ## 진행 로그(커밋)
 - (P0) 2026-06-16 cleanup: OUTSIDE_SECRET.bin·임시 스크린샷 스크립트 제거, 본 계획 문서 작성
 - (P1) 2026-06-16 엔진 API(FastAPI) 읽기 엔드포인트 + fail-closed 인증 + 시크릿 마스킹 + 테스트 12 + 실서빙 스모크. P1b(제어/SSE)는 데몬 통합 시.
@@ -76,3 +80,4 @@
 - (P1b) 2026-06-17 엔진 API 쓰기 — POST /api/models/{name}/prompts(open-vocab 프롬프트, 정제·검증·안전 갱신) + PUT enabled. 인증·테스트 8. P4c(프롬프트 UI)의 백엔드 전제 완료.
 - (P4c-1) 2026-06-17 프론트 프롬프트 관리 UI — PromptManager + Next route handler(키 서버보관). E2E: UI→Next→엔진 POST로 config 실갱신·비-openvocab 400 확인. 남음=프론트 인증·start/stop·yaml 주석보존.
 - (P4c-2) 2026-06-17 프론트 인증 — HMAC 세션쿠키(Web Crypto)+middleware fail-closed 게이트+/login+로그아웃. 전 플로우 E2E 검증(307/401/200/쿠키/proxy차단/로그아웃). .env.example. 남음=start/stop(데몬 통합).
+- (P1c-1) 2026-06-17 엔진 API 제어 엔드포인트(/api/control/{status,start,stop}) + compat /health*(http.server 대체). 테스트 9. 462 passed. P1c-2(run.py 와이어링) 다음.

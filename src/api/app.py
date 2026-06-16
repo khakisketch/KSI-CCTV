@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.api import service
@@ -46,20 +47,70 @@ def create_app(config: Any | None = None, pipeline: Any | None = None) -> FastAP
 
     auth = [Depends(require_api_key)]
 
-    # ── 헬스 ─────────────────────────────────────────────────────────────
-    @app.get("/api/health/live", tags=["health"])
-    def health_live() -> dict[str, str]:
-        """liveness 프로브 — 프로세스 생존 시 항상 200(비인증, 외부 모니터링/컨테이너용)."""
-        return {"status": "alive"}
-
-    @app.get("/api/health", tags=["health"], dependencies=auth)
-    def health() -> dict[str, Any]:
+    def _build_checker() -> HealthChecker:
         checker = HealthChecker()
         checker.register("disk_space", check_disk_space)
         checker.register("memory_usage", check_memory_usage)
         if app.state.pipeline is not None:
             register_pipeline_health_checks(checker, app.state.pipeline)
-        return checker.run_checks().to_dict()
+        return checker
+
+    # ── 헬스(/api 인증 뷰) ───────────────────────────────────────────────
+    @app.get("/api/health/live", tags=["health"])
+    def health_live() -> dict[str, str]:
+        """liveness 프로브 — 프로세스 생존 시 항상 200(비인증)."""
+        return {"status": "alive"}
+
+    @app.get("/api/health", tags=["health"], dependencies=auth)
+    def health() -> dict[str, Any]:
+        return _build_checker().run_checks().to_dict()
+
+    # ── 헬스(compat: 기존 http.server /health* 대체 — 비인증, 컨테이너/systemd 프로브용) ──
+    @app.get("/health/live", tags=["health"], include_in_schema=False)
+    @app.get("/healthz", tags=["health"], include_in_schema=False)
+    def compat_live() -> dict[str, str]:
+        return {"status": "alive"}
+
+    @app.get("/health", tags=["health"], include_in_schema=False)
+    def compat_health() -> JSONResponse:
+        report = _build_checker().run_checks()
+        return JSONResponse(report.to_dict(), status_code=200 if report.overall_healthy else 503)
+
+    @app.get("/health/ready", tags=["health"], include_in_schema=False)
+    def compat_ready() -> JSONResponse:
+        report = _build_checker().run_checks()
+        critical = {"disk_space", "memory_usage"}
+        ok = all(c.healthy for c in report.components if c.name in critical)
+        return JSONResponse(
+            {"status": "ready" if ok else "not_ready"}, status_code=200 if ok else 503
+        )
+
+    # ── 제어(라이브 파이프라인 — 데몬에 mount된 경우만) ──────────────────
+    @app.get("/api/control/status", tags=["control"], dependencies=auth)
+    def control_status() -> dict[str, Any]:
+        pl = app.state.pipeline
+        if pl is None:
+            return {"connected": False, "running": False}
+        status = pl.get_status() if hasattr(pl, "get_status") else {}
+        return {"connected": True, "running": bool(getattr(pl, "is_running", False)), "status": status}
+
+    @app.post("/api/control/start", tags=["control"], dependencies=auth)
+    def control_start() -> dict[str, Any]:
+        pl = app.state.pipeline
+        if pl is None:
+            raise HTTPException(status_code=503, detail="파이프라인이 연결되지 않았습니다(데몬 외 실행).")
+        if not getattr(pl, "is_running", False):
+            pl.start()
+        return {"running": bool(getattr(pl, "is_running", True))}
+
+    @app.post("/api/control/stop", tags=["control"], dependencies=auth)
+    def control_stop() -> dict[str, Any]:
+        pl = app.state.pipeline
+        if pl is None:
+            raise HTTPException(status_code=503, detail="파이프라인이 연결되지 않았습니다(데몬 외 실행).")
+        if getattr(pl, "is_running", False):
+            pl.stop()
+        return {"running": bool(getattr(pl, "is_running", False))}
 
     # ── 이벤트 ───────────────────────────────────────────────────────────
     @app.get("/api/events", tags=["events"], dependencies=auth)

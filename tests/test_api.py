@@ -222,5 +222,85 @@ class TestApiWritePrompts(unittest.TestCase):
             self.assertEqual(r.status_code, 400)
 
 
+@unittest.skipUnless(_HAS_API, "fastapi 미설치 — skip")
+class TestApiControl(unittest.TestCase):
+    """P1c 제어 엔드포인트 — 라이브 파이프라인 start/stop/status(데몬 mount 시)."""
+
+    def _mock_pipeline(self, running=False):
+        from unittest.mock import MagicMock
+        pl = MagicMock()
+        pl.is_running = running
+        pl.get_status.return_value = {"cameras": {}}
+        return pl
+
+    def test_status_no_pipeline(self):
+        client = TestClient(create_app())
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = client.get("/api/control/status", headers={"X-API-Key": _KEY})
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.json()["connected"])
+
+    def test_status_with_pipeline(self):
+        pl = self._mock_pipeline(running=True)
+        client = TestClient(create_app(pipeline=pl))
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = client.get("/api/control/status", headers={"X-API-Key": _KEY})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertTrue(body["connected"])
+        self.assertTrue(body["running"])
+
+    def test_start_calls_pipeline(self):
+        pl = self._mock_pipeline(running=False)
+        client = TestClient(create_app(pipeline=pl))
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = client.post("/api/control/start", headers={"X-API-Key": _KEY})
+        self.assertEqual(r.status_code, 200)
+        pl.start.assert_called_once()
+
+    def test_stop_calls_pipeline(self):
+        pl = self._mock_pipeline(running=True)
+        client = TestClient(create_app(pipeline=pl))
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = client.post("/api/control/stop", headers={"X-API-Key": _KEY})
+        self.assertEqual(r.status_code, 200)
+        pl.stop.assert_called_once()
+
+    def test_control_503_without_pipeline(self):
+        client = TestClient(create_app())
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = client.post("/api/control/start", headers={"X-API-Key": _KEY})
+        self.assertEqual(r.status_code, 503)
+
+    def test_control_requires_auth(self):
+        client = TestClient(create_app(pipeline=self._mock_pipeline()))
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = client.post("/api/control/start")  # 키 없음
+        self.assertEqual(r.status_code, 401)
+
+
+@unittest.skipUnless(_HAS_API, "fastapi 미설치 — skip")
+class TestApiCompatHealth(unittest.TestCase):
+    """compat /health* — 기존 http.server 대체(비인증, 컨테이너/systemd 프로브)."""
+
+    def setUp(self):
+        self.client = TestClient(create_app())
+
+    def test_compat_live_unauth_200(self):
+        r = self.client.get("/health/live")  # 비인증
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["status"], "alive")
+
+    def test_compat_health_unauth(self):
+        r = self.client.get("/health")  # 비인증, disk/memory 정상이면 200, 아니면 503
+        self.assertIn(r.status_code, (200, 503))
+        self.assertIn("components", r.json())
+
+    def test_compat_ready_unauth(self):
+        r = self.client.get("/health/ready")
+        self.assertIn(r.status_code, (200, 503))
+        self.assertIn("status", r.json())
+
+
 if __name__ == "__main__":
     unittest.main()
