@@ -104,6 +104,14 @@ bash scripts/run_dashboard.sh
 
 ## 문서
 
+### 제품 방향 로드맵 (설계 단계 — 구현 전)
+| 문서 | 내용 |
+|---|---|
+| `docs/architecture-target.md` | **타깃 아키텍처** — 엔진+FastAPI+웹UI(Next/shadcn)+영상게이트웨이, Streamlit 마이그레이션 단계 |
+| `docs/roadmap-capability.md` | **능력 로드맵** — open-vocab(YOLO-World 등) 텍스트 즉시탐지 + VLM 상황탐지 통합 |
+| `docs/roadmap-packaging.md` | **크로스플랫폼 패키징** — OS×가속(EP)×설치방식 매트릭스(Win/Win-ARM64/macOS/Linux) |
+
+### 운영·구현 문서
 | 문서 | 내용 |
 |---|---|
 | `docs/configuration.md` | 환경변수·설정파일 레퍼런스 |
