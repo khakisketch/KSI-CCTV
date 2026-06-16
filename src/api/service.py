@@ -272,6 +272,40 @@ def set_model_enabled(
     return {"name": model_name, "enabled": bool(enabled)}
 
 
+def handle_model_upload(
+    *,
+    file_bytes: bytes,
+    original_filename: str,
+    model_name: str,
+    classes: list[str],
+    input_size: list[int],
+) -> dict[str, Any]:
+    """업로드된 ONNX를 기존 하드닝 검증기(샌드박스)로 처리하고 disabled로 등록한다.
+
+    보안 핵심 경로는 src.models.upload_validator.upload_model을 그대로 재사용한다(external-data
+    차단 → load → shape → smoke 추론을 단일 rlimit sandbox에서). 여기서는 API 어댑터일 뿐이며
+    서버 경로(model_path) 등 내부 정보는 응답에서 제외한다. onnx 의존성은 지연 import."""
+    from src.models import upload_validator
+
+    result = upload_validator.upload_model(
+        file_bytes,
+        original_filename,
+        metadata={"model_name": model_name, "classes": classes, "input_size": input_size},
+    )
+    if not result.success:
+        return {"success": False, "error": result.error}
+    meta = result.metadata or {}
+    return {
+        "success": True,
+        "model_id": result.model_id,
+        "profile_name": result.profile_name,
+        "model_name": meta.get("model_name"),
+        "classes": meta.get("classes", []),
+        "class_profile": meta.get("class_profile"),
+        "enabled": False,  # 항상 비활성으로 등록(운영자가 검토 후 활성화)
+    }
+
+
 def config_sanitized(config: Any) -> dict[str, Any]:
     """대시보드/프론트가 쓰는 비밀 제거 설정 뷰. 큐레이션 + 마스킹(원본 덤프 금지)."""
     det = config.get_detection_config() if hasattr(config, "get_detection_config") else {}

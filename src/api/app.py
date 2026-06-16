@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -184,6 +184,33 @@ def create_app(
             return service.set_model_enabled(name, body.enabled)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+
+    # ── 쓰기: 사용자 ONNX 모델 업로드(검증 샌드박스 후 disabled 등록) ──────────
+    @app.post("/api/models/upload", tags=["models"], dependencies=auth)
+    async def upload_model(
+        file: UploadFile = File(...),
+        model_name: str = Form("uploaded model"),
+        classes: str = Form(""),  # 쉼표 구분
+        input_height: int = Form(640),
+        input_width: int = Form(640),
+    ) -> dict[str, Any]:
+        from src.models import upload_validator
+
+        max_bytes = upload_validator.MAX_FILE_SIZE_BYTES
+        # 전체를 메모리에 올리기 전 상한 가드(악성 거대 업로드 OOM 방지). 최종 한도는 검증기가 재확인.
+        contents = await file.read(max_bytes + 1)
+        if len(contents) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"파일이 너무 큽니다(최대 {max_bytes // (1024 * 1024)}MB).")
+        result = service.handle_model_upload(
+            file_bytes=contents,
+            original_filename=file.filename or "uploaded.onnx",
+            model_name=model_name,
+            classes=[c.strip() for c in classes.split(",") if c.strip()],
+            input_size=[int(input_height), int(input_width)],
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("error", "업로드 실패"))
+        return result
 
     return app
 

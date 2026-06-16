@@ -352,5 +352,70 @@ class TestEventStreamSSE(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret123", frame)          # 마스킹 유지
 
 
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestModelUpload(unittest.TestCase):
+    """업로드 엔드포인트 plumbing — 멀티파트 파싱·인증·크기 가드·service 위임.
+
+    실제 ONNX 검증(샌드박스)은 service.handle_model_upload(→upload_validator)에 위임하며
+    그 로직은 test_upload_validator.py가 검증한다. 여기서는 API 어댑터만 단위 검증한다.
+    """
+
+    def setUp(self):
+        self.client = TestClient(create_app())
+
+    def _post(self, content=b"onnxbytes", data=None):
+        return self.client.post(
+            "/api/models/upload",
+            headers={"X-API-Key": _KEY},
+            files={"file": ("m.onnx", content, "application/octet-stream")},
+            data=data or {"model_name": "t", "classes": "a,b", "input_height": "640", "input_width": "640"},
+        )
+
+    def test_upload_success_delegates_and_returns_profile(self):
+        fake = {"success": True, "model_id": "abc", "profile_name": "uploaded_abc", "enabled": False}
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}), \
+                patch.object(service, "handle_model_upload", return_value=fake) as m:
+            r = self._post()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["profile_name"], "uploaded_abc")
+        self.assertFalse(r.json()["enabled"])  # 항상 disabled 등록
+        # service에 정제된 인자가 전달됐는지(쉼표 분리 classes)
+        _, kwargs = m.call_args
+        self.assertEqual(kwargs["classes"], ["a", "b"])
+        self.assertEqual(kwargs["input_size"], [640, 640])
+
+    def test_upload_validation_failure_returns_400(self):
+        fail = {"success": False, "error": "허용되지 않은 파일 형식입니다."}
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}), \
+                patch.object(service, "handle_model_upload", return_value=fail):
+            r = self._post()
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("허용되지", r.json()["detail"])
+
+    def test_upload_requires_auth(self):
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = self.client.post(
+                "/api/models/upload",
+                files={"file": ("m.onnx", b"x", "application/octet-stream")},
+                data={"model_name": "t"},
+            )
+        self.assertEqual(r.status_code, 401)  # 키 누락 → fail-closed
+
+    def test_upload_rejects_oversized_before_validation(self):
+        from src.models import upload_validator
+        called = {"v": False}
+
+        def _should_not_run(**_kw):
+            called["v"] = True
+            return {"success": True}
+
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}), \
+                patch.object(upload_validator, "MAX_FILE_SIZE_BYTES", 8), \
+                patch.object(service, "handle_model_upload", side_effect=_should_not_run):
+            r = self._post(content=b"way-too-large-payload")
+        self.assertEqual(r.status_code, 413)
+        self.assertFalse(called["v"], "크기 초과인데 검증기가 호출됨(OOM 가드 실패)")
+
+
 if __name__ == "__main__":
     unittest.main()
