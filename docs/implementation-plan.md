@@ -53,9 +53,10 @@
 - ⚠️ **알려진 한계(P1b 쓰기):** set_model_prompts가 yaml.safe_dump로 model_profiles.yaml을 재작성하며 **주석을 제거**한다(라이선스 경고 등). 후속: ruamel.yaml round-trip 또는 경고를 docs로 이전.
 - **검증 완료:** build·lint clean·SSR 실데이터 + 쓰기 E2E·다크/라이트·반응형. start/stop·영상·인증은 후속.
 
-### P5. 라이브 영상 게이트웨이(MediaMTX/go2rtc) — docker, 부분 검증
-- ⬜ compose 서비스(RTSP→WebRTC/HLS) + 프론트 플레이어
-- **수용:** 게이트웨이 기동·헬스 / [DATA] 실 RTSP 재생은 카메라 필요
+### P5. 라이브 영상 게이트웨이(MediaMTX) — 🔄 진행(게이트웨이+HLS 실재생 검증 완료)
+- ✅ **P5a 게이트웨이**: `config/mediamtx.yml`(RTSP 입력 → HLS mpegts/WebRTC 출력, RTMP/SRT 비활성, API auth 기본 default-deny=보안) + compose `ksi-cctv-gateway`(MediaMTX 1.19.1 핀, `--profile video`/`web`, 포트 8554/8888/8889/8189udp, scratch라 healthcheck 없음). 엔진은 영상 전송 안 함(architecture-target §2 준수). 카메라 RTSP는 .env SSOT 공유 + on-demand 풀 경로 템플릿(주석).
+- ⬜ **P5b 프론트 플레이어**: `/api/cameras/{id}/stream`(게이트웨이 URL 발급) + 카메라 페이지 hls.js `<video>`(HLS 기본·WebRTC 옵션). RTSP 자격증명 브라우저 미노출.
+- **검증 완료(카메라 없이):** ffmpeg로 sample.mp4를 합성 RTSP(cam_001)로 발행 → MediaMTX "stream online, 1 track(H264)" → **HLS 클라이언트(ffmpeg)가 index.m3u8(master)→media→.ts 체인 디코드, 640x480@30fps 30프레임 수신**. compose up으로 볼륨 마운트(내 config의 WebRTC :8189)·4포트 매핑 확인. compose config(video/web/동시) 통과. [DATA] 실 카메라 RTSP·원격 WebRTC(webrtcAdditionalHosts/TURN)는 타깃.
 
 ### P6. 설치형 패키징 — 🔄 진행(Docker 웹 컨테이너 검증 완료, Windows/PyInstaller [HW] 보류)
 - ✅ **P6a 웹 UI Docker 이미지**: `frontend/Dockerfile`(멀티스테이지 standalone, 비root nextjs:1001) + `.dockerignore`. next.config.ts `output:"standalone"` + `outputFileTracingRoot`/`turbopack.root`를 frontend/로 고정(상위 lockfile 오추론으로 standalone이 절대경로 미러로 중첩되는 버그 수정 — 평면 server.js 확인).
@@ -86,3 +87,4 @@
 - (P1c-1) 2026-06-17 엔진 API 제어 엔드포인트(/api/control/{status,start,stop}) + compat /health*(http.server 대체). 테스트 9. 462 passed. P1c-2(run.py 와이어링) 다음.
 - (P1c-2) 2026-06-17 run.py가 uvicorn(FastAPI)로 단일 서빙 — 탐지+API+제어 1프로세스. 데몬 smoke로 /api/control/status connected=True·SIGTERM exit 0 검증. http.server 제거.
 - (P6a) 2026-06-17 설치형 패키징(Docker 웹) — frontend Dockerfile(standalone·비root) + compose `ksi-cctv-web`(--profile web, 엔진 서비스명 호출·API키 공유). next standalone 중첩버그 수정(tracingRoot 고정). 실빌드→컨테이너 기동→/login 200·미인증 307 리다이렉트 E2E 검증. obsolete version 키 제거. 남음=Windows/PyInstaller/오프라인번들[HW].
+- (P5a) 2026-06-17 영상 게이트웨이 — MediaMTX 1.19.1 compose 서비스(--profile video/web) + config/mediamtx.yml(RTSP→HLS/WebRTC). ffmpeg 합성 RTSP(sample.mp4)→HLS 체인을 실HLS클라이언트로 30프레임 디코드 검증(카메라 불요). compose 마운트·4포트 확인. 남음=P5b 프론트 hls.js 플레이어 + /api/cameras/{id}/stream.

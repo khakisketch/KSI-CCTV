@@ -94,6 +94,8 @@ services:
     depends_on:
       ksi-cctv:
         condition: service_healthy
+      ksi-cctv-gateway:
+        condition: service_started   # 게이트웨이 이미지는 scratch라 healthcheck 불가 → 기동만 대기
     environment:
       TZ: Asia/Seoul
       # 같은 compose 네트워크의 엔진 데몬을 서비스명으로 호출(호스트 포트 매핑 불필요).
@@ -121,6 +123,32 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  # ── 영상 게이트웨이(옵션: --profile video 또는 --profile web) ────────────────────
+  # MediaMTX — RTSP 입력을 WebRTC(저지연)/HLS(호환)로 재발행한다. 추론 엔진은 영상 전송을
+  # 하지 않는다(docs/architecture-target.md §2). 카메라 RTSP는 .env(CCTV_CAM_xxx_URL)에서
+  # 공유하고, config/mediamtx.yml에서 카메라별 on-demand 풀 경로를 정의한다(주석 템플릿 참고).
+  # 검증: ffmpeg로 sample.mp4를 cam_001로 발행 → HLS(index.m3u8)로 실디코드 확인 완료.
+  ksi-cctv-gateway:
+    image: bluenviron/mediamtx:1.19.1   # 핀 고정(재현성). MIT.
+    container_name: ksi-cctv-gateway
+    profiles: ["web", "video"]
+    volumes:
+      - ./config/mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"          # RTSP(카메라 발행/풀)
+      - "8888:8888"          # HLS(브라우저 호환 재생)
+      - "8889:8889"          # WebRTC(저지연, TCP 시그널링)
+      - "8189:8189/udp"      # WebRTC ICE(UDP). 원격 접속은 webrtcAdditionalHosts/TURN 필요.
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - cctv-network
+    # 이미지가 scratch 기반(쉘/curl 부재)이라 컨테이너 healthcheck를 정의하지 않는다.
 
 networks:
   cctv-network:
