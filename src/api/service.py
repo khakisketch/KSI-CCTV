@@ -1,0 +1,171 @@
+"""엔진 API 데이터 접근 계층 — 기존 SSOT(config/이벤트/모델/정책)를 읽어 안전하게 반환.
+
+라우트와 분리해 단위 테스트 가능하게 한다. 모든 외부 노출 텍스트는 시크릿 마스킹(mask_text/mask_url)을
+거친다 — RTSP/SMTP 자격증명·VLM 자유서술 PII가 API로 새지 않게(보안 하드닝 보존).
+"""
+from __future__ import annotations
+
+import collections
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from src.alerts.alert_manager import parse_alert_log_line
+from src.utils.config import mask_text, mask_url
+
+_ROOT = Path(__file__).resolve().parents[2]
+_MODEL_PROFILES = _ROOT / "config" / "model_profiles.yaml"
+_EVENT_POLICIES = _ROOT / "config" / "event_policies.yaml"
+_ALERTS_LOG = _ROOT / "logs" / "alerts.log"
+
+EVENTS_MAX_LIMIT = 1000
+
+# 자유서술/식별 텍스트만 마스킹 대상(구조·수치 필드는 보존 — 오탐 치환 방지).
+_EVENT_TEXT_FIELDS = ("description", "vlm_raw_response", "vlm_recommended_action", "rule_name")
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def list_events(
+    limit: int = 100,
+    event_type: str | None = None,
+    camera_id: str | None = None,
+    alerts_log: Path | None = None,
+) -> list[dict[str, Any]]:
+    """alerts.log에서 최근 이벤트를 파싱해 반환(최신순). 자유서술 필드는 마스킹.
+
+    append-only 로그를 deque(maxlen)로 스트리밍해 메모리를 제한한다(장기운영 로그 비대화 대비).
+    """
+    path = alerts_log or _ALERTS_LOG
+    limit = max(1, min(int(limit), EVENTS_MAX_LIMIT))
+    if not path.exists():
+        return []
+    buf: collections.deque = collections.deque(maxlen=EVENTS_MAX_LIMIT)
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = parse_alert_log_line(line)
+            except Exception:
+                continue
+            if ev is None:
+                continue
+            if event_type and ev.get("event_type") != event_type:
+                continue
+            if camera_id and ev.get("camera_id") != camera_id:
+                continue
+            buf.append(_mask_event(ev))
+    events = list(buf)
+    events.reverse()  # 최신순
+    return events[:limit]
+
+
+def _mask_event(ev: dict[str, Any]) -> dict[str, Any]:
+    masked = dict(ev)
+    for key in _EVENT_TEXT_FIELDS:
+        val = masked.get(key)
+        if isinstance(val, str) and val:
+            masked[key] = mask_text(val)
+    evs = masked.get("vlm_detected_events")
+    if isinstance(evs, list):
+        masked["vlm_detected_events"] = [mask_text(e) if isinstance(e, str) else e for e in evs]
+    return masked
+
+
+def list_cameras(config: Any) -> list[dict[str, Any]]:
+    """카메라 목록 — stream_url 자격증명 마스킹."""
+    out = []
+    for cam in config.load_cameras():
+        out.append({
+            "id": cam.get("id"),
+            "name": cam.get("name"),
+            "location": cam.get("location"),
+            "fps": cam.get("fps"),
+            "resolution": cam.get("resolution"),
+            "enabled": bool(cam.get("enabled", False)),
+            "detection_type": cam.get("detection_type"),
+            "stream_url": mask_url(cam.get("stream_url", "") or ""),  # 자격증명 마스킹
+        })
+    return out
+
+
+def list_models(profiles_path: Path | None = None) -> list[dict[str, Any]]:
+    """등록 모델 목록(model_profiles.yaml) — ONNX를 로드하지 않고 메타만 읽음(가벼움)."""
+    cfg = _load_yaml(profiles_path or _MODEL_PROFILES)
+    out = []
+    for name, m in (cfg.get("models") or {}).items():
+        if not isinstance(m, dict):
+            continue
+        out.append({
+            "name": name,
+            "type": m.get("type"),
+            "source": m.get("source"),
+            "enabled": bool(m.get("enabled", False)),
+            "class_profile": m.get("class_profile"),
+            "classes": m.get("classes"),
+            "input_size": m.get("input_size"),
+            "postprocess_mode": m.get("postprocess_mode"),
+            "has_class_map": bool(m.get("class_map")),
+            "description": m.get("description"),
+        })
+    return out
+
+
+def list_policies(policies_path: Path | None = None) -> dict[str, Any]:
+    """이벤트 정책 요약(event_policies.yaml) — 프로파일별 활성 이벤트와 핵심 메타."""
+    cfg = _load_yaml(policies_path or _EVENT_POLICIES)
+    profiles_out: dict[str, Any] = {}
+    for pname, pbody in (cfg.get("profiles") or {}).items():
+        policies = (pbody or {}).get("policies", {}) if isinstance(pbody, dict) else {}
+        events = []
+        for ename, e in policies.items():
+            if not isinstance(e, dict):
+                continue
+            events.append({
+                "name": ename,
+                "enabled": bool(e.get("enabled", False)),
+                "classes": (e.get("trigger") or {}).get("classes", []),
+                "rule": (e.get("rule") or {}).get("type"),
+                "alert_level": e.get("alert_level"),
+                "vlm": e.get("vlm"),
+                "cooldown_sec": e.get("cooldown_sec"),
+            })
+        profiles_out[pname] = events
+    return {"profiles": profiles_out}
+
+
+def config_sanitized(config: Any) -> dict[str, Any]:
+    """대시보드/프론트가 쓰는 비밀 제거 설정 뷰. 큐레이션 + 마스킹(원본 덤프 금지)."""
+    det = config.get_detection_config() if hasattr(config, "get_detection_config") else {}
+    alerts = config.get_alert_config() if hasattr(config, "get_alert_config") else {}
+    vlm = config.get("models", "vlm", default={}) if hasattr(config, "get") else {}
+    return {
+        "detection": {
+            "skip_frames": det.get("skip_frames"),
+            "alert_cooldown_sec": det.get("alert_cooldown_sec"),
+            "target_classes": det.get("target_classes"),
+            "vlm_trigger_classes": det.get("vlm_trigger_classes"),
+        },
+        "alerts": {
+            "enabled": bool(alerts.get("enabled", True)),
+            "save_images": bool(alerts.get("save_images", True)),
+            "blur_faces": bool(alerts.get("blur_faces", True)),
+            "encrypt_images": bool(alerts.get("encrypt_images", False)),
+            "image_retention_days": alerts.get("image_retention_days"),
+        },
+        "vlm": {
+            "enabled": bool((vlm or {}).get("enabled", False)),
+            "provider": (vlm or {}).get("provider"),
+            "model_name": (vlm or {}).get("model_name"),
+            # base_url은 자격증명 포함 가능 → 마스킹
+            "base_url": mask_url((vlm or {}).get("base_url", "") or ""),
+        },
+    }

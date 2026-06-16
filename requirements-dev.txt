@@ -5,6 +5,7 @@
 pytest==9.0.3
 pytest-cov==6.0.0
 pytest-mock==3.14.0
+httpx>=0.27  # FastAPI TestClient(엔진 API 테스트)에 필요
 
 # 코드 품질 — 로컬/CI 룰 일관성을 위해 검증에 사용한 버전대로 정렬
 # (이전 ruff==0.7.4 핀은 실제 설치본과 drift되어 lint 결과가 어긋났음)
