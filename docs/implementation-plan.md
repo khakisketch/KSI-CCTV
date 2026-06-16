@@ -41,11 +41,13 @@
 - ⏭ 프롬프트→정책 자동배선 UX는 P4(프론트)/API 쓰기에서(신규 클래스 vlm:on_ambiguous 기본 규칙은 설계 확정)
 - **검증 완료:** ruff·mypy clean(34)·445 passed. CPU 1.49s/frame(실시간은 [HW] GPU 필요 — 연구 예측 일치).
 
-### P4. 프론트엔드(Next.js+Tailwind+shadcn) — Node 있음, 빌드 가능
-- ⬜ scaffold + 디자인 토큰(다크/라이트) + 레이아웃(데스크톱 콘솔/모바일 뷰어)
-- ⬜ 핵심 화면: 대시보드·이벤트·카메라·모델(프롬프트)·설정 — P1 API 연동
-- ⬜ `npm run build` 검증 + 기본 렌더 스모크
-- **수용:** 빌드 성공, API mock/실연동 렌더, 다크/라이트·반응형 동작
+### P4. 프론트엔드(Next.js+Tailwind+shadcn) — 🔄 진행(scaffold+디자인베이스 완료)
+- ✅ scaffold(Next 16·React 19·Tailwind 4·TS·App Router, `frontend/`) + shadcn init(11 컴포넌트) + next-themes
+- ✅ 디자인 시스템 베이스 + 레이아웃: ThemeProvider(다크 기본/라이트 토글), AppShell(데스크톱 사이드바 + 모바일 하단탭=경량 뷰어), 대시보드(메트릭 카드·이벤트 테이블 빈상태), 스텁 5라우트
+- ✅ `npm run build` 성공(6라우트, TS·eslint clean). node_modules gitignore.
+- ⬜ **남음(P4b): 엔진 API 연동** — Next 서버사이드 프록시(API 키 서버 보관, 브라우저 미노출) + 실 화면(이벤트 목록/필터·모델 프롬프트 추가·카메라·설정)
+- ⬜ 브라우저 렌더 스모크(스크린샷)
+- **검증(현재):** 빌드 성공·다크/라이트·반응형 구조. 실데이터·동선은 P4b.
 
 ### P5. 라이브 영상 게이트웨이(MediaMTX/go2rtc) — docker, 부분 검증
 - ⬜ compose 서비스(RTSP→WebRTC/HLS) + 프론트 플레이어
@@ -65,3 +67,4 @@
 - (P1) 2026-06-16 엔진 API(FastAPI) 읽기 엔드포인트 + fail-closed 인증 + 시크릿 마스킹 + 테스트 12 + 실서빙 스모크. P1b(제어/SSE)는 데몬 통합 시.
 - (P2) 2026-06-16 크로스플랫폼 EP 선택(_select_providers, auto 기본) + 테스트 10. 실모델 auto 로드 회귀 없음.
 - (P3) 2026-06-16 open-vocab(YOLO-World) OpenVocabDetector + registry open_vocab 타입 + model_profiles 엔트리. "텍스트로 학습없이 탐지" 실추론 PASS. 테스트 7.
+- (P4) 2026-06-17 프론트 scaffold(Next16/React19/Tailwind4/shadcn) + 다크라이트 테마 + 반응형 셸(데스크톱 사이드바/모바일 하단탭) + 대시보드/스텁. npm build 성공. P4b=API 연동·실화면 남음.
