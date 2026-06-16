@@ -23,6 +23,33 @@ logger = logging.getLogger(__name__)
 # raw/final 두 후처리 경로가 동일 기준을 쓰도록 단일 상수로 통일한다(이전 2.0/1.5 불일치 제거).
 _NORMALIZED_COORD_MAX = 1.5
 
+# 크로스플랫폼 Execution Provider 선호도(설치형 멀티-OS 가속). device별 우선순위 → 설치된
+# 패키지가 노출하는 provider만 골라 시도하고 항상 CPU로 폴백한다(휠 종류 무관, get_available_providers만 신뢰).
+#   Win/Linux+NVIDIA: CUDA/TensorRT · Win 범용GPU: DirectML · macOS: CoreML · Win ARM64 NPU: QNN
+_EP_PREFERENCE: dict[str, list[str]] = {
+    "auto": ["TensorrtExecutionProvider", "CUDAExecutionProvider", "DmlExecutionProvider",
+             "CoreMLExecutionProvider", "QNNExecutionProvider", "CPUExecutionProvider"],
+    "cuda": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    "tensorrt": ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+    "directml": ["DmlExecutionProvider", "CPUExecutionProvider"],
+    "coreml": ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+    "qnn": ["QNNExecutionProvider", "CPUExecutionProvider"],
+    "cpu": ["CPUExecutionProvider"],
+}
+
+
+def _select_providers(device: str, available: list[str] | set[str]) -> list[str]:
+    """device 선호도 × 설치된 provider 교집합을 우선순위대로 반환(항상 CPU 폴백 보장).
+
+    device='auto'(권장)는 가용한 가장 빠른 가속을 자동 선택. 알 수 없는 device도 auto로 처리.
+    """
+    avail = set(available)
+    pref = _EP_PREFERENCE.get((device or "auto").strip().lower(), _EP_PREFERENCE["auto"])
+    selected = [p for p in pref if p in avail]
+    if "CPUExecutionProvider" not in selected:
+        selected.append("CPUExecutionProvider")  # 최후 폴백 보장
+    return selected
+
 @dataclass
 class Detection:
     """탐지 결과"""
@@ -253,11 +280,10 @@ class YOLODetector:
             if not ok:
                 raise ValueError(f"안전하지 않은 ONNX 모델 거부: {err}")
 
-            available = set(ort.get_available_providers())
-            providers = []
-            if self.device in {"cuda", "auto"} and "CUDAExecutionProvider" in available:
-                providers.append("CUDAExecutionProvider")
-            providers.append("CPUExecutionProvider")
+            # 크로스플랫폼 EP 선택 — device 선호도 × 설치 가용 provider(CUDA/TensorRT/DirectML/CoreML/QNN/CPU).
+            available = ort.get_available_providers()
+            providers = _select_providers(self.device, available)
+            logger.info("ONNX EP 선택: device=%s → %s (가용: %s)", self.device, providers, available)
 
             sess_options = ort.SessionOptions()
             sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL

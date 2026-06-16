@@ -69,8 +69,10 @@ detection:
 
 # 디바이스 설정
 device:
-  # auto, cpu, cuda
-  primary: "cuda"
+  # 실행 가속기(Execution Provider) 선택. auto(권장)=가용한 가장 빠른 가속 자동선택.
+  # auto | cuda | tensorrt | directml(Windows 범용 GPU) | coreml(macOS) | qnn(Windows ARM64 NPU) | cpu
+  # 설치된 onnxruntime 패키지가 노출하는 provider만 사용되며 항상 CPU로 폴백한다(멀티-OS 설치형).
+  primary: "auto"
   # GPU 할당 비율 (0.8 = 80%)
   gpu_memory_fraction: 0.8
   # FP16 추론

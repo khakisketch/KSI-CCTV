@@ -27,11 +27,11 @@
 - ✅ 테스트 12종(TestClient) + 실 uvicorn 서빙 스모크
 - **검증 완료:** ruff·mypy clean(33 files)·pytest 429 passed. 실 uvicorn: live=200(비인증)·models 401→200(키)·정책 5프로파일 노출. 시크릿 마스킹·fail-closed 확인.
 
-### P2. 크로스플랫폼 EP 선택 — 로컬 검증 가능
-- ⬜ `yolo_detector._init_session` 다중 provider 선택(auto/cuda/directml/coreml/qnn/tensorrt/cpu) + 폴백
-- ⬜ config `device` 옵션 확장 · requirements 플랫폼별 주석
-- ⬜ 단위 테스트(provider 선택 로직)
-- **수용:** 선택 로직 단위테스트 통과, 현 CPU 환경 회귀 없음 / [HW] 타깃 가속 실측
+### P2. 크로스플랫폼 EP 선택 — ✅(로컬 검증)
+- ✅ `_select_providers(device, available)` 순수 함수 + `_init_session` 적용(auto/cuda/tensorrt/directml/coreml/qnn/cpu, 항상 CPU 폴백)
+- ✅ config `device` 기본 `auto`로(default.yaml·model_profiles 3종) + 옵션 주석
+- ✅ 단위 테스트 10종(선택 로직)
+- **검증 완료:** EP 선택 10 테스트 통과·실모델 3종 auto 로드(CPU 폴백) 회귀 없음·439 passed. [HW] DGX/Win/macOS 실가속은 타깃 검증(P6 패키지가 EP별 onnxruntime 휠 설치 담당).
 
 ### P3. open-vocab 탐지(YOLO-World) — CPU 검증 가능
 - ⬜ `OpenVocabDetector` + registry `open_vocab_onnx` 타입 + class_adapter identity 경로
@@ -62,3 +62,4 @@
 ## 진행 로그(커밋)
 - (P0) 2026-06-16 cleanup: OUTSIDE_SECRET.bin·임시 스크린샷 스크립트 제거, 본 계획 문서 작성
 - (P1) 2026-06-16 엔진 API(FastAPI) 읽기 엔드포인트 + fail-closed 인증 + 시크릿 마스킹 + 테스트 12 + 실서빙 스모크. P1b(제어/SSE)는 데몬 통합 시.
+- (P2) 2026-06-16 크로스플랫폼 EP 선택(_select_providers, auto 기본) + 테스트 10. 실모델 auto 로드 회귀 없음.

@@ -14,7 +14,7 @@ models:
     iou_threshold: 0.45
     # 명시 지정(heuristic 비의존) — yolo26은 end-to-end 출력 [1,300,6](NMS 불필요).
     postprocess_mode: nms_free
-    device: cuda
+    device: auto   # auto=가용 가속 자동선택(DGX=CUDA, 그 외 DirectML/CoreML/QNN/CPU 폴백)
     fp16: true
     description: "COCO pretrained model for person, vehicle, and general objects."
 
@@ -34,7 +34,7 @@ models:
     iou_threshold: 0.45
     # 명시 지정 — yolov8 raw 출력 [batch,14,anchors](NMS 필요). heuristic 오판 방지.
     postprocess_mode: nms
-    device: cuda
+    device: auto   # auto=가용 가속 자동선택(DGX=CUDA, 그 외 DirectML/CoreML/QNN/CPU 폴백)
     fp16: true
     description: "공개 pretrained PPE 모델(Hansung-Cho/yolov8-ppe-detection, 10-class). helmet+vest 지원(no_helmet/no_vest 탐지). mAP@50 0.744. ⚠️가중치 AGPL-3.0 — 상용 배포 시 라이선스 검토(docs/model-sourcing.md)."
     # 모델 실제 클래스명 → KSI-CCTV 표준 클래스명 (Mask/NO-Mask/Safety Cone/machinery/vehicle는 표준 외 → 미매핑)
@@ -60,7 +60,7 @@ models:
     iou_threshold: 0.45
     # 명시 지정 — yolo11 raw 출력 [batch,6,anchors](NMS 필요). 6채널이라 heuristic 오판 소지 → 고정.
     postprocess_mode: nms
-    device: cuda
+    device: auto   # auto=가용 가속 자동선택(DGX=CUDA, 그 외 DirectML/CoreML/QNN/CPU 폴백)
     fp16: true
     description: "공개 pretrained 화재/연기 모델(Flare Guard YOLO11n, fire+smoke). 일반 장면(forest-only 아님). mAP@50 0.770. ⚠️가중치 AGPL-3.0/LICENSE 부재 — 상용 배포 시 검토(docs/model-sourcing.md)."
     # 모델 실제 클래스명 → KSI-CCTV 표준 클래스명
