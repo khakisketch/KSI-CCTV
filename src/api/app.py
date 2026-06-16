@@ -35,12 +35,20 @@ class EnabledBody(BaseModel):
     enabled: bool
 
 
-def create_app(config: Any | None = None, pipeline: Any | None = None) -> FastAPI:
-    """엔진 API 앱 생성. config 미지정 시 AppConfig() 로드. pipeline 지정 시 파이프라인 헬스 포함."""
+def create_app(
+    config: Any | None = None,
+    pipeline: Any | None = None,
+    checker_factory: Any | None = None,
+) -> FastAPI:
+    """엔진 API 앱 생성. config 미지정 시 AppConfig() 로드. pipeline 지정 시 파이프라인 헬스 포함.
+
+    checker_factory: 헬스 HealthChecker를 만드는 호출가능(데몬이 ollama·configured stale_sec 포함한
+    풍부한 체커를 주입). 미지정 시 disk/memory(+pipeline) 기본 체커.
+    """
     app = FastAPI(
         title="KSI-CCTV Engine API",
         version="1.0.0",
-        description="설치형 AI CCTV 엔진 API — 이벤트·카메라·모델·정책·설정·헬스(읽기, 인증 필요)",
+        description="설치형 AI CCTV 엔진 API — 이벤트·카메라·모델·정책·설정·헬스·제어",
     )
     app.state.config = config or AppConfig()
     app.state.pipeline = pipeline
@@ -48,6 +56,8 @@ def create_app(config: Any | None = None, pipeline: Any | None = None) -> FastAP
     auth = [Depends(require_api_key)]
 
     def _build_checker() -> HealthChecker:
+        if checker_factory is not None:
+            return checker_factory()
         checker = HealthChecker()
         checker.register("disk_space", check_disk_space)
         checker.register("memory_usage", check_memory_usage)

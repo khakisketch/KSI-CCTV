@@ -31,7 +31,6 @@ from src.utils.health import (
     check_memory_usage,
     check_ollama_available,
     register_pipeline_health_checks,
-    start_health_server,
 )
 from src.vlm.vlm_inference import create_vlm_provider
 
@@ -208,25 +207,44 @@ def main() -> int:
         logger.error("파이프라인 조립 실패: %s", e)
         return 1
 
-    # /health에 실 파이프라인 상태(카메라/VLM/모델/GPU/디스크) 연결 — false-green 방지.
-    # 카메라 등록보다 **먼저** 띄워, 카메라 0대 같은 오설정에서도 /health로 원인을 진단할 수 있게 한다.
-    checker = HealthChecker()
-    checker.register("disk_space", check_disk_space)
-    checker.register("memory_usage", check_memory_usage)
-    checker.register("ollama", check_ollama_available)
-    # 카메라 stale 임계를 config 값으로 통일(카메라 add_camera와 동일 SSOT — 10s/30s 불일치 제거).
-    register_pipeline_health_checks(
-        checker, pipeline,
-        stale_sec=float(config.get("cameras", "stale_threshold_sec", default=30.0)),
-    )
-    # 기본 loopback — /health 운영상태 외부노출 방지. 컨테이너 내부 HEALTHCHECK(curl localhost)는
-    # 이걸로 충분하며, 외부 모니터링이 필요하면 KSI_CCTV_HEALTH_HOST=0.0.0.0로 명시 opt-in.
+    # 단일 서비스: /health* + 엔진 API(+제어)를 FastAPI/uvicorn 한 서버로 서빙(탐지+API 1프로세스).
+    # 실 파이프라인 상태를 헬스에 연결(false-green 방지) + compat /health*(기존 http.server 응답 호환).
+    # 카메라 등록보다 **먼저** 띄워, 카메라 0대 오설정에서도 /health로 진단 가능하게 한다.
+    def _checker_factory() -> HealthChecker:
+        checker = HealthChecker()
+        checker.register("disk_space", check_disk_space)
+        checker.register("memory_usage", check_memory_usage)
+        checker.register("ollama", check_ollama_available)
+        # 카메라 stale 임계를 config 값으로 통일(add_camera와 동일 SSOT).
+        register_pipeline_health_checks(
+            checker, pipeline,
+            stale_sec=float(config.get("cameras", "stale_threshold_sec", default=30.0)),
+        )
+        return checker
+
+    # 기본 loopback — 운영상태/제어 외부노출 방지. /api/*는 인증(키)으로 보호되며, 외부 모니터링/
+    # 프론트 연동이 필요하면 KSI_CCTV_HEALTH_HOST=0.0.0.0로 명시 opt-in.
     health_host = os.environ.get("KSI_CCTV_HEALTH_HOST", "127.0.0.1")
     health_port = int(os.environ.get("KSI_CCTV_HEALTH_PORT", "8081"))
+    api_server = None
     try:
-        start_health_server(host=health_host, port=health_port, checker=checker)
+        import uvicorn
+
+        from src.api.app import create_app
+        api_app = create_app(config=config, pipeline=pipeline, checker_factory=_checker_factory)
+        api_server = uvicorn.Server(
+            uvicorn.Config(api_app, host=health_host, port=health_port, log_level="warning")
+        )
+
+        def _serve_api() -> None:
+            try:
+                api_server.run()  # 비-메인 스레드라 uvicorn 시그널 핸들러는 자동 skip(데몬 SIGTERM 보존)
+            except Exception as exc:
+                logger.error("API 서버 기동 실패(탐지는 계속): %s", exc)
+
+        threading.Thread(target=_serve_api, daemon=True, name="ksi-api").start()
     except Exception as e:
-        logger.warning("헬스 서버 기동 실패(탐지는 계속): %s", e)
+        logger.warning("API 서버 초기화 실패(탐지는 계속): %s", e)
 
     n_cameras = _register_cameras(pipeline, config)
     if n_cameras == 0:
@@ -258,6 +276,8 @@ def main() -> int:
             _sd_notify("WATCHDOG=1")
     finally:
         _sd_notify("STOPPING=1")
+        if api_server is not None:
+            api_server.should_exit = True  # uvicorn graceful stop
         logger.info("파이프라인 중지 중...")
         pipeline.stop()
         logger.info("종료 완료.")

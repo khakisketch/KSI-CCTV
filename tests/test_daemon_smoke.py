@@ -48,6 +48,7 @@ class TestDaemonSmoke(unittest.TestCase):
         env["KSI_CCTV_HEALTH_HOST"] = "127.0.0.1"
         env["KSI_CCTV_LOG_LEVEL"] = "WARNING"
         env.setdefault("KSI_CCTV_DASHBOARD_PASSWORD", "test-smoke-pw")
+        env["KSI_CCTV_API_KEY"] = "smoke-api-key"  # 통합 API(/api/*) 검증용
 
         proc = subprocess.Popen(
             [sys.executable, "src/run.py"],
@@ -80,6 +81,17 @@ class TestDaemonSmoke(unittest.TestCase):
             except Exception:
                 health_ok = False
             self.assertTrue(health_ok, "/health 엔드포인트가 응답하지 않음")
+
+            # P1c-2: 통합 엔진 API가 데몬 안에서 라이브로 서빙되는지 — /api/control/status(인증).
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/control/status",
+                headers={"X-API-Key": "smoke-api-key"},
+            )
+            import json as _json
+            with urllib.request.urlopen(req, timeout=3) as r:
+                self.assertEqual(r.status, 200)
+                body = _json.loads(r.read().decode())
+            self.assertTrue(body.get("connected"), "데몬 내 파이프라인이 API에 연결되지 않음")
 
             # SIGTERM → graceful shutdown → exit 0(run.py os._exit(_code))
             proc.send_signal(signal.SIGTERM)
