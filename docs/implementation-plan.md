@@ -45,9 +45,10 @@
 - ✅ scaffold(Next 16·React 19·Tailwind 4·TS·App Router, `frontend/`) + shadcn init(11 컴포넌트) + next-themes
 - ✅ 디자인 시스템 베이스 + 레이아웃: ThemeProvider(다크 기본/라이트 토글), AppShell(데스크톱 사이드바 + 모바일 하단탭=경량 뷰어), 대시보드(메트릭 카드·이벤트 테이블 빈상태), 스텁 5라우트
 - ✅ `npm run build` 성공(6라우트, TS·eslint clean). node_modules gitignore.
-- ⬜ **남음(P4b): 엔진 API 연동** — Next 서버사이드 프록시(API 키 서버 보관, 브라우저 미노출) + 실 화면(이벤트 목록/필터·모델 프롬프트 추가·카메라·설정)
-- ⬜ 브라우저 렌더 스모크(스크린샷)
-- **검증(현재):** 빌드 성공·다크/라이트·반응형 구조. 실데이터·동선은 P4b.
+- ✅ **P4b 엔진 API 연동(읽기)**: `lib/engine.ts` 서버사이드 페치(API 키 서버 전용·브라우저 미노출, AbortSignal 타임아웃, 미연결 graceful) + 대시보드·이벤트·모델·카메라·설정을 force-dynamic Server Component로 실데이터 렌더 + EngineStatus 배지.
+- ✅ **브라우저 렌더 E2E 검증(스크린샷)**: 엔진(uvicorn) + Next 동시 기동 → SSR이 실데이터 렌더 확인. 데스크톱 다크/라이트·모바일(하단탭) 스크린샷 육안 검증 — 메트릭(카메라1·모델3 실값)·모델5카드(open_vocab 포함)·"엔진 연결됨".
+- ⬜ **남음(P4c): 쓰기/제어 UI** — 모델 프롬프트 추가·start/stop·설정 편집(엔진 API 쓰기 엔드포인트 P1b 의존) + **프론트 자체 인증(외부 노출 전 필수)**.
+- **검증 완료:** build·lint clean·SSR 실데이터 E2E·다크/라이트·반응형. 쓰기·영상·인증은 P4c/P5/P1b.
 
 ### P5. 라이브 영상 게이트웨이(MediaMTX/go2rtc) — docker, 부분 검증
 - ⬜ compose 서비스(RTSP→WebRTC/HLS) + 프론트 플레이어
@@ -67,4 +68,5 @@
 - (P1) 2026-06-16 엔진 API(FastAPI) 읽기 엔드포인트 + fail-closed 인증 + 시크릿 마스킹 + 테스트 12 + 실서빙 스모크. P1b(제어/SSE)는 데몬 통합 시.
 - (P2) 2026-06-16 크로스플랫폼 EP 선택(_select_providers, auto 기본) + 테스트 10. 실모델 auto 로드 회귀 없음.
 - (P3) 2026-06-16 open-vocab(YOLO-World) OpenVocabDetector + registry open_vocab 타입 + model_profiles 엔트리. "텍스트로 학습없이 탐지" 실추론 PASS. 테스트 7.
-- (P4) 2026-06-17 프론트 scaffold(Next16/React19/Tailwind4/shadcn) + 다크라이트 테마 + 반응형 셸(데스크톱 사이드바/모바일 하단탭) + 대시보드/스텁. npm build 성공. P4b=API 연동·실화면 남음.
+- (P4) 2026-06-17 프론트 scaffold(Next16/React19/Tailwind4/shadcn) + 다크라이트 테마 + 반응형 셸(데스크톱 사이드바/모바일 하단탭) + 대시보드/스텁. npm build 성공.
+- (P4b) 2026-06-17 엔진 API 연동(읽기) — lib/engine.ts 서버사이드(키 미노출) + 5화면 실데이터 Server Component. 엔진+Next E2E SSR 실데이터 렌더 + 다크/라이트/모바일 스크린샷 검증. P4c=쓰기·인증.
