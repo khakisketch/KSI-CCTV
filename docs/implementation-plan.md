@@ -69,7 +69,8 @@
 - ✅ **docs 동기화**: README 아키텍처에 엔진 API·Next.js 웹 콘솔·MediaMTX 게이트웨이 추가 + Streamlit "레거시(점진 이관)" 표기 + 웹 콘솔 Docker 기동법 + 구조(src/api·frontend) + 테스트수(462)·다음 단계(학습→패키징/이관) 갱신. project-definition 현재 상태에 제품화 진척 반영.
 - 🔄 **Streamlit 잔여 탭 웹 이관(단계 3)**:
   - ✅ **P7-2 모델 업로드 API**: `POST /api/models/upload`(멀티파트) — 기존 하드닝 `upload_validator.upload_model`(external-data 차단→load→shape→smoke를 단일 rlimit sandbox) 재사용, 인증 필수, 메모리 OOM 가드(read 상한), disabled 등록, 서버경로 미노출. **실 ONNX(yolo26) 업로드 E2E: 샌드박스 검증 통과→models/uploaded/<id> 격리저장→uploaded_<id> 등록(disabled)→/api/models 노출 확인**(config 백업/복원). 단위테스트 4(plumbing·인증·크기가드). **SCA**: python-multipart 신규 추가→pip-audit가 CVE-2026-53538/9/40 탐지→0.0.31+로 픽스(재감사 클린).
-  - ⬜ 모델 업로드 **웹 UI**(다음) · 갤러리(이벤트 캡처) · 감사 로그 뷰
+  - ✅ **P7-3 모델 업로드 웹 UI**: `ModelUpload` 폼(파일·이름·클래스·입력크기) + Next 멀티파트 프록시(`/api/models/upload` — 본문 스트리밍·키 서버부착·키 미노출) + 모델 페이지 통합. **브라우저 E2E: 실 ONNX(yolo26) UI 업로드→샌드박스 검증→성공 토스트→router.refresh로 uploaded_<id> 카드 등장(비활성)·콘솔오류 0** 스크린샷 확인. 모델 업로드 Streamlit→웹 이관 완료.
+  - ⬜ 갤러리(이벤트 캡처) · 감사 로그 뷰
 - ⬜ **Streamlit 폐기(단계 4)**: 잔여 탭이 모두 웹 콘솔에 도달하면 제거. 그 전까지 무중단 병존(strangler-fig).
 - **검증:** 467 passed·ruff clean·pip-audit(multipart 클린). [HW] 실 카메라 라이브는 타깃. (참고: torch CVE-2025-3000은 기존 의존성·cu130/DGX 제약으로 별도 트랙.)
 
@@ -99,3 +100,4 @@
 - (P7-1) 2026-06-17 정리·마이그레이션(문서) — project-definition §비목표 SSOT 갱신(실시간영상 승격·모바일=네이티브한정·학습 NON-GOAL) + README 동기화(엔진API·웹콘솔·게이트웨이·Streamlit 레거시표기·웹 Docker 기동법·구조·테스트수 462·다음단계). Streamlit 폐기는 잔여탭 패리티 후(병존 유지). pytest 462 passed.
 - (P1c-3) 2026-06-17 SSE 실시간 이벤트 — /api/events/stream(엔진 tail+push·즉시 flush·heartbeat) + 프론트 same-origin SSE 프록시(키 서버부착) + EventsLive(EventSource 실시간 prepend·"실시간 수신 중"). 브라우저 E2E: 로그 append→무새로고침 라이브 추가·마스킹·인디케이터 ON. 단위테스트 추가, 463 passed·ruff clean. 웹 콘솔=실시간 관제 UI 완성.
 - (P7-2) 2026-06-17 모델 업로드 API(Streamlit 이관 1/3) — POST /api/models/upload(멀티파트→하드닝 upload_validator 샌드박스 재사용·인증·OOM가드·disabled 등록·서버경로 미노출). 실 ONNX(yolo26) 업로드 E2E 통과(격리저장·등록·노출, config 백업복원). 단위테스트 4. python-multipart 추가→pip-audit CVE 3건 탐지→0.0.31+ 픽스. 467 passed. 웹 업로드 UI는 다음.
+- (P7-3) 2026-06-17 모델 업로드 웹 UI — ModelUpload 폼 + Next 멀티파트 프록시(스트리밍·키 부착·미노출) + 모델 페이지 통합. 브라우저 E2E: 실 ONNX UI 업로드→샌드박스 검증→성공 토스트→uploaded_<id> 카드 등장(비활성)·콘솔오류 0. 모델 업로드 Streamlit→웹 이관 완료. (다음: 갤러리·감사 로그)

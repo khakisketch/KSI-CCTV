@@ -1,4 +1,5 @@
 import { EngineStatus } from "@/components/engine-status";
+import { ModelUpload } from "@/components/model-upload";
 import { PromptManager } from "@/components/prompt-manager";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,8 +20,19 @@ export default async function ModelsPage() {
       </div>
       <p className="text-sm text-muted-foreground" style={{ wordBreak: "keep-all" }}>
         등록된 탐지 모델 목록입니다. <code>open_vocab</code> 모델은 학습 없이 텍스트 프롬프트로
-        객체를 탐지합니다(프롬프트 추가 UI는 다음 단계).
+        객체를 탐지하며, 사용자 ONNX 모델을 업로드해 추가할 수 있습니다.
       </p>
+
+      {connected && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">모델 업로드</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ModelUpload />
+          </CardContent>
+        </Card>
+      )}
 
       {models.length === 0 ? (
         <Card>
