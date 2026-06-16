@@ -7,7 +7,7 @@
     "fps": 30,
     "resolution": [1920, 1080],
     "enabled": true,
-    "detection_type": "construction"
+    "detection_type": "general"
   },
   {
     "id": "cam_002",
