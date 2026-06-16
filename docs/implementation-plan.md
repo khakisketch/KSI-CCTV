@@ -75,7 +75,8 @@
 ### P1c. 데몬+API 통합(단일 서비스) — ✅ 완료(검증)
 - ✅ **P1c-1 API 추가분**: 제어(/api/control/{status,start,stop}) + compat 헬스(/health·/health/live·/health/ready·/healthz). 테스트 9.
 - ✅ **P1c-2 run.py 와이어링**: http.server → **uvicorn(create_app(config,pipeline,checker_factory))** 데몬스레드 서빙(포트 8081 유지, compat /health* 호환, uvicorn 시그널핸들러 비-메인스레드 skip로 데몬 SIGTERM 보존, graceful should_exit). **탐지+API+제어 1프로세스 달성**.
-- **검증 완료:** 데몬 smoke(opt-in) — 기동→/health/live 200·/health 응답·**/api/control/status connected=True(라이브 파이프라인 API 연결)**·SIGTERM exit 0. 462 passed·ruff·mypy clean. ⬜ SSE(/api/events/stream 실시간 push)는 후속(소규모).
+- **검증 완료:** 데몬 smoke(opt-in) — 기동→/health/live 200·/health 응답·**/api/control/status connected=True(라이브 파이프라인 API 연결)**·SIGTERM exit 0. 462 passed·ruff·mypy clean.
+- ✅ **P1c-3 SSE 실시간 이벤트**: `/api/events/stream`(엔진, alerts.log tail→신규 이벤트 push, list_events와 동일 파싱·마스킹 재사용, 연결 즉시 flush + heartbeat) + 프론트 same-origin SSE 프록시(`/api/events/stream` — EventSource는 헤더 못 보내므로 서버가 키 부착) + `EventsLive`(SSR 초기목록 + EventSource로 실시간 prepend, "실시간 수신 중" 표시). **브라우저 E2E: 로그 append→새로고침 없이 이벤트 행 라이브 추가·유형/등급 정확·RTSP 마스킹·라이브 인디케이터 ON 확인**. SSE 단위테스트 추가(463 passed).
 
 ## 진행 로그(커밋)
 - (P0) 2026-06-16 cleanup: OUTSIDE_SECRET.bin·임시 스크린샷 스크립트 제거, 본 계획 문서 작성
@@ -93,3 +94,4 @@
 - (P5a) 2026-06-17 영상 게이트웨이 — MediaMTX 1.19.1 compose 서비스(--profile video/web) + config/mediamtx.yml(RTSP→HLS/WebRTC). ffmpeg 합성 RTSP(sample.mp4)→HLS 체인을 실HLS클라이언트로 30프레임 디코드 검증(카메라 불요). compose 마운트·4포트 확인. 남음=P5b 프론트 hls.js 플레이어 + /api/cameras/{id}/stream.
 - (P5b) 2026-06-17 프론트 라이브 플레이어 + same-origin HLS 프록시 — /api/cameras/{id}/stream(프록시 URL) + /hls/[...seg] 프록시(MediaMTX cookieCheck Secure쿠키 핸드셰이크를 서버처리→평문HTTP/교차출처 우회 + 게이트웨이주소·RTSP크리덴셜 미노출) + 카메라페이지 hls.js 플레이어(on-demand 토글). Firefox 종단 재생 검증(readyState4·currentTime진행·640x480·데스크톱+모바일 실프레임). hls.js 추가(audit high+ 0). P5 완료.
 - (P7-1) 2026-06-17 정리·마이그레이션(문서) — project-definition §비목표 SSOT 갱신(실시간영상 승격·모바일=네이티브한정·학습 NON-GOAL) + README 동기화(엔진API·웹콘솔·게이트웨이·Streamlit 레거시표기·웹 Docker 기동법·구조·테스트수 462·다음단계). Streamlit 폐기는 잔여탭 패리티 후(병존 유지). pytest 462 passed.
+- (P1c-3) 2026-06-17 SSE 실시간 이벤트 — /api/events/stream(엔진 tail+push·즉시 flush·heartbeat) + 프론트 same-origin SSE 프록시(키 서버부착) + EventsLive(EventSource 실시간 prepend·"실시간 수신 중"). 브라우저 E2E: 로그 append→무새로고침 라이브 추가·마스킹·인디케이터 ON. 단위테스트 추가, 463 passed·ruff clean. 웹 콘솔=실시간 관제 UI 완성.

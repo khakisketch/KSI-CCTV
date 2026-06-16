@@ -5,7 +5,10 @@
 """
 from __future__ import annotations
 
+import asyncio
 import collections
+import json
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +81,61 @@ def _mask_event(ev: dict[str, Any]) -> dict[str, Any]:
     if isinstance(evs, list):
         masked["vlm_detected_events"] = [mask_text(e) if isinstance(e, str) else e for e in evs]
     return masked
+
+
+async def stream_events(
+    is_disconnected: Callable[[], Awaitable[bool]],
+    alerts_log: Path | None = None,
+    poll_interval: float = 1.0,
+    heartbeat_every: int = 15,
+) -> AsyncIterator[str]:
+    """alerts.log의 신규 이벤트를 SSE 프레임 문자열로 yield(파일 끝부터 tail).
+
+    초기 목록은 list_events로 SSR되므로 여기서는 파일 끝 이후의 신규 라인만 push한다.
+    파일 트렁케이트/로테이션 시 위치를 재설정하고, heartbeat 주석으로 연결을 유지한다.
+    list_events와 동일한 파싱·마스킹(_mask_event)을 재사용한다.
+    """
+    path = alerts_log or _ALERTS_LOG
+    pos = path.stat().st_size if path.exists() else 0
+    pending = ""
+    beats = 0
+    # 연결 즉시 첫 바이트를 흘려보내 헤더 flush + 클라 onopen을 빠르게 트리거(첫 이벤트/heartbeat
+    # 까지 기다리지 않게 — "실시간 수신 중" 표시가 즉시 뜬다).
+    yield ": connected\n\n"
+    while True:
+        if await is_disconnected():
+            return
+        try:
+            if path.exists():
+                size = path.stat().st_size
+                if size < pos:  # 로테이션/트렁케이트 → 처음부터 재구독
+                    pos, pending = 0, ""
+                if size > pos:
+                    with open(path, encoding="utf-8") as f:
+                        f.seek(pos)
+                        data = f.read()
+                        pos = f.tell()
+                    pending += data
+                    parts = pending.split("\n")
+                    pending = parts.pop()  # 마지막 조각은 미완성 라인일 수 있음
+                    for raw in parts:
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        try:
+                            ev = parse_alert_log_line(line)
+                        except Exception:
+                            continue
+                        if ev is None:
+                            continue
+                        payload = json.dumps(_mask_event(ev), ensure_ascii=False)
+                        yield f"event: alert\ndata: {payload}\n\n"
+        except Exception:
+            pass
+        beats += 1
+        if beats % max(1, heartbeat_every) == 0:
+            yield ": keepalive\n\n"
+        await asyncio.sleep(poll_interval)
 
 
 def list_cameras(config: Any) -> list[dict[str, Any]]:

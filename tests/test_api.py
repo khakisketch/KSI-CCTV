@@ -302,5 +302,55 @@ class TestApiCompatHealth(unittest.TestCase):
         self.assertIn("status", r.json())
 
 
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestEventStreamSSE(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_pushes_new_event_only(self):
+        """stream_events는 파일 끝 이후의 신규 라인만 SSE 프레임으로 push한다(초기 라인 skip)."""
+        import asyncio
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "alerts.log"
+            # 초기 라인(이건 push되면 안 됨 — tail은 끝부터)
+            log.write_text(
+                '2026-06-17 10:00:00 | INFO | EVENT | {"event_type":"old","camera_id":"a"}\n',
+                encoding="utf-8",
+            )
+
+            async def never_disconnected() -> bool:
+                return False
+
+            gen = service.stream_events(
+                never_disconnected, alerts_log=log, poll_interval=0.02, heartbeat_every=10_000
+            )
+
+            async def appender() -> None:
+                await asyncio.sleep(0.1)  # 제너레이터가 pos를 끝으로 잡은 뒤 추가
+                with open(log, "a", encoding="utf-8") as f:
+                    f.write(
+                        '2026-06-17 10:00:05 | INFO | EVENT | '
+                        '{"event_type":"fire","camera_id":"b",'
+                        '"description":"rtsp://admin:secret123@10.0.0.5/s"}\n'
+                    )
+
+            task = asyncio.create_task(appender())
+            frame = None
+            try:
+                # 첫 프레임은 ": connected" heartbeat — alert 프레임이 나올 때까지 읽는다.
+                for _ in range(6):
+                    f = await asyncio.wait_for(gen.__anext__(), timeout=5)
+                    if f.startswith("event: alert"):
+                        frame = f
+                        break
+            finally:
+                await task
+                await gen.aclose()
+
+        self.assertIsNotNone(frame, "신규 이벤트의 alert 프레임이 push되지 않음")
+        assert frame is not None
+        self.assertIn('"event_type": "fire"', frame)  # 신규 이벤트만
+        self.assertNotIn("old", frame)                # 초기 라인은 skip
+        self.assertNotIn("secret123", frame)          # 마스킹 유지
+
+
 if __name__ == "__main__":
     unittest.main()

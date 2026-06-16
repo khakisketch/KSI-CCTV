@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.api import service
@@ -131,6 +131,19 @@ def create_app(
     ) -> dict[str, Any]:
         items = service.list_events(limit=limit, event_type=event_type, camera_id=camera_id)
         return {"count": len(items), "events": items}
+
+    # ── 이벤트 실시간 스트림(SSE) — alerts.log 신규 이벤트 push ───────────────
+    @app.get("/api/events/stream", tags=["events"], dependencies=auth)
+    async def events_stream(request: Request) -> StreamingResponse:
+        return StreamingResponse(
+            service.stream_events(request.is_disconnected),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # nginx 등 역프록시 버퍼링 비활성(즉시 전달)
+            },
+        )
 
     # ── 카메라 ───────────────────────────────────────────────────────────
     @app.get("/api/cameras", tags=["cameras"], dependencies=auth)
