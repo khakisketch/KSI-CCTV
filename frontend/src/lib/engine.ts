@@ -24,6 +24,36 @@ export async function engineGet<T>(path: string): Promise<T | null> {
   }
 }
 
+export interface EngineWriteResult<T> {
+  ok: boolean;
+  status: number;
+  data: T | null;
+}
+
+/** 엔진 쓰기(POST/PUT) — route handler에서만 호출(API 키 서버 전용). 엔진의 4xx detail을 그대로 전달. */
+export async function engineWrite<T>(
+  path: string,
+  body: unknown,
+  method: "POST" | "PUT" = "POST",
+): Promise<EngineWriteResult<T>> {
+  try {
+    const res = await fetch(`${ENGINE_URL}${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+    });
+    const data = (await res.json().catch(() => null)) as T | null;
+    return { ok: res.ok, status: res.status, data };
+  } catch {
+    return { ok: false, status: 0, data: null };
+  }
+}
+
 // ── API 응답 타입(엔진 src/api 스키마와 일치) ───────────────────────────
 export interface EventItem {
   event_id?: string;

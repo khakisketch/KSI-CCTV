@@ -1,4 +1,5 @@
 import { EngineStatus } from "@/components/engine-status";
+import { PromptManager } from "@/components/prompt-manager";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getModels } from "@/lib/engine";
@@ -49,6 +50,16 @@ export default async function ModelsPage() {
                   >
                     {m.description}
                   </p>
+                )}
+                {m.type === "open_vocab" && (
+                  <div className="border-t pt-3">
+                    <p className="mb-2 text-xs font-medium">탐지 프롬프트 (학습 불필요)</p>
+                    <PromptManager
+                      name={m.name}
+                      current={m.classes ?? []}
+                      enabled={m.enabled}
+                    />
+                  </div>
                 )}
               </CardContent>
             </Card>
