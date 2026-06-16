@@ -106,6 +106,9 @@ services:
       KSI_CCTV_WEB_PASSWORD: ${KSI_CCTV_WEB_PASSWORD:-}
       # 세션 서명 시크릿(미설정 시 WEB_PASSWORD에서 파생 — 별도 강력한 값 권장).
       KSI_CCTV_WEB_SECRET: ${KSI_CCTV_WEB_SECRET:-}
+      # 영상 게이트웨이 주소(프론트 서버→게이트웨이, compose 네트워크 내부 서비스명). HLS는
+      # same-origin 프록시를 거치므로 게이트웨이는 브라우저에 노출되지 않는다(8888 호스트 매핑 불요).
+      KSI_CCTV_GATEWAY_URL: ${KSI_CCTV_GATEWAY_URL:-http://ksi-cctv-gateway:8888}
     ports:
       - "3000:3000"
     restart: unless-stopped
