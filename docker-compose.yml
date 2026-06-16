@@ -20,6 +20,13 @@ x-common: &common
     CCTV_CAM_002_URL: ${CCTV_CAM_002_URL:-}
     CCTV_CAM_003_URL: ${CCTV_CAM_003_URL:-}
   restart: unless-stopped
+  # 24/7 무인 운영 시 컨테이너 stdout(PYTHONUNBUFFERED=1로 INFO 전량)이 기본 json-file 드라이버에
+  # 무한 축적되어 디스크를 채운다 → 로그 로테이션으로 상한(앱 내부 alerts.log는 RotatingFileHandler 별도).
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
   networks:
     - cctv-network
 

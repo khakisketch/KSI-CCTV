@@ -41,6 +41,27 @@ logger = logging.getLogger("ksi_cctv.run")
 _shutdown = threading.Event()
 
 
+def _sd_notify(state: str) -> None:
+    """systemd sd_notify 전송 — NOTIFY_SOCKET 미설정(비-systemd: 테스트/Docker/수동실행)이면 no-op.
+
+    READY=1(기동완료), WATCHDOG=1(생존 ping), STOPPING=1(정상종료)을 systemd에 알린다.
+    실패해도 데몬 동작에 영향 없도록 조용히 무시한다(watchdog ping 실패 1회는 다음 ping이 복구).
+    """
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return
+    try:
+        import socket
+
+        # 추상 네임스페이스 소켓(@)은 첫 바이트가 NUL
+        sock_addr = "\0" + addr[1:] if addr.startswith("@") else addr
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(sock_addr)
+            sock.sendall(state.encode())
+    except Exception as e:  # pragma: no cover - 환경 의존
+        logger.debug("sd_notify(%s) 실패(무시): %s", state, e)
+
+
 def _camera_policy_profile(
     camera: dict[str, Any], profiles_config: dict[str, Any]
 ) -> dict[str, Any]:
@@ -215,12 +236,18 @@ def main() -> int:
     pipeline.start()
     logger.info("탐지 파이프라인 가동 중 (health: http://%s:%d/health). SIGTERM까지 실행.",
                 health_host, health_port)
+    _sd_notify("READY=1")  # systemd에 기동완료 통지(비-systemd면 no-op)
 
     # 종료 신호까지 블록(데몬). _shutdown.wait()는 SIGTERM 핸들러가 set하면 깨어난다.
+    # systemd WatchdogSec가 설정되면 WATCHDOG_USEC의 절반 주기로 깨어나 WATCHDOG=1을 ping한다
+    # (hang 시 ping 중단 → systemd가 재시작). 비-systemd면 1시간마다 깨어나며 ping은 no-op.
+    wd_usec = os.environ.get("WATCHDOG_USEC")
+    wait_interval = (int(wd_usec) / 1_000_000 / 2) if (wd_usec and wd_usec.isdigit()) else 3600.0
     try:
-        while not _shutdown.wait(timeout=3600):
-            pass
+        while not _shutdown.wait(timeout=wait_interval):
+            _sd_notify("WATCHDOG=1")
     finally:
+        _sd_notify("STOPPING=1")
         logger.info("파이프라인 중지 중...")
         pipeline.stop()
         logger.info("종료 완료.")

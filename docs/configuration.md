@@ -45,7 +45,7 @@
 | `config/event_policies.yaml` | 이벤트별 trigger/rule/VLM/alert 정책 |
 | `config/camera_profiles.yaml` | 카메라별 도메인·활성 이벤트·zone 설정 |
 | `config/alert_preferences.yaml` | 이메일 알람 임계값·이벤트별 on/off |
-| `config/prompts/*.yaml` | VLM 도메인 프롬프트 (construction/school/factory/warehouse/parking) |
+| `config/prompts/*.yaml` | VLM 도메인 프롬프트 (general/construction/school/factory/warehouse/parking) |
 
 ---
 
@@ -203,14 +203,19 @@ fire:
 
 ```yaml
 cam_001:
-  domain: construction        # construction | school | factory | warehouse | parking
-  enabled_events:
+  domain: general             # general(기본) | construction | school | factory | parking
+  enabled_events:             # 범용 기본: 사람·쓰러짐·화재·연기·혼잡
+    - person_detected
+    - fall
     - fire
-    - no_helmet
+    - smoke
     - crowding
-  detection_type: construction
-  zones: []                   # zone_intrusion 구역 좌표 목록
+  detection_type: general     # cameras.json과 일치시킬 것(VLM 프롬프트 선택에 사용)
+  zones: {}                   # zone_intrusion 구역 좌표(restricted_area 활성 시 설정)
 ```
+
+> 기본 도메인은 **`general`**(범용 CCTV) — 어느 현장에나 바로 동작하며 건설 특화 PPE는 제외한다.
+> 현장 특화가 필요하면 `domain`을 construction/factory/parking/school로 바꾼다(모두 `config/event_policies.yaml`에 정의됨).
 
 ---
 

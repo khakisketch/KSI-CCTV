@@ -80,7 +80,7 @@ bash scripts/run_dashboard.sh
 - `src/utils/`: 헬스체크, 시스템 메트릭, 설정 로더
 - `config/`: YAML 설정 파일, 도메인별 VLM 프롬프트
 - `scripts/`: 설치, 헬스체크, E2E 테스트, 프로파일링, 모델 다운로드/학습
-- `tests/`: 유닛/통합 테스트 (333 passed, 1 skipped)
+- `tests/`: 유닛/통합 테스트 (413 passed, 1 skipped)
 
 ## 개발 환경
 
@@ -91,7 +91,7 @@ bash scripts/run_dashboard.sh
 
 ## 현재 상태 (Phase 10 M1, 2026-06-14)
 
-- 단위 테스트: **333 passed, 1 skipped** (`./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q`)
+- 단위 테스트: **413 passed, 1 skipped** (`./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q`)
 - E2E 스모크: `ok: true`, `failed_models: {}`
 - 대시보드: policy-mode (MultiModelRegistry + EventPolicyEngine) 기본 실행
 - 활성 모델: `general_yolo`, `ppe_yolo`, `fire_smoke_yolo`

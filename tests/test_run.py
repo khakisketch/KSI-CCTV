@@ -60,6 +60,34 @@ class TestRunnerModule(unittest.TestCase):
         self.assertTrue(callable(ksi_run._register_cameras))
 
 
+class TestSdNotify(unittest.TestCase):
+    """systemd sd_notify(watchdog) — NOTIFY_SOCKET 유무에 따른 동작."""
+
+    def test_noop_without_notify_socket(self):
+        """NOTIFY_SOCKET 미설정(비-systemd)이면 예외 없이 no-op."""
+        import os
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("NOTIFY_SOCKET", None)
+            ksi_run._sd_notify("READY=1")  # 예외 없으면 성공
+
+    def test_sends_datagram_when_socket_set(self):
+        """NOTIFY_SOCKET이 설정되면 해당 유닉스 DGRAM 소켓으로 상태를 전송한다."""
+        import os
+        import socket
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "notify.sock")
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            srv.bind(path)
+            srv.settimeout(2)
+            try:
+                with patch.dict(os.environ, {"NOTIFY_SOCKET": path}):
+                    ksi_run._sd_notify("WATCHDOG=1")
+                self.assertEqual(srv.recv(64), b"WATCHDOG=1")
+            finally:
+                srv.close()
+
+
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requirements.txt 의존성 설치 후 실행 가능")
 class TestBuildPipeline(unittest.TestCase):
     """build_pipeline 조립 로직 — mock registry/engine으로 행사(실 모델 불필요)."""

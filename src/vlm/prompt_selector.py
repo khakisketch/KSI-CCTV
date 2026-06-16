@@ -55,7 +55,7 @@ class PromptSelector:
             _UNMAPPED_DOMAINS.add(detection_type)
             logger.warning(
                 f"[PromptSelector] 도메인 '{detection_type}'에 전용 프롬프트가 없습니다. "
-                f"기본 프롬프트(construction)를 사용합니다. "
+                f"기본 프롬프트({PROMPT_MAP['default']})를 사용합니다. "
                 f"전용 프롬프트가 필요하면 config/prompts/{detection_type}.yaml을 추가하고 "
                 f"PROMPT_MAP에 항목을 등록하세요."
             )

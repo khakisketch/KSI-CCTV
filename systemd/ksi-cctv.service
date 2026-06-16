@@ -2,6 +2,10 @@
 Description=KSI-CCTV headless detection daemon
 After=network-online.target
 Wants=network-online.target
+# Crash-loop 방어 — 300초 내 5회 초과 재시작하면 더 시도하지 않고 failed로 멈춘다
+# (조용한 무한 재시작 대신 운영자가 인지·진단하도록).
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -24,6 +28,13 @@ ExecStart=/opt/ksi-cctv/.venv/bin/python /opt/ksi-cctv/src/run.py
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
+# Hang 방어 — 캡처 스레드 정지 등으로 데몬이 살아있으나 멈추면(프로세스는 생존) systemd가
+# 감지 못한다. run.py가 sd_notify WATCHDOG=1을 주기 ping하며, 120초간 ping이 없으면 재시작.
+# (run.py는 WATCHDOG_USEC를 읽어 그 절반 주기로 ping; NOTIFY_SOCKET 없으면 자동 no-op.)
+WatchdogSec=120s
+# 메모리 상한(MemoryMax/MemoryHigh)은 의도적으로 미설정 — DGX Spark 통합메모리에서 CUDA
+# 할당이 cgroup 메모리에 어떻게 계상되는지 미검증이라, untested 하드캡은 정상 GPU 프로세스를
+# OOM-kill해 오히려 crash-loop를 유발할 수 있다. docs/phase-cd-readiness.md C3에서 실측 후 설정.
 
 # Minimal hardening while preserving required runtime write paths.
 NoNewPrivileges=true
