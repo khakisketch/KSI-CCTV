@@ -89,3 +89,18 @@ export const getCameras = () => engineGet<{ count: number; cameras: CameraItem[]
 export const getConfig = () => engineGet<Record<string, unknown>>("/api/config");
 export const getPolicies = () =>
   engineGet<{ profiles: Record<string, unknown[]> }>("/api/policies");
+
+export interface CaptureImage {
+  name: string;
+  encrypted: boolean;
+}
+export interface CaptureCamera {
+  camera_id: string;
+  count: number;
+  images: CaptureImage[];
+}
+export interface CaptureDate {
+  date: string;
+  cameras: CaptureCamera[];
+}
+export const getCaptures = () => engineGet<{ dates: CaptureDate[] }>("/api/captures");

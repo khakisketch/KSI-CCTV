@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Boxes, Camera, LayoutDashboard, Settings, ShieldCheck } from "lucide-react";
+import { Bell, Boxes, Camera, Images, LayoutDashboard, Settings, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -12,6 +12,7 @@ const NAV = [
   { href: "/", label: "대시보드", icon: LayoutDashboard },
   { href: "/events", label: "이벤트", icon: Bell },
   { href: "/cameras", label: "카메라", icon: Camera },
+  { href: "/gallery", label: "갤러리", icon: Images },
   { href: "/models", label: "모델·프롬프트", icon: Boxes },
   { href: "/settings", label: "설정", icon: Settings },
 ];
