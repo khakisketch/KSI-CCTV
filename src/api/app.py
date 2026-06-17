@@ -211,6 +211,18 @@ def create_app(
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
 
+    # ── 쓰기: 업로드 모델 삭제(기본 모델은 보호) ─────────────────────────
+    @app.delete("/api/models/{name}", tags=["models"], dependencies=auth)
+    def delete_model(name: str) -> dict[str, Any]:
+        try:
+            result = service.delete_uploaded_model(name)
+            service.write_audit("model_deleted", model=name)
+            return result
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     # ── 쓰기: 사용자 ONNX 모델 업로드(검증 샌드박스 후 disabled 등록) ──────────
     @app.post("/api/models/upload", tags=["models"], dependencies=auth)
     async def upload_model(

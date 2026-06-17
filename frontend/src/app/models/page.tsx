@@ -1,4 +1,5 @@
 import { EngineStatus } from "@/components/engine-status";
+import { ModelActions } from "@/components/model-actions";
 import { ModelUpload } from "@/components/model-upload";
 import { PromptManager } from "@/components/prompt-manager";
 import { Badge } from "@/components/ui/badge";
@@ -63,7 +64,7 @@ export default async function ModelsPage() {
                     {m.description}
                   </p>
                 )}
-                {m.type === "open_vocab" && (
+                {m.type === "open_vocab" ? (
                   <div className="border-t pt-3">
                     <p className="mb-2 text-xs font-medium">탐지 프롬프트 (학습 불필요)</p>
                     <PromptManager
@@ -72,6 +73,12 @@ export default async function ModelsPage() {
                       enabled={m.enabled}
                     />
                   </div>
+                ) : (
+                  <ModelActions
+                    name={m.name}
+                    enabled={m.enabled}
+                    deletable={m.source === "uploaded"}
+                  />
                 )}
               </CardContent>
             </Card>

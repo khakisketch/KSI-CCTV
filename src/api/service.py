@@ -10,6 +10,7 @@ import collections
 import json
 import os
 import re
+import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -280,6 +281,41 @@ def set_model_enabled(
     models[model_name]["enabled"] = bool(enabled)
     _write_yaml(path, cfg)
     return {"name": model_name, "enabled": bool(enabled)}
+
+
+def delete_uploaded_model(
+    name: str,
+    profiles_path: Path | None = None,
+    upload_base_dir: Path | None = None,
+) -> dict[str, Any]:
+    """업로드한 모델을 삭제(model_profiles에서 제거 + 격리 디렉토리 정리). 기본 모델은 보호.
+
+    안전: source=='uploaded'만 허용(빌트인/사전학습 보호) + 디렉토리 정리는 models/uploaded 하위로 한정.
+    """
+    path = profiles_path or _MODEL_PROFILES
+    cfg = _load_yaml(path)
+    models = cfg.get("models")
+    if not isinstance(models, dict) or name not in models:
+        raise KeyError(f"모델을 찾을 수 없습니다: {name}")
+    prof = models[name] if isinstance(models[name], dict) else {}
+    if prof.get("source") != "uploaded":
+        raise ValueError("업로드한 모델만 삭제할 수 있습니다(기본 모델은 보호됩니다).")
+
+    base = upload_base_dir or (_ROOT / "models" / "uploaded")
+    removed_dir = False
+    model_path = prof.get("model_path", "")
+    if model_path:
+        target = Path(model_path).resolve().parent  # models/uploaded/<id>
+        try:
+            if str(target).startswith(str(Path(base).resolve()) + os.sep) and target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+                removed_dir = True
+        except Exception:
+            pass
+
+    del models[name]
+    _write_yaml(path, cfg)
+    return {"name": name, "deleted": True, "removed_dir": removed_dir}
 
 
 def handle_model_upload(

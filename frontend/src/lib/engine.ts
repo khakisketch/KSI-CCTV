@@ -34,7 +34,7 @@ export interface EngineWriteResult<T> {
 export async function engineWrite<T>(
   path: string,
   body: unknown,
-  method: "POST" | "PUT" = "POST",
+  method: "POST" | "PUT" | "DELETE" = "POST",
 ): Promise<EngineWriteResult<T>> {
   try {
     const res = await fetch(`${ENGINE_URL}${path}`, {
@@ -43,7 +43,7 @@ export async function engineWrite<T>(
         "Content-Type": "application/json",
         ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
       },
-      body: JSON.stringify(body),
+      body: method === "DELETE" ? undefined : JSON.stringify(body),
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
     });

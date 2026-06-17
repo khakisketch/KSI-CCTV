@@ -515,6 +515,67 @@ class TestCaptures(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestModelDelete(unittest.TestCase):
+    """업로드 모델 삭제 — uploaded만 허용(빌트인 보호)·디렉토리 정리·엔드포인트."""
+
+    def _profiles(self, tmp):
+        import yaml
+        p = Path(tmp) / "model_profiles.yaml"
+        mid = "abc123"
+        updir = Path(tmp) / "uploaded" / mid
+        updir.mkdir(parents=True)
+        (updir / "model.onnx").write_bytes(b"x")
+        cfg = {"models": {
+            "uploaded_abc123": {"source": "uploaded", "type": "yolo_onnx",
+                                "model_path": str(updir / "model.onnx"), "enabled": False},
+            "general_yolo": {"source": "built_in", "type": "yolo_onnx", "enabled": True},
+        }}
+        p.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+        return p, Path(tmp) / "uploaded", updir
+
+    def test_delete_uploaded_removes_profile_and_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p, base, updir = self._profiles(tmp)
+            res = service.delete_uploaded_model("uploaded_abc123", profiles_path=p, upload_base_dir=base)
+            self.assertTrue(res["deleted"])
+            self.assertTrue(res["removed_dir"])
+            self.assertFalse(updir.exists())
+            import yaml
+            left = yaml.safe_load(p.read_text())["models"]
+            self.assertNotIn("uploaded_abc123", left)
+            self.assertIn("general_yolo", left)  # 빌트인 보존
+
+    def test_delete_builtin_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p, base, _ = self._profiles(tmp)
+            with self.assertRaises(ValueError):
+                service.delete_uploaded_model("general_yolo", profiles_path=p, upload_base_dir=base)
+
+    def test_delete_missing_raises_keyerror(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p, base, _ = self._profiles(tmp)
+            with self.assertRaises(KeyError):
+                service.delete_uploaded_model("nope", profiles_path=p, upload_base_dir=base)
+
+    def test_delete_endpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p, base, _ = self._profiles(tmp)
+            client = TestClient(create_app())
+            with patch.object(service, "_MODEL_PROFILES", p), \
+                    patch.object(service, "_ROOT", Path(tmp)), \
+                    patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+                # uploaded 삭제 → 200
+                r = client.request("DELETE", "/api/models/uploaded_abc123", headers={"X-API-Key": _KEY})
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertTrue(r.json()["deleted"])
+                # 빌트인 삭제 → 400
+                r2 = client.request("DELETE", "/api/models/general_yolo", headers={"X-API-Key": _KEY})
+                self.assertEqual(r2.status_code, 400)
+                # 미인증 → 401
+                self.assertEqual(client.request("DELETE", "/api/models/x").status_code, 401)
+
+
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
 class TestAudit(unittest.TestCase):
     """감사 로그 — write/list 라운드트립·마스킹·엔드포인트·쓰기엔드포인트 자동 기록."""
 
