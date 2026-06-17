@@ -35,7 +35,7 @@ bash scripts/install.sh
 
 # 환경변수 설정
 cp .env.example .env
-# .env에서 KSI_CCTV_DASHBOARD_PASSWORD, CCTV_CAM_001_URL 수정
+# .env에서 KSI_CCTV_API_KEY, KSI_CCTV_WEB_PASSWORD, CCTV_CAM_001_URL 수정
 # config/cameras.json에서 사용할 채널의 enabled를 true로 변경
 
 # 사전학습 안전 모델 다운로드 (선택 — 인터넷 필요)
@@ -47,6 +47,18 @@ cp .env.example .env
 # 탐지 데몬 실행 (파이프라인 + 엔진 API/헬스 :8081)
 ./.venv/bin/python src/run.py
 ```
+
+### 웹 콘솔 직접 확인 (UI/UX 둘러보기)
+
+로컬에서 전체 웹 콘솔(엔진 API + 영상 게이트웨이 + Next.js UI)을 한 번에 띄운다:
+
+```bash
+bash scripts/run_web.sh                  # http://localhost:3000 (로그인 비번 콘솔 출력)
+KSI_CCTV_DEMO=1 bash scripts/run_web.sh  # 데모 이벤트/캡처 시드 후 기동(화면 채워서 확인)
+```
+
+원격은 Tailscale 등으로 `http://<tailnet-IP>:3000` 접속(웹은 0.0.0.0 바인드). 종료는 `Ctrl+C`.
+운영 배포는 `docker compose --profile web up --build` (엔진+게이트웨이+웹 컨테이너).
 
 ### 웹 콘솔(Next.js) + 영상 게이트웨이 — Docker
 
