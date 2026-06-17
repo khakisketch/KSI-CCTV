@@ -639,6 +639,37 @@ class TestCameraProfiles(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestCameraTelemetry(unittest.TestCase):
+    """카메라 라이브 텔레메트리 — 데몬 파이프라인 mount 시 카메라별 상태 노출."""
+
+    class _FakePipe:
+        def get_status(self):
+            return {
+                "cameras": {
+                    "cam_001": {"connected": True, "fps": 25.0, "dropped_frames": 3, "is_stale": False},
+                }
+            }
+
+    def test_with_pipeline(self):
+        client = TestClient(create_app(pipeline=self._FakePipe()))
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = client.get("/api/cameras/telemetry", headers={"X-API-Key": _KEY})
+            self.assertEqual(r.status_code, 200)
+            body = r.json()
+            self.assertTrue(body["connected"])
+            self.assertEqual(body["cameras"]["cam_001"]["fps"], 25.0)
+            self.assertFalse(body["cameras"]["cam_001"]["is_stale"])
+            self.assertEqual(client.get("/api/cameras/telemetry").status_code, 401)  # 미인증
+
+    def test_without_pipeline(self):
+        client = TestClient(create_app())  # standalone(파이프라인 없음)
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            body = client.get("/api/cameras/telemetry", headers={"X-API-Key": _KEY}).json()
+            self.assertFalse(body["connected"])
+            self.assertEqual(body["cameras"], {})
+
+
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
 class TestYamlCommentPreservation(unittest.TestCase):
     """설정 쓰기 시 yaml 주석 보존(ruamel round-trip) — 기존 safe_dump 주석 소실 한계 해소."""
 

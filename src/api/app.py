@@ -167,6 +167,19 @@ def create_app(
         items = service.list_cameras(app.state.config)
         return {"count": len(items), "cameras": items}
 
+    # ── 카메라 라이브 텔레메트리(연결/FPS/드롭/지연 — 데몬 파이프라인 mount 시) ──
+    @app.get("/api/cameras/telemetry", tags=["cameras"], dependencies=auth)
+    def camera_telemetry() -> dict[str, Any]:
+        pl = app.state.pipeline
+        if pl is None or not hasattr(pl, "get_status"):
+            return {"connected": False, "cameras": {}}
+        try:
+            status = pl.get_status() or {}
+            cams = status.get("cameras", {}) if isinstance(status, dict) else {}
+        except Exception:
+            cams = {}
+        return {"connected": True, "cameras": cams if isinstance(cams, dict) else {}}
+
     # ── 카메라 탐지 프로파일(도메인·이벤트 편집) ─────────────────────────
     @app.get("/api/camera-profiles", tags=["cameras"], dependencies=auth)
     def camera_profiles() -> dict[str, Any]:
