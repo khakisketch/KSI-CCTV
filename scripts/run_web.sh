@@ -2,14 +2,17 @@
 # 로컬에서 웹 콘솔 전체 스택을 한 번에 띄워 UI/UX를 직접 확인한다.
 #   엔진 API(FastAPI) + 영상 게이트웨이(MediaMTX, docker 있으면) + Next.js 웹 콘솔
 #
+# 포트는 KSI-CCTV 전용 대역을 써서 다른 프로젝트(예: KSI-Scout·carescience의 3000/8000/8080)와
+# 충돌하지 않는다: 웹 3100 · 엔진 8181 · 게이트웨이 HLS 8910 / RTSP 8954. (모두 env로 override 가능)
+#
 # 사용:
-#   bash scripts/run_web.sh                 # http://localhost:3000 (로그인 비번: 아래 출력)
-#   KSI_CCTV_DEMO=1 bash scripts/run_web.sh # 데모 이벤트/캡처 시드(빈 로그일 때만) — 화면을 채워서 확인
-#   KSI_CCTV_WEB_PASSWORD=강한비번 bash scripts/run_web.sh
+#   bash scripts/run_web.sh                 # http://localhost:3100 (로그인 비번: 아래 출력)
+#   KSI_CCTV_DEMO=1 bash scripts/run_web.sh # 데모 이벤트/캡처 시드 + sample.mp4를 cam_001 라이브로 송출
+#   KSI_CCTV_WEB_PORT=3200 KSI_CCTV_WEB_PASSWORD=강한비번 bash scripts/run_web.sh
 # 종료: Ctrl+C (모든 프로세스/컨테이너 정리)
 #
 # 참고: 헤드리스 Chromium은 H.264 미탑재라 라이브 영상이 안 보일 수 있으나, 실 브라우저
-# (Chrome/Edge/Safari/Firefox)에서는 정상 재생된다. 원격은 Tailscale IP:3000으로 접속.
+# (Chrome/Edge/Safari/Firefox)에서는 정상 재생된다. 원격은 Tailscale IP:<웹포트>로 접속.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,8 +20,10 @@ cd "$ROOT"
 
 export KSI_CCTV_API_KEY="${KSI_CCTV_API_KEY:-local-dev-key}"
 export KSI_CCTV_WEB_PASSWORD="${KSI_CCTV_WEB_PASSWORD:-ksicctv}"
-ENGINE_PORT="${KSI_CCTV_HEALTH_PORT:-8081}"
-WEB_PORT="${KSI_CCTV_WEB_PORT:-3000}"
+ENGINE_PORT="${KSI_CCTV_ENGINE_PORT:-8181}"   # KSI-CCTV 전용(데몬 8081과도 분리)
+WEB_PORT="${KSI_CCTV_WEB_PORT:-3100}"         # 3000 회피(타 프로젝트 Next 기본값)
+GW_HLS_PORT="${KSI_CCTV_GW_HLS_PORT:-8910}"   # 게이트웨이 HLS(컨테이너 8888 → 호스트 8910)
+GW_RTSP_PORT="${KSI_CCTV_GW_RTSP_PORT:-8954}" # 게이트웨이 RTSP(컨테이너 8554 → 호스트 8954)
 
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
@@ -68,15 +73,30 @@ echo "[run_web] 엔진 API 시작 (:$ENGINE_PORT)..."
 pids+=($!)
 
 # ── 영상 게이트웨이(선택) ──────────────────────────────────────────────────────
+GATEWAY_UP=0
 if command -v docker >/dev/null 2>&1; then
-  echo "[run_web] 영상 게이트웨이(MediaMTX) 시작 (:8554/:8888)..."
+  echo "[run_web] 영상 게이트웨이(MediaMTX) 시작 (HLS :$GW_HLS_PORT / RTSP :$GW_RTSP_PORT)..."
   docker rm -f ksi-cctv-gateway-dev >/dev/null 2>&1 || true
-  docker run -d --rm --name ksi-cctv-gateway-dev \
-    -p 8554:8554 -p 8888:8888 -p 8889:8889 -p 8189:8189/udp \
-    -v "$ROOT/config/mediamtx.yml:/mediamtx.yml:ro" \
-    bluenviron/mediamtx:1.19.1 >/dev/null 2>&1 || echo "[run_web] 게이트웨이 생략(docker 실패 — 영상 없이 진행)"
+  if docker run -d --rm --name ksi-cctv-gateway-dev \
+      -p "$GW_RTSP_PORT":8554 -p "$GW_HLS_PORT":8888 \
+      -v "$ROOT/config/mediamtx.yml:/mediamtx.yml:ro" \
+      bluenviron/mediamtx:1.19.1 >/dev/null 2>&1; then
+    GATEWAY_UP=1
+  else
+    echo "[run_web] 게이트웨이 생략(docker 실패 — 영상 외 기능은 정상)"
+  fi
 else
   echo "[run_web] docker 없음 — 영상 게이트웨이 생략(영상 외 기능은 정상)"
+fi
+
+# ── 데모 라이브 스트림(선택) — sample.mp4를 cam_001로 송출 ──────────────────────
+if [ "${KSI_CCTV_DEMO:-}" = "1" ] && [ "$GATEWAY_UP" = "1" ] && command -v ffmpeg >/dev/null 2>&1 && [ -f data/sample.mp4 ]; then
+  echo "[run_web] 데모 라이브 스트림 송출(cam_001 ← sample.mp4)..."
+  sleep 2
+  ffmpeg -hide_banner -loglevel error -re -stream_loop -1 -i data/sample.mp4 \
+    -c:v libx264 -preset ultrafast -tune zerolatency -an \
+    -f rtsp -rtsp_transport tcp "rtsp://127.0.0.1:$GW_RTSP_PORT/cam_001" &
+  pids+=($!)
 fi
 
 # ── 웹 콘솔(Next) ─────────────────────────────────────────────────────────────
@@ -84,7 +104,7 @@ echo "[run_web] 웹 콘솔(Next.js) 시작 (:$WEB_PORT)..."
 (
   cd frontend
   KSI_CCTV_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
-  KSI_CCTV_GATEWAY_URL="http://127.0.0.1:8888" \
+  KSI_CCTV_GATEWAY_URL="http://127.0.0.1:$GW_HLS_PORT" \
   npm run dev -- -H 0.0.0.0 -p "$WEB_PORT"
 ) &
 pids+=($!)
@@ -94,6 +114,7 @@ echo "════════════════════════�
 echo "  웹 콘솔   : http://localhost:$WEB_PORT   (원격: http://<Tailscale-IP>:$WEB_PORT)"
 echo "  로그인 비번: $KSI_CCTV_WEB_PASSWORD"
 echo "  엔진 API  : http://localhost:$ENGINE_PORT/api/health/live"
+echo "  포트(전용): 웹 $WEB_PORT · 엔진 $ENGINE_PORT · 게이트웨이 HLS $GW_HLS_PORT / RTSP $GW_RTSP_PORT"
 echo "  종료      : Ctrl+C"
 echo "════════════════════════════════════════════════════════════════"
 wait

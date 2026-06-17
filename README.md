@@ -53,11 +53,13 @@ cp .env.example .env
 로컬에서 전체 웹 콘솔(엔진 API + 영상 게이트웨이 + Next.js UI)을 한 번에 띄운다:
 
 ```bash
-bash scripts/run_web.sh                  # http://localhost:3000 (로그인 비번 콘솔 출력)
-KSI_CCTV_DEMO=1 bash scripts/run_web.sh  # 데모 이벤트/캡처 시드 후 기동(화면 채워서 확인)
+bash scripts/run_web.sh                  # http://localhost:3100 (로그인 비번 콘솔 출력)
+KSI_CCTV_DEMO=1 bash scripts/run_web.sh  # 데모 이벤트/캡처 시드 + sample.mp4를 cam_001 라이브로 송출
 ```
 
-원격은 Tailscale 등으로 `http://<tailnet-IP>:3000` 접속(웹은 0.0.0.0 바인드). 종료는 `Ctrl+C`.
+KSI-CCTV 전용 포트(다른 프로젝트와 충돌 회피): **웹 3100 · 엔진 8181 · 게이트웨이 HLS 8910 / RTSP 8954**
+(각각 `KSI_CCTV_WEB_PORT`/`KSI_CCTV_ENGINE_PORT`/`KSI_CCTV_GW_HLS_PORT`/`KSI_CCTV_GW_RTSP_PORT`로 override).
+원격은 Tailscale 등으로 `http://<tailnet-IP>:3100` 접속(웹은 0.0.0.0 바인드). 종료는 `Ctrl+C`.
 운영 배포는 `docker compose --profile web up --build` (엔진+게이트웨이+웹 컨테이너).
 
 ### 웹 콘솔(Next.js) + 영상 게이트웨이 — Docker
