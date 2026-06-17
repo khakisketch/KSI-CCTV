@@ -156,3 +156,15 @@ export interface CameraProfile {
 }
 export const getCameraProfiles = () =>
   engineGet<{ cameras: Record<string, CameraProfile> }>("/api/camera-profiles");
+
+export interface CameraTelemetryItem {
+  connected?: boolean;
+  fps?: number;
+  dropped_frames?: number;
+  is_stale?: boolean;
+  seconds_since_last_frame?: number | null;
+}
+export const getCameraTelemetry = () =>
+  engineGet<{ connected: boolean; cameras: Record<string, CameraTelemetryItem> }>(
+    "/api/cameras/telemetry",
+  );

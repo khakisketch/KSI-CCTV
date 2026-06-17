@@ -29,9 +29,18 @@ PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
 pids=()
+# 프로세스와 그 자손까지 모두 종료한다.
+# (npm run dev → next dev → next-server 처럼 손자 프로세스가 남아 포트/stale 컴파일을
+#  점유한 채 orphan으로 떠도는 것을 막는다 — 이게 안 되면 다음 세션이 옛 빌드를 본다.)
+kill_tree() {
+  local pid="$1"
+  local c
+  for c in $(pgrep -P "$pid" 2>/dev/null); do kill_tree "$c"; done
+  kill "$pid" 2>/dev/null || true
+}
 cleanup() {
   echo; echo "[run_web] 종료 중..."
-  for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done
+  for p in "${pids[@]:-}"; do kill_tree "$p"; done
   docker rm -f ksi-cctv-gateway-dev >/dev/null 2>&1 || true
 }
 trap cleanup INT TERM EXIT
@@ -68,8 +77,11 @@ fi
 mkdir -p logs data/captures models/uploaded
 
 # ── 엔진 API ─────────────────────────────────────────────────────────────────────
-echo "[run_web] 엔진 API 시작 (:$ENGINE_PORT)..."
-"$PY" -m uvicorn src.api.app:app --host 0.0.0.0 --port "$ENGINE_PORT" --log-level warning &
+# DEMO 모드는 합성 파이프라인 주입 앱(demo_app)을 서빙 → 텔레메트리·제어가 데이터를 갖고 동작.
+APP_MODULE="src.api.app:app"
+[ "${KSI_CCTV_DEMO:-}" = "1" ] && APP_MODULE="src.api.demo_app:app"
+echo "[run_web] 엔진 API 시작 (:$ENGINE_PORT, $APP_MODULE)..."
+"$PY" -m uvicorn "$APP_MODULE" --host 0.0.0.0 --port "$ENGINE_PORT" --log-level warning &
 pids+=($!)
 
 # ── 영상 게이트웨이(선택) ──────────────────────────────────────────────────────
@@ -100,14 +112,29 @@ if [ "${KSI_CCTV_DEMO:-}" = "1" ] && [ "$GATEWAY_UP" = "1" ] && command -v ffmpe
 fi
 
 # ── 웹 콘솔(Next) ─────────────────────────────────────────────────────────────
-echo "[run_web] 웹 콘솔(Next.js) 시작 (:$WEB_PORT)..."
-(
-  cd frontend
-  KSI_CCTV_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
-  KSI_CCTV_GATEWAY_URL="http://127.0.0.1:$GW_HLS_PORT" \
-  npm run dev -- -H 0.0.0.0 -p "$WEB_PORT"
-) &
-pids+=($!)
+# 프로덕션 빌드를 서빙한다(dev 아님): 원격 점검 박스에서 HMR 웹소켓 의존 없이 안정적이고,
+# 실제 배포 산출물과 동일하다. (KSI_CCTV_WEB_DEV=1 이면 dev 서버로 빠르게 띄움 — 프론트 수정 중일 때만)
+if [ "${KSI_CCTV_WEB_DEV:-}" = "1" ]; then
+  echo "[run_web] 웹 콘솔(Next.js, DEV) 시작 (:$WEB_PORT)..."
+  ( cd frontend
+    KSI_CCTV_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
+    KSI_CCTV_GATEWAY_URL="http://127.0.0.1:$GW_HLS_PORT" \
+    npm run dev -- -H 0.0.0.0 -p "$WEB_PORT" ) &
+  pids+=($!)
+else
+  echo "[run_web] 웹 콘솔(Next.js) 빌드 중... (최초/코드변경 시 수십 초)"
+  if ( cd frontend && npm run build >/tmp/ksi_web_build.log 2>&1 ); then
+    echo "[run_web] 웹 콘솔(Next.js) 시작 (:$WEB_PORT)..."
+    ( cd frontend
+      KSI_CCTV_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
+      KSI_CCTV_GATEWAY_URL="http://127.0.0.1:$GW_HLS_PORT" \
+      npm run start -- -H 0.0.0.0 -p "$WEB_PORT" ) &
+    pids+=($!)
+  else
+    echo "[run_web] ✗ 웹 빌드 실패 — /tmp/ksi_web_build.log 확인. (DEV로 재시도하려면 KSI_CCTV_WEB_DEV=1)"
+    tail -20 /tmp/ksi_web_build.log
+  fi
+fi
 
 echo
 echo "════════════════════════════════════════════════════════════════"

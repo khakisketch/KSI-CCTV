@@ -1,5 +1,6 @@
 import { CameraLive } from "@/components/camera-live";
 import { CameraSettings } from "@/components/camera-settings";
+import { CameraTelemetry } from "@/components/camera-telemetry";
 import { EngineStatus } from "@/components/engine-status";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,6 +51,7 @@ export default async function CamerasPage() {
                 <div style={{ wordBreak: "keep-all" }}>{c.location ?? "위치 미지정"}</div>
                 {c.detection_type && <Badge variant="secondary">{c.detection_type}</Badge>}
                 <div className="truncate text-xs">{c.stream_url || "스트림 URL 미설정"}</div>
+                {c.id && <CameraTelemetry cameraId={c.id} />}
                 {c.id && <CameraLive cameraId={c.id} enabled={Boolean(c.enabled)} />}
                 {c.id && Object.keys(policyProfiles).length > 0 && (
                   <CameraSettings
