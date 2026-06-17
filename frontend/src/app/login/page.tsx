@@ -14,15 +14,23 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    // 폼의 실제 DOM 값을 동기적으로 읽는다(브라우저 자동완성/비밀번호 관리자가 채운 값도 잡힘 —
+    // React onChange가 자동완성에서 안 불려 state가 빈 경우 대비). await 전에 읽어야 currentTarget 유효.
+    const formPw = String(new FormData(e.currentTarget).get("password") ?? "");
+    const pw = (formPw || password).trim();
+    if (!pw) {
+      setError("비밀번호를 입력하세요.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password: pw }),
       });
       if (res.ok) {
         router.push("/");
@@ -54,6 +62,7 @@ export default function LoginPage() {
           <form onSubmit={submit} className="space-y-3">
             <Input
               type="password"
+              name="password"
               autoFocus
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -65,7 +74,7 @@ export default function LoginPage() {
                 {error}
               </p>
             )}
-            <Button type="submit" className="w-full" disabled={busy || !password}>
+            <Button type="submit" className="w-full" disabled={busy}>
               {busy ? "확인 중…" : "로그인"}
             </Button>
           </form>
