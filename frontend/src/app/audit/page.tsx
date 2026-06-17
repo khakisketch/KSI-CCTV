@@ -10,6 +10,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { getAudit, type AuditEntry } from "@/lib/engine";
+import { formatTs } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +63,7 @@ export default async function AuditPage() {
                 entries.map((e, i) => (
                   <TableRow key={i}>
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                      {e.timestamp?.replace("T", " ").slice(0, 19) ?? "—"}
+                      {formatTs(e.timestamp)}
                     </TableCell>
                     <TableCell>
                       <Badge variant="secondary">{e.event ?? "—"}</Badge>

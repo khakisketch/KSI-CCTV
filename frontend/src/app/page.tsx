@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { getCameras, getEvents, getModels } from "@/lib/engine";
+import { formatTs } from "@/lib/utils";
 
 export const dynamic = "force-dynamic"; // 요청 시 엔진에서 실데이터 페치(빌드타임 정적생성 회피)
 
@@ -102,7 +103,7 @@ export default async function DashboardPage() {
                 events.slice(0, 20).map((e, i) => (
                   <TableRow key={e.event_id ?? i}>
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                      {e.timestamp?.replace("T", " ").slice(0, 19) ?? "—"}
+                      {formatTs(e.timestamp)}
                     </TableCell>
                     <TableCell>{e.camera_id ?? "—"}</TableCell>
                     <TableCell>

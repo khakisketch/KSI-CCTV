@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { EventItem } from "@/lib/engine";
+import { formatTs } from "@/lib/utils";
 
 const LEVEL_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   critical: "destructive",
@@ -90,7 +91,7 @@ export function EventsLive({
               events.map((e, i) => (
                 <TableRow key={e.event_id ?? i}>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                    {e.timestamp?.replace("T", " ").slice(0, 19) ?? "—"}
+                    {formatTs(e.timestamp)}
                   </TableCell>
                   <TableCell>{e.camera_id ?? "—"}</TableCell>
                   <TableCell>
