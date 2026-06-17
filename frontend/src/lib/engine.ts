@@ -63,6 +63,12 @@ export interface EventItem {
   confidence?: number;
   description?: string;
   alert_level?: string;
+  // 2차 VLM 정밀분석 결과(백엔드가 이미 서빙 — 표시만 확장)
+  vlm_risk_level?: string;
+  vlm_confidence?: number;
+  vlm_detected_events?: string[];
+  vlm_recommended_action?: string;
+  rule_name?: string;
 }
 export interface ModelItem {
   name: string;
