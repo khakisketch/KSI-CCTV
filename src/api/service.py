@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from ruamel.yaml import YAML as _RuamelYAML
 
 from src.alerts.alert_manager import parse_alert_log_line
 from src.utils.config import mask_text, mask_url
@@ -47,6 +48,29 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         return {}
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+# ── ruamel round-trip(주석 보존) — 설정 쓰기 경로 전용 ─────────────────────────────
+# 쓰기 setter가 _load_yaml_rt로 읽고 _write_yaml로 쓰면 파일의 주석(SMTP 안내·라이선스 경고 등)이
+# 보존된다(기존 safe_dump는 주석을 제거했음 — 알려진 한계 해소). 읽기 전용 경로는 _load_yaml 유지.
+_yaml_rt = _RuamelYAML()
+_yaml_rt.preserve_quotes = True
+_yaml_rt.indent(mapping=2, sequence=4, offset=2)
+_yaml_rt.width = 4096  # 긴 값 줄바꿈 방지
+
+
+def _load_yaml_rt(path: Path):
+    """주석 보존 round-trip 로드(CommentedMap). 없거나 실패 시 빈 CommentedMap."""
+    from ruamel.yaml.comments import CommentedMap
+
+    if not path.exists():
+        return CommentedMap()
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = _yaml_rt.load(f)
+        return data if isinstance(data, dict) else CommentedMap()
+    except Exception:
+        return CommentedMap()
 
 
 def list_events(
@@ -218,10 +242,11 @@ MAX_PROMPTS = 100
 MAX_PROMPT_LEN = 64
 
 
-def _write_yaml(path: Path, data: dict[str, Any]) -> None:
+def _write_yaml(path: Path, data: Any) -> None:
+    """설정 쓰기. ruamel round-trip 덤프로 CommentedMap의 주석을 보존한다(plain dict면 주석 없이 정상 덤프)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+        _yaml_rt.dump(data, f)
 
 
 def _clean_prompts(classes: list[str]) -> list[str]:
@@ -255,7 +280,7 @@ def set_model_prompts(
     KeyError(모델 없음)·ValueError(타입 불가/유효 프롬프트 없음)를 발생시킨다(라우트가 4xx로 변환).
     """
     path = profiles_path or _MODEL_PROFILES
-    cfg = _load_yaml(path)
+    cfg = _load_yaml_rt(path)
     models = cfg.get("models")
     if not isinstance(models, dict) or model_name not in models:
         raise KeyError(f"모델을 찾을 수 없습니다: {model_name}")
@@ -277,7 +302,7 @@ def set_model_enabled(
 ) -> dict[str, Any]:
     """모델 활성/비활성 토글(model_profiles.yaml 갱신). 반환은 갱신된 상태."""
     path = profiles_path or _MODEL_PROFILES
-    cfg = _load_yaml(path)
+    cfg = _load_yaml_rt(path)
     models = cfg.get("models")
     if not isinstance(models, dict) or model_name not in models:
         raise KeyError(f"모델을 찾을 수 없습니다: {model_name}")
@@ -296,7 +321,7 @@ def delete_uploaded_model(
     안전: source=='uploaded'만 허용(빌트인/사전학습 보호) + 디렉토리 정리는 models/uploaded 하위로 한정.
     """
     path = profiles_path or _MODEL_PROFILES
-    cfg = _load_yaml(path)
+    cfg = _load_yaml_rt(path)
     models = cfg.get("models")
     if not isinstance(models, dict) or name not in models:
         raise KeyError(f"모델을 찾을 수 없습니다: {name}")
@@ -521,7 +546,7 @@ def set_camera_profile(
     valid = {e.get("name") for e in profiles[domain] if isinstance(e, dict)}
     clean = [e for e in (enabled_events or []) if e in valid]
     path = profiles_path or _CAMERA_PROFILES
-    cfg = _load_yaml(path)
+    cfg = _load_yaml_rt(path)
     cams = cfg.get("cameras")
     if not isinstance(cams, dict):
         cams = {}
@@ -562,7 +587,7 @@ def get_alert_preferences(prefs_path: Path | None = None) -> dict[str, Any]:
 def set_alert_preferences(
     threshold: str, per_event: dict[str, Any], prefs_path: Path | None = None
 ) -> dict[str, Any]:
-    """알림 환경설정 저장(검증 후 yaml). SMTP 비밀은 다루지 않는다(env). 주석은 safe_dump로 소실(ruamel 후속)."""
+    """알림 환경설정 저장(검증 후 yaml). SMTP 비밀은 다루지 않는다(env). 주석은 ruamel round-trip로 보존."""
     if threshold not in _ALERT_LEVELS:
         raise ValueError(f"임계값은 {', '.join(_ALERT_LEVELS)} 중 하나여야 합니다.")
     if not isinstance(per_event, dict):
@@ -571,7 +596,7 @@ def set_alert_preferences(
     if len(clean) > 500:
         raise ValueError("이벤트 항목이 너무 많습니다(최대 500).")
     path = prefs_path or _ALERT_PREFS
-    cfg = _load_yaml(path)  # 다른 키 보존(SMTP 주석은 소실 — 알려진 한계)
+    cfg = _load_yaml_rt(path)  # 다른 키 + 주석(SMTP 안내 등) 보존(ruamel round-trip)
     cfg["email_alert_level_threshold"] = threshold
     cfg["per_event_email_enabled"] = clean
     _write_yaml(path, cfg)

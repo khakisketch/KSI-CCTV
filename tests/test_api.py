@@ -639,6 +639,44 @@ class TestCameraProfiles(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestYamlCommentPreservation(unittest.TestCase):
+    """설정 쓰기 시 yaml 주석 보존(ruamel round-trip) — 기존 safe_dump 주석 소실 한계 해소."""
+
+    def test_alert_prefs_save_preserves_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "alert_preferences.yaml"
+            p.write_text(
+                "# 중요 안내: SMTP는 환경변수로 주입\n"
+                "email_alert_level_threshold: medium  # 발송 임계값\n"
+                "per_event_email_enabled: {}\n",
+                encoding="utf-8",
+            )
+            service.set_alert_preferences("high", {"fire": True}, prefs_path=p)
+            raw = p.read_text(encoding="utf-8")
+            # 기능적으로도 정상(p가 살아있는 동안 다시 읽어 값 확인)
+            reread = service.get_alert_preferences(prefs_path=p)["email_alert_level_threshold"]
+        self.assertIn("# 중요 안내: SMTP는 환경변수로 주입", raw)  # 헤더 주석 보존
+        self.assertIn("# 발송 임계값", raw)  # 인라인 주석 보존
+        self.assertIn("high", raw)  # 값 변경 반영
+        self.assertEqual(reread, "high")
+
+    def test_model_enabled_save_preserves_comments(self):
+        import yaml as _y
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "model_profiles.yaml"
+            p.write_text(
+                "# 모델 프로파일 — 라이선스 경고 등 중요 주석\n"
+                + _y.safe_dump({"models": {"m1": {"enabled": False, "type": "yolo_onnx"}}}),
+                encoding="utf-8",
+            )
+            service.set_model_enabled("m1", True, profiles_path=p)
+            raw = p.read_text(encoding="utf-8")
+        self.assertIn("# 모델 프로파일 — 라이선스 경고", raw)  # 주석 보존
+        self.assertIn("enabled: true", raw)  # 값 변경 반영
+
+
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
 class TestSystemInfo(unittest.TestCase):
     """시스템 상태 — 리소스 메트릭 스냅샷 + 헬스 컴포넌트."""
 
