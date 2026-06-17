@@ -2,6 +2,7 @@ import { Activity, Bell, Camera, Cpu } from "lucide-react";
 
 import { EngineStatus } from "@/components/engine-status";
 import { PipelineControl } from "@/components/pipeline-control";
+import { SystemStatus } from "@/components/system-status";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -79,6 +80,8 @@ export default async function DashboardPage() {
           <PipelineControl />
         </CardHeader>
       </Card>
+
+      <SystemStatus />
 
       <Card>
         <CardHeader>

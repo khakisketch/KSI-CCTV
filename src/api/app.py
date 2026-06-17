@@ -176,6 +176,14 @@ def create_app(
     def config_view() -> dict[str, Any]:
         return service.config_sanitized(app.state.config)
 
+    # ── 시스템 상태(리소스 메트릭 + 헬스 컴포넌트) ───────────────────────
+    @app.get("/api/system", tags=["system"], dependencies=auth)
+    def system_info() -> dict[str, Any]:
+        return {
+            "metrics": service.get_system_metrics(),
+            "health": _build_checker().run_checks().to_dict(),
+        }
+
     # ── 알림 환경설정(읽기/저장) ─────────────────────────────────────────
     @app.get("/api/alert-preferences", tags=["settings"], dependencies=auth)
     def alert_prefs_get() -> dict[str, Any]:

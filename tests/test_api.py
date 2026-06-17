@@ -576,6 +576,32 @@ class TestModelDelete(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestSystemInfo(unittest.TestCase):
+    """시스템 상태 — 리소스 메트릭 스냅샷 + 헬스 컴포넌트."""
+
+    def test_metrics_shape(self):
+        m = service.get_system_metrics()
+        self.assertIsInstance(m, dict)
+        # psutil 있으면 핵심 키 존재(없으면 {} — 둘 다 허용)
+        if m:
+            self.assertIn("cpu_percent", m)
+            self.assertIn("memory_percent", m)
+            self.assertIn("disk_percent", m)
+
+    def test_endpoint_returns_metrics_and_health(self):
+        client = TestClient(create_app())
+        with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+            r = client.get("/api/system", headers={"X-API-Key": _KEY})
+            self.assertEqual(r.status_code, 200)
+            body = r.json()
+            self.assertIn("metrics", body)
+            self.assertIn("health", body)
+            self.assertIn("components", body["health"])
+            # 미인증 → 401
+            self.assertEqual(client.get("/api/system").status_code, 401)
+
+
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
 class TestAlertPreferences(unittest.TestCase):
     """알림 환경설정 — 읽기 기본값·저장 검증·임계값 검증·엔드포인트."""
 

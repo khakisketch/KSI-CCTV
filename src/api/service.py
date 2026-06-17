@@ -489,6 +489,16 @@ def read_capture_image(
     return data
 
 
+def get_system_metrics() -> dict[str, Any]:
+    """시스템 리소스(CPU/메모리/디스크/GPU) 스냅샷. psutil/nvidia 의존은 지연 import·실패 시 {}."""
+    try:
+        from src.utils.system_metrics import collect_metrics
+
+        return collect_metrics().to_dict()
+    except Exception:
+        return {}
+
+
 def get_alert_preferences(prefs_path: Path | None = None) -> dict[str, Any]:
     """알림 환경설정 읽기(이메일 임계값 + 이벤트별 발송 on/off). SMTP 비밀은 env 전용이라 미포함."""
     cfg = _load_yaml(prefs_path or _ALERT_PREFS)

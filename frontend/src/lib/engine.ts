@@ -119,3 +119,26 @@ export interface AlertPreferences {
   per_event_email_enabled: Record<string, boolean>;
 }
 export const getAlertPreferences = () => engineGet<AlertPreferences>("/api/alert-preferences");
+
+export interface SystemMetrics {
+  cpu_percent?: number;
+  memory_percent?: number;
+  memory_used_mb?: number;
+  memory_total_mb?: number;
+  disk_percent?: number;
+  disk_used_gb?: number;
+  disk_total_gb?: number;
+  gpu_percent?: number | null;
+  gpu_memory_percent?: number | null;
+  gpu_temperature?: number | null;
+}
+export interface HealthComponent {
+  name: string;
+  healthy: boolean;
+  message?: string;
+}
+export interface SystemInfo {
+  metrics: SystemMetrics;
+  health: { status?: string; components: HealthComponent[] };
+}
+export const getSystem = () => engineGet<SystemInfo>("/api/system");
