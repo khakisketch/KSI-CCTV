@@ -1,8 +1,8 @@
 # KSI-CCTV — 프로젝트 지침 (AI/개발자 공통)
 
 DGX Spark 기반 지능형 CCTV 안전 관제 시스템.
-스택: Python 3.10 · YOLO26 ONNX(1차 고속 필터) → Ollama Qwen3-VL(2차 정밀 분석) · Streamlit 대시보드 · Docker Compose.
-구조: `src/capture` · `src/detection` · `src/pipeline` · `src/policy` · `src/vlm` · `src/alerts` · `src/dashboard`.
+스택: Python 3.10 · YOLO26 ONNX(1차 고속 필터) → Ollama Qwen3-VL(2차 정밀 분석) · FastAPI 엔진 API · Next.js 웹 콘솔 · Docker Compose.
+구조: `src/capture` · `src/detection` · `src/pipeline` · `src/policy` · `src/vlm` · `src/alerts` · `src/api`(엔진 API) · `frontend/`(웹 콘솔).
 
 ## SSOT 문서 — 비자명한 변경 전 반드시 읽어라
 
@@ -21,26 +21,32 @@ pip install pytest        # pytest는 dev 전용 — 런타임 requirements.txt�
 python3 -m pytest tests/
 ```
 
-**Streamlit 대시보드 변경 시 추가 게이트** (`src/dashboard/` 또는 `scripts/run_dashboard.sh` 수정 포함):
+**웹 콘솔(`frontend/`) 변경 시 추가 게이트:**
 
 ```bash
-bash scripts/run_dashboard.sh   # http://localhost:8080 에서 Streamlit 기동
+cd frontend && npm run build      # tsc + eslint + 라우트 생성(타입/린트 게이트)
+# 화면 변경 시: 엔진(uvicorn src.api.app:app) + 웹(npm run dev) 띄워 브라우저 확인
 ```
 
 기동 후 눈으로 확인할 항목:
-- 빈 데이터(이벤트 0건) 상태에서 레이아웃이 깨지지 않는가 (빈 테이블·빈 차트가 graceful하게 렌더되는가)
+- 빈 데이터(이벤트 0건) 상태에서 레이아웃이 깨지지 않는가 (빈 테이블·빈 상태가 graceful하게 렌더되는가)
 - 이벤트 없음 상태에서 오류 메시지·빈 화면 대신 적절한 안내 문구가 표시되는가
 - 한글 텍스트가 어절 단위로 줄바꿈되는가 (`word-break: keep-all` 적용 여부)
 - 브라우저 콘솔에 JavaScript 오류가 없는가
+- 데스크톱 + 모바일(390px) 양쪽 렌더
 
 > ruff/mypy: 현재 프로젝트에 설정 파일(pyproject.toml, mypy.ini 등)이 없어 게이트에서 제외함.
 > 도입 시 pyproject.toml에 `[tool.ruff]` / `[tool.mypy]` 섹션을 추가하고 이 항목을 갱신한다.
+> (참고: 저장 시 ruff 훅이 .py를 자동 점검한다.)
 
-## 대시보드 확인
+## 웹 콘솔 확인
 
 ```bash
-bash scripts/run_dashboard.sh   # http://localhost:8080 에서 Streamlit 확인
+docker compose --profile web up --build   # 엔진+게이트웨이+웹 콘솔 → http://localhost:3000
+# 또는 로컬: uvicorn src.api.app:app (엔진) + cd frontend && npm run dev (웹)
 ```
+
+> Streamlit 대시보드는 Next.js 웹 콘솔로 완전 이관·폐기되었다(2026-06-17). `src/dashboard`·`run_dashboard.sh` 없음.
 
 ## 운영 주의
 

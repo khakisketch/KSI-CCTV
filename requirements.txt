@@ -10,9 +10,6 @@ onnxruntime==1.20.1
 opencv-python-headless==4.11.0.86
 pillow==11.1.0
 PyYAML==6.0.2
-# streamlit==1.45.2는 PyPI에 존재하지 않아(1.45.1 다음이 1.46.0) fresh install이 실패했다.
-# 로컬에서 실제 검증·구동되는 버전으로 정렬한다.
-streamlit==1.57.0
 ultralytics==8.3.111
 
 # Hugging Face Hub — Phase 9 M4: 사전학습 모델 다운로드에 필요

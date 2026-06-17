@@ -11,7 +11,6 @@ import argparse
 import json
 import os
 import re
-import socket
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -104,7 +103,7 @@ def _source_type(url: str) -> str:
 
 
 def _check_imports(hc: Healthcheck) -> None:
-    modules = ["cv2", "numpy", "onnxruntime", "yaml", "streamlit"]
+    modules = ["cv2", "numpy", "onnxruntime", "yaml", "fastapi"]
     missing: list[str] = []
     for module in modules:
         try:
@@ -305,16 +304,6 @@ def _check_vlm(hc: Healthcheck, config: Any) -> None:
         hc.warn("vlm", "VLM availability check failed", error=str(exc))
 
 
-def _check_dashboard_port(hc: Healthcheck, port: int) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.2)
-        result = sock.connect_ex(("127.0.0.1", port))
-    if result == 0:
-        hc.warn("dashboard_port", "Dashboard port is already in use", port=port)
-    else:
-        hc.pass_("dashboard_port", "Dashboard port appears available", port=port)
-
-
 def _print_plain(results: list[CheckResult]) -> None:
     labels = {"pass": "PASS", "warn": "WARN", "fail": "FAIL"}
     for result in results:
@@ -359,9 +348,6 @@ def main() -> int:
     _check_providers_and_model(hc, config, args.require_gpu)
     _check_retention(hc, config)
     _check_cameras(hc, cameras, args.check_cameras)
-    if config is not None:
-        ui = config.get_ui_config()
-        _check_dashboard_port(hc, int(ui.get("dashboard_port", 8080)))
     if args.check_vlm:
         _check_vlm(hc, config)
 

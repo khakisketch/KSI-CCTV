@@ -1,5 +1,6 @@
 # 기본 `docker compose up`은 무인 탐지 데몬(ksi-cctv)만 실행한다(24시간 탐지·알람·헬스).
-# 운영자 대시보드는 옵션이다: `docker compose --profile dashboard up` 으로 함께 띄운다.
+# 웹 관제 콘솔(Next.js)은 옵션이다: `docker compose --profile web up` 으로 함께 띄운다.
+# 영상 게이트웨이만 필요하면 `--profile video`.
 
 x-common: &common
   build: .
@@ -60,28 +61,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
-
-  # ── 운영자 대시보드(옵션: --profile dashboard) ───────────────────────────────
-  ksi-cctv-dashboard:
-    <<: *common
-    container_name: ksi-cctv-dashboard
-    profiles: ["dashboard"]
-    environment:
-      <<: *common-env
-      KSI_CCTV_MODE: dashboard
-      # 비밀번호 강제는 entrypoint 가드(change-me/빈값 거부)에 일임한다. 여기서 `:?`(required)로 두면
-      # 비활성 profile임에도 보간이 먼저 평가돼 'docker compose up'(daemon만)까지 실패하므로 기본값을 둔다.
-      KSI_CCTV_DASHBOARD_PASSWORD: ${KSI_CCTV_DASHBOARD_PASSWORD:-change-me}
-    ports:
-      - "8080:8080"
-    # 대시보드는 streamlit(8080)만 띄우고 8081 health 서버를 안 띄우므로, 이미지 HEALTHCHECK(8081)를
-    # streamlit liveness(8080)로 override한다(미override 시 컨테이너가 영구 unhealthy).
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/_stcore/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
 
   # ── 웹 UI(옵션: --profile web) — Next.js 관제 콘솔/모바일 뷰어 ─────────────────
   # 엔진 API(ksi-cctv:8081)를 서버사이드로 호출한다(API 키는 브라우저 미노출). Streamlit 대시보드를

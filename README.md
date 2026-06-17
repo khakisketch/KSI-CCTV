@@ -12,7 +12,7 @@
 - **엔진 API (FastAPI)**: 이벤트·카메라·모델·정책·설정·헬스 읽기 + 프롬프트/활성 쓰기 + 제어(start/stop). fail-closed X-API-Key 인증, 시크릿 마스킹. 데몬에 in-process 마운트(탐지+API 단일 서비스)
 - **Next.js 웹 콘솔**: 데스크톱 관제 + 모바일 뷰어(반응형, 다크·라이트). 라이브 영상·이벤트·모델 프롬프트·설정. 자체 로그인(HMAC 세션). API 키는 서버 전용(브라우저 미노출)
 - **MediaMTX 영상 게이트웨이**: RTSP → HLS/WebRTC 재발행. 웹 콘솔은 same-origin 프록시로 라이브 재생(게이트웨이 주소·RTSP 자격증명 미노출)
-- **Streamlit 대시보드 (13탭, 레거시)**: 실시간 모니터링, 이벤트, 갤러리, 모델 업로드, 감사 로그 등. 웹 콘솔로 점진 이관 중 — 미이관 기능(모델 업로드·갤러리·감사 로그)은 당분간 여기서 사용
+- **웹 콘솔 기능**: 실시간 모니터링·이벤트(SSE)·라이브 영상(HLS)·갤러리·모델(목록/프롬프트/업로드/활성·삭제)·알림 설정·시스템 상태·파이프라인 제어·카메라 설정·감사 로그 — 모두 Next.js 웹 콘솔로 제공(구 Streamlit 대시보드 대체·폐기)
 - **헬스체크**: `/health`, `/healthz`, `/health/live`, `/health/ready` HTTP 엔드포인트
 
 ## 핵심 기능
@@ -44,9 +44,8 @@ cp .env.example .env
 # 헬스체크
 ./.venv/bin/python scripts/healthcheck.py --json
 
-# 대시보드 실행 (레거시 Streamlit — 운영자 기능 일부)
-bash scripts/run_dashboard.sh
-# http://localhost:8080 에서 접속
+# 탐지 데몬 실행 (파이프라인 + 엔진 API/헬스 :8081)
+./.venv/bin/python src/run.py
 ```
 
 ### 웹 콘솔(Next.js) + 영상 게이트웨이 — Docker
@@ -93,7 +92,6 @@ docker compose --profile web up --build
 - `src/vlm/`: VLM inference (Ollama), PromptSelector, TTL cache
 - `src/alerts/`: AlertManager (로그, 캡처, 얼굴 블러, 암호화, SMTP)
 - `src/api/`: 엔진 API (FastAPI app·service·auth) — 읽기/쓰기/제어 + compat 헬스
-- `src/dashboard/`: Streamlit 대시보드 (13탭, 레거시)
 - `src/models/`: 사용자 모델 업로드 검증기
 - `src/utils/`: 헬스체크, 시스템 메트릭, 설정 로더
 - `frontend/`: Next.js 웹 콘솔 (App Router, Tailwind, shadcn/ui — 관제/뷰어, 라이브 영상)
@@ -120,7 +118,7 @@ docker compose --profile web up --build
 
 1. 실 RTSP 카메라로 라이브 영상·탐지 E2E 검증 (게이트웨이 풀 + 엔진 탐지 동시)
 2. DGX Spark 환경에서 `CUDAExecutionProvider`/TensorRT 가속 검증
-3. 설치형 패키징 마무리 (Windows 서비스/인스톨러·오프라인 번들) + Streamlit 잔여 탭(모델 업로드·갤러리·감사 로그) 웹 콘솔 이관
+3. 설치형 패키징 마무리 (Windows 서비스/인스톨러·오프라인 번들) + 라이브 영상 텔레메트리/탐지 오버레이 보강
 > 커스텀 모델 학습은 제품 비목표(범용 사전학습 + open-vocab 텍스트 탐지로 대체) — 필요 시 `scripts/train_*.py`로 별도 수행 가능(데이터셋/GPU 필요).
 
 ## 문서

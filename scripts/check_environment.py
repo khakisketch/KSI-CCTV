@@ -54,7 +54,7 @@ def check_dependencies():
     """필수 의존성 확인"""
     required = [
         "numpy", "cv2", "onnxruntime", "yaml", "PIL",
-        "streamlit", "requests", "ultralytics"
+        "requests", "ultralytics", "fastapi"
     ]
     missing = []
     for module in required:
@@ -237,7 +237,7 @@ def main():
     print("\n" + "=" * 60)
     if all_ok:
         print(f"{Color.GREEN}모든 점검 통과! KSI-CCTV를 실행할 수 있습니다.{Color.NC}")
-        print("\n실행: ./scripts/run_dashboard.sh")
+        print("\n실행: 탐지 데몬 `python src/run.py` · 웹 콘솔 `docker compose --profile web up`")
         return 0
     else:
         print(f"{Color.YELLOW}일부 점검 실패. 위의 경고/오류를 확인하세요.{Color.NC}")

@@ -5,8 +5,8 @@
 조립 → 카메라 등록 → /health 엔드포인트에 **실 파이프라인 상태**(카메라/VLM/모델 health) 연결
 → pipeline.start() → SIGTERM/SIGINT까지 블록.
 
-대시보드(scripts/run_dashboard.sh)는 별도의 운영자 도구로, 이 데몬과 독립 실행된다.
-이 데몬이 탐지·알람(이메일/로그/캡처)·헬스를 책임진다.
+웹 콘솔(frontend/, Next.js)은 별도 컨테이너의 운영자 도구로, 이 데몬의 엔진 API를 호출한다.
+이 데몬이 탐지·알람(이메일/로그/캡처)·엔진 API·헬스를 책임진다.
 """
 from __future__ import annotations
 
