@@ -1,6 +1,7 @@
 import { Activity, Bell, Camera, Cpu } from "lucide-react";
 
 import { EngineStatus } from "@/components/engine-status";
+import { PipelineControl } from "@/components/pipeline-control";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -71,6 +72,13 @@ export default async function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-base">파이프라인 제어</CardTitle>
+          <PipelineControl />
+        </CardHeader>
+      </Card>
 
       <Card>
         <CardHeader>
