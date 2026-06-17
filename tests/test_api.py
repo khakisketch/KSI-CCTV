@@ -19,6 +19,23 @@ except Exception:
 
 _KEY = "test-api-key-strong"
 
+# 쓰기 엔드포인트(업로드/프롬프트/enabled/제어)는 이제 감사 로그를 남긴다. 테스트가 실제
+# logs/dashboard_audit.jsonl을 오염시키지 않도록, 모듈 전역으로 _AUDIT_LOG를 임시 경로로 돌린다.
+_audit_redirect = None
+
+
+def setUpModule():
+    global _audit_redirect
+    if not _HAS_API:
+        return
+    _audit_redirect = tempfile.TemporaryDirectory()
+    service._AUDIT_LOG = Path(_audit_redirect.name) / "audit.jsonl"
+
+
+def tearDownModule():
+    if _audit_redirect is not None:
+        _audit_redirect.cleanup()
+
 
 @unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
 class TestApiAuth(unittest.TestCase):

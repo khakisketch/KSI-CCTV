@@ -104,3 +104,12 @@ export interface CaptureDate {
   cameras: CaptureCamera[];
 }
 export const getCaptures = () => engineGet<{ dates: CaptureDate[] }>("/api/captures");
+
+export interface AuditEntry {
+  timestamp?: string;
+  event?: string;
+  source?: string;
+  [key: string]: unknown;
+}
+export const getAudit = (limit = 200) =>
+  engineGet<{ count: number; entries: AuditEntry[] }>(`/api/audit?limit=${limit}`);
