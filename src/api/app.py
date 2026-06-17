@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.api import service
@@ -166,6 +166,18 @@ def create_app(
     @app.get("/api/config", tags=["config"], dependencies=auth)
     def config_view() -> dict[str, Any]:
         return service.config_sanitized(app.state.config)
+
+    # ── 캡처 이미지 갤러리(이벤트 캡처 — PII라 인증 필수) ─────────────────
+    @app.get("/api/captures", tags=["captures"], dependencies=auth)
+    def captures_list() -> dict[str, Any]:
+        return service.list_captures()
+
+    @app.get("/api/captures/{date}/{camera}/{name}", tags=["captures"], dependencies=auth)
+    def capture_image(date: str, camera: str, name: str) -> Response:
+        data = service.read_capture_image(date, camera, name)
+        if data is None:
+            raise HTTPException(status_code=404, detail="캡처를 찾을 수 없거나 접근할 수 없습니다.")
+        return Response(content=data, media_type="image/jpeg")
 
     # ── 쓰기: open-vocab 프롬프트 설정(학습 없이 탐지 대상 변경) ──────────
     @app.post("/api/models/{name}/prompts", tags=["models"], dependencies=auth)

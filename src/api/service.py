@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import collections
 import json
+import os
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,9 @@ from src.utils.config import mask_text, mask_url
 _ROOT = Path(__file__).resolve().parents[2]
 _MODEL_PROFILES = _ROOT / "config" / "model_profiles.yaml"
 _EVENT_POLICIES = _ROOT / "config" / "event_policies.yaml"
+_CAPTURES_DIR = _ROOT / "data" / "captures"
+_DATE_RE = re.compile(r"^\d{8}$")  # YYYYMMDD
+_SAFE_SEG = re.compile(r"^[A-Za-z0-9._-]+$")  # 카메라/파일명(슬래시·.. 불허)
 _ALERTS_LOG = _ROOT / "logs" / "alerts.log"
 
 EVENTS_MAX_LIMIT = 1000
@@ -304,6 +309,87 @@ def handle_model_upload(
         "class_profile": meta.get("class_profile"),
         "enabled": False,  # 항상 비활성으로 등록(운영자가 검토 후 활성화)
     }
+
+
+def _load_capture_fernet():
+    """KSI_CCTV_CAPTURE_KEY에서 Fernet 로드(.jpg.enc 복호화용). 미설정/실패 시 None."""
+    key = os.environ.get("KSI_CCTV_CAPTURE_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+
+        return Fernet(key.encode())
+    except Exception:
+        return None
+
+
+def list_captures(captures_dir: Path | None = None, limit_per_camera: int = 200) -> dict[str, Any]:
+    """data/captures를 날짜→카메라→이미지 트리로 반환(최신순). 이미지는 얼굴 블러가 저장 시 적용됨.
+
+    구조: data/captures/{YYYYMMDD}/{camera_id}/{name}.jpg[.enc]. 파일명만 노출(서버 절대경로 미노출).
+    """
+    base = captures_dir or _CAPTURES_DIR
+    if not base.exists():
+        return {"dates": []}
+    dates: list[dict[str, Any]] = []
+    for ddir in sorted(
+        (d for d in base.iterdir() if d.is_dir() and _DATE_RE.match(d.name)),
+        key=lambda p: p.name,
+        reverse=True,
+    ):
+        cams: list[dict[str, Any]] = []
+        for cdir in sorted((c for c in ddir.iterdir() if c.is_dir()), key=lambda p: p.name):
+            images: list[dict[str, Any]] = []
+            for f in sorted(cdir.iterdir(), key=lambda p: p.name, reverse=True):
+                if not f.is_file():
+                    continue
+                if f.name.endswith(".jpg.enc"):
+                    images.append({"name": f.name, "encrypted": True})
+                elif f.suffix.lower() == ".jpg":
+                    images.append({"name": f.name, "encrypted": False})
+                if len(images) >= limit_per_camera:
+                    break
+            if images:
+                cams.append({"camera_id": cdir.name, "count": len(images), "images": images})
+        if cams:
+            dates.append({"date": ddir.name, "cameras": cams})
+    return {"dates": dates}
+
+
+def read_capture_image(
+    date: str, camera: str, name: str, captures_dir: Path | None = None
+) -> bytes | None:
+    """검증된 경로의 캡처 이미지 bytes 반환(.enc는 복호화). 경로 위반/부재/복호화불가 시 None.
+
+    경로 주입 방지: date=YYYYMMDD, camera/name은 영숫자·._-만(슬래시·.. 불허) + resolve 후 base 하위 확인.
+    """
+    base = captures_dir or _CAPTURES_DIR
+    if not (_DATE_RE.match(date) and _SAFE_SEG.match(camera) and _SAFE_SEG.match(name)):
+        return None
+    if camera in (".", "..") or name in (".", ".."):  # 정규식이 점만 있는 세그먼트는 허용하므로 명시 차단
+        return None
+    if not (name.endswith(".jpg") or name.endswith(".jpg.enc")):
+        return None
+    target = base / date / camera / name
+    try:
+        rp = target.resolve()
+        if not str(rp).startswith(str(base.resolve()) + os.sep):
+            return None  # traversal 방어(이중)
+        if not rp.is_file():
+            return None
+        data = rp.read_bytes()
+    except Exception:
+        return None
+    if name.endswith(".jpg.enc"):
+        fernet = _load_capture_fernet()
+        if fernet is None:
+            return None  # 키 없으면 복호화 불가(잠금)
+        try:
+            data = fernet.decrypt(data)
+        except Exception:
+            return None
+    return data
 
 
 def config_sanitized(config: Any) -> dict[str, Any]:

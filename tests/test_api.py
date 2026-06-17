@@ -417,5 +417,85 @@ class TestModelUpload(unittest.TestCase):
         self.assertFalse(called["v"], "크기 초과인데 검증기가 호출됨(OOM 가드 실패)")
 
 
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestCaptures(unittest.TestCase):
+    """캡처 갤러리 — 트리 목록·경로 안전(traversal/확장자)·암호화 복호화."""
+
+    def _make(self, tmp):
+        d = Path(tmp) / "20260617" / "cam_001"
+        d.mkdir(parents=True)
+        (d / "person_detected_103045.jpg").write_bytes(b"\xff\xd8\xffPLAINJPG")
+        return Path(tmp)
+
+    def test_list_captures_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            res = service.list_captures(captures_dir=self._make(tmp))
+        self.assertEqual(res["dates"][0]["date"], "20260617")
+        cam = res["dates"][0]["cameras"][0]
+        self.assertEqual(cam["camera_id"], "cam_001")
+        self.assertEqual(cam["images"][0]["name"], "person_detected_103045.jpg")
+        self.assertFalse(cam["images"][0]["encrypted"])
+
+    def test_read_plain_returns_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._make(tmp)
+            data = service.read_capture_image("20260617", "cam_001", "person_detected_103045.jpg", captures_dir=base)
+        self.assertEqual(data, b"\xff\xd8\xffPLAINJPG")
+
+    def test_read_rejects_unsafe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._make(tmp)
+            f = service.read_capture_image
+            self.assertIsNone(f("20260617", "..", "person_detected_103045.jpg", captures_dir=base))  # dotdot
+            self.assertIsNone(f("2026", "cam_001", "person_detected_103045.jpg", captures_dir=base))  # 잘못된 날짜
+            self.assertIsNone(f("20260617", "cam_001", "evil.txt", captures_dir=base))  # 비-jpg 확장자
+            self.assertIsNone(f("20260617", "cam_001", "nope.jpg", captures_dir=base))  # 부재
+
+    def test_encrypted_requires_key(self):
+        try:
+            from cryptography.fernet import Fernet
+        except ImportError:
+            self.skipTest("cryptography 미설치")
+        key = Fernet.generate_key()
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp) / "20260617" / "cam_001"
+            d.mkdir(parents=True)
+            (d / "fire_120000.jpg.enc").write_bytes(Fernet(key).encrypt(b"\xff\xd8\xffSECRET"))
+            base = Path(tmp)
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("KSI_CCTV_CAPTURE_KEY", None)
+                self.assertIsNone(
+                    service.read_capture_image("20260617", "cam_001", "fire_120000.jpg.enc", captures_dir=base)
+                )
+            with patch.dict(os.environ, {"KSI_CCTV_CAPTURE_KEY": key.decode()}):
+                data = service.read_capture_image("20260617", "cam_001", "fire_120000.jpg.enc", captures_dir=base)
+        self.assertEqual(data, b"\xff\xd8\xffSECRET")
+
+    def test_endpoint_serves_and_auths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._make(tmp)
+            client = TestClient(create_app())
+            with patch.object(service, "_CAPTURES_DIR", base), \
+                    patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+                # 목록
+                r = client.get("/api/captures", headers={"X-API-Key": _KEY})
+                self.assertEqual(r.status_code, 200)
+                self.assertEqual(r.json()["dates"][0]["date"], "20260617")
+                # 이미지(image/jpeg)
+                r2 = client.get(
+                    "/api/captures/20260617/cam_001/person_detected_103045.jpg",
+                    headers={"X-API-Key": _KEY},
+                )
+                self.assertEqual(r2.status_code, 200)
+                self.assertEqual(r2.headers["content-type"], "image/jpeg")
+                self.assertEqual(r2.content, b"\xff\xd8\xffPLAINJPG")
+                # 부재 → 404
+                self.assertEqual(
+                    client.get("/api/captures/20260617/cam_001/x.jpg", headers={"X-API-Key": _KEY}).status_code, 404
+                )
+                # 미인증 → 401
+                self.assertEqual(client.get("/api/captures").status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
