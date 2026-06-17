@@ -497,5 +497,58 @@ class TestCaptures(unittest.TestCase):
                 self.assertEqual(client.get("/api/captures").status_code, 401)
 
 
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestAudit(unittest.TestCase):
+    """감사 로그 — write/list 라운드트립·마스킹·엔드포인트·쓰기엔드포인트 자동 기록."""
+
+    def test_write_and_list_newest_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "audit.jsonl"
+            service.write_audit("e1", audit_log=p, model="a")
+            service.write_audit("e2", audit_log=p, model="b")
+            items = service.list_audit(audit_log=p)
+        self.assertEqual([i["event"] for i in items], ["e2", "e1"])  # 최신순
+        self.assertEqual(items[0]["source"], "api")
+        self.assertEqual(items[0]["model"], "b")
+
+    def test_list_masks_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "audit.jsonl"
+            service.write_audit("model_upload_failed", audit_log=p, error="rtsp://admin:secret999@h/s")
+            items = service.list_audit(audit_log=p)
+        self.assertNotIn("secret999", items[0]["error"])
+
+    def test_endpoint_lists_and_auths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "audit.jsonl"
+            service.write_audit("model_enabled_set", audit_log=p, model="x", enabled=True)
+            client = TestClient(create_app())
+            with patch.object(service, "_AUDIT_LOG", p), patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+                r = client.get("/api/audit", headers={"X-API-Key": _KEY})
+                self.assertEqual(r.status_code, 200)
+                self.assertEqual(r.json()["entries"][0]["event"], "model_enabled_set")
+                self.assertEqual(client.get("/api/audit").status_code, 401)  # 미인증
+
+    def test_upload_endpoint_writes_audit(self):
+        """엔진 쓰기 작업(업로드)이 감사 트레일에 기록되는지 — 웹콘솔 작업 미감사 갭 해소 확인."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "audit.jsonl"
+            client = TestClient(create_app())
+            fake = {"success": True, "profile_name": "uploaded_x", "model_id": "x", "enabled": False}
+            with patch.object(service, "_AUDIT_LOG", p), \
+                    patch.object(service, "handle_model_upload", return_value=fake), \
+                    patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+                r = client.post(
+                    "/api/models/upload",
+                    headers={"X-API-Key": _KEY},
+                    files={"file": ("m.onnx", b"x", "application/octet-stream")},
+                    data={"model_name": "감사 테스트"},
+                )
+                self.assertEqual(r.status_code, 200)
+                entries = service.list_audit(audit_log=p)
+        self.assertEqual(entries[0]["event"], "model_upload")
+        self.assertEqual(entries[0]["profile_name"], "uploaded_x")
+
+
 if __name__ == "__main__":
     unittest.main()

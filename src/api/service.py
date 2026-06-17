@@ -11,6 +11,7 @@ import json
 import os
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,10 @@ _EVENT_POLICIES = _ROOT / "config" / "event_policies.yaml"
 _CAPTURES_DIR = _ROOT / "data" / "captures"
 _DATE_RE = re.compile(r"^\d{8}$")  # YYYYMMDD
 _SAFE_SEG = re.compile(r"^[A-Za-z0-9._-]+$")  # 카메라/파일명(슬래시·.. 불허)
+# 감사 로그(JSONL) — Streamlit 대시보드와 동일 파일을 공유해 단일 감사 트레일을 만든다.
+_AUDIT_LOG = _ROOT / "logs" / "dashboard_audit.jsonl"
+_AUDIT_MAX_BYTES = 5 * 1024 * 1024
+_AUDIT_TEXT_FIELDS = ("error", "detail", "original_filename", "model_name")
 _ALERTS_LOG = _ROOT / "logs" / "alerts.log"
 
 EVENTS_MAX_LIMIT = 1000
@@ -309,6 +314,60 @@ def handle_model_upload(
         "class_profile": meta.get("class_profile"),
         "enabled": False,  # 항상 비활성으로 등록(운영자가 검토 후 활성화)
     }
+
+
+def write_audit(event: str, audit_log: Path | None = None, **fields: Any) -> None:
+    """감사 로그(JSONL)에 한 줄 append(best-effort — 실패해도 주 기능을 막지 않음).
+
+    Streamlit과 동일 파일을 공유해 통합 감사 트레일을 만든다. 엔진 API 발 작업은 source='api'.
+    크기 초과 시 최신 절반만 유지(간단 회전, Streamlit 로직과 동일 개념)."""
+    path = audit_log or _AUDIT_LOG
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size >= _AUDIT_MAX_BYTES:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            keep = max(1, len(lines) // 2)
+            path.write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            "source": "api",
+            **fields,
+        }
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def _mask_audit(entry: dict[str, Any]) -> dict[str, Any]:
+    masked = dict(entry)
+    for key in _AUDIT_TEXT_FIELDS:
+        val = masked.get(key)
+        if isinstance(val, str) and val:
+            masked[key] = mask_text(val)
+    return masked
+
+
+def list_audit(limit: int = 200, audit_log: Path | None = None) -> list[dict[str, Any]]:
+    """감사 로그를 최신순으로 반환(마스킹). JSONL 파싱 실패 줄은 skip."""
+    path = audit_log or _AUDIT_LOG
+    if not path.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(entry, dict):
+                out.append(_mask_audit(entry))
+    out.reverse()
+    return out[: max(1, min(int(limit), 1000))]
 
 
 def _load_capture_fernet():

@@ -111,6 +111,7 @@ def create_app(
             raise HTTPException(status_code=503, detail="파이프라인이 연결되지 않았습니다(데몬 외 실행).")
         if not getattr(pl, "is_running", False):
             pl.start()
+        service.write_audit("pipeline_start")
         return {"running": bool(getattr(pl, "is_running", True))}
 
     @app.post("/api/control/stop", tags=["control"], dependencies=auth)
@@ -120,6 +121,7 @@ def create_app(
             raise HTTPException(status_code=503, detail="파이프라인이 연결되지 않았습니다(데몬 외 실행).")
         if getattr(pl, "is_running", False):
             pl.stop()
+        service.write_audit("pipeline_stop")
         return {"running": bool(getattr(pl, "is_running", False))}
 
     # ── 이벤트 ───────────────────────────────────────────────────────────
@@ -179,11 +181,21 @@ def create_app(
             raise HTTPException(status_code=404, detail="캡처를 찾을 수 없거나 접근할 수 없습니다.")
         return Response(content=data, media_type="image/jpeg")
 
+    # ── 감사 로그(관리 작업 추적 — 인증) ─────────────────────────────────
+    @app.get("/api/audit", tags=["audit"], dependencies=auth)
+    def audit_list(limit: int = Query(200, ge=1, le=1000)) -> dict[str, Any]:
+        items = service.list_audit(limit=limit)
+        return {"count": len(items), "entries": items}
+
     # ── 쓰기: open-vocab 프롬프트 설정(학습 없이 탐지 대상 변경) ──────────
     @app.post("/api/models/{name}/prompts", tags=["models"], dependencies=auth)
     def set_prompts(name: str, body: PromptsBody) -> dict[str, Any]:
         try:
-            return service.set_model_prompts(body.classes, model_name=name, enabled=body.enabled)
+            result = service.set_model_prompts(body.classes, model_name=name, enabled=body.enabled)
+            service.write_audit(
+                "model_prompts_set", model=name, count=len(result.get("classes", []))
+            )
+            return result
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
         except ValueError as e:
@@ -193,7 +205,9 @@ def create_app(
     @app.put("/api/models/{name}/enabled", tags=["models"], dependencies=auth)
     def set_enabled(name: str, body: EnabledBody) -> dict[str, Any]:
         try:
-            return service.set_model_enabled(name, body.enabled)
+            result = service.set_model_enabled(name, body.enabled)
+            service.write_audit("model_enabled_set", model=name, enabled=bool(body.enabled))
+            return result
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -221,7 +235,18 @@ def create_app(
             input_size=[int(input_height), int(input_width)],
         )
         if not result.get("success"):
+            service.write_audit(
+                "model_upload_failed",
+                original_filename=file.filename or "",
+                error=str(result.get("error", "")),
+            )
             raise HTTPException(status_code=400, detail=result.get("error", "업로드 실패"))
+        service.write_audit(
+            "model_upload",
+            profile_name=result.get("profile_name", ""),
+            model_name=model_name,
+            original_filename=file.filename or "",
+        )
         return result
 
     return app

@@ -71,7 +71,7 @@
   - ✅ **P7-2 모델 업로드 API**: `POST /api/models/upload`(멀티파트) — 기존 하드닝 `upload_validator.upload_model`(external-data 차단→load→shape→smoke를 단일 rlimit sandbox) 재사용, 인증 필수, 메모리 OOM 가드(read 상한), disabled 등록, 서버경로 미노출. **실 ONNX(yolo26) 업로드 E2E: 샌드박스 검증 통과→models/uploaded/<id> 격리저장→uploaded_<id> 등록(disabled)→/api/models 노출 확인**(config 백업/복원). 단위테스트 4(plumbing·인증·크기가드). **SCA**: python-multipart 신규 추가→pip-audit가 CVE-2026-53538/9/40 탐지→0.0.31+로 픽스(재감사 클린).
   - ✅ **P7-3 모델 업로드 웹 UI**: `ModelUpload` 폼(파일·이름·클래스·입력크기) + Next 멀티파트 프록시(`/api/models/upload` — 본문 스트리밍·키 서버부착·키 미노출) + 모델 페이지 통합. **브라우저 E2E: 실 ONNX(yolo26) UI 업로드→샌드박스 검증→성공 토스트→router.refresh로 uploaded_<id> 카드 등장(비활성)·콘솔오류 0** 스크린샷 확인. 모델 업로드 Streamlit→웹 이관 완료.
   - ✅ **P7-4 갤러리(API+웹)**: 엔진 `GET /api/captures`(트리) + `GET /api/captures/{date}/{camera}/{name}`(image/jpeg, 경로주입 방지·`.enc` 서버복호화·PII 인증). 웹: Next 이미지 프록시(`<img>`는 헤더 못 보내므로 키 서버부착) + `/gallery` 페이지(날짜 선택·카메라 그룹·이미지 그리드·암호화 잠금 fallback) + 나브 항목. **브라우저 E2E: 실 JPEG 캡처→갤러리 페이지에서 날짜버튼·카메라그룹·이미지 실렌더(naturalWidth>0)·콘솔오류 0** 스크린샷 확인. 단위/엔드포인트 테스트 5. 갤러리 Streamlit→웹 이관 완료.
-  - ⬜ 감사 로그 뷰
+  - 🔄 **P7-5 감사 로그**: 엔진 `write_audit`/`list_audit`(Streamlit과 동일 `dashboard_audit.jsonl` 공유=통합 트레일, best-effort·크기회전·마스킹) + `GET /api/audit`(인증). **쓰기 엔드포인트(업로드·프롬프트·enabled·start/stop) 자동 감사** — 웹콘솔 작업이 미감사되던 보안 갭 해소(source='api'). 테스트 4(라운드트립·마스킹·엔드포인트 auth·업로드 자동기록). 476 passed. 웹 감사 뷰는 다음.
 - ⬜ **Streamlit 폐기(단계 4)**: 잔여 탭이 모두 웹 콘솔에 도달하면 제거. 그 전까지 무중단 병존(strangler-fig).
 - **검증:** 467 passed·ruff clean·pip-audit(multipart 클린). [HW] 실 카메라 라이브는 타깃. (참고: torch CVE-2025-3000은 기존 의존성·cu130/DGX 제약으로 별도 트랙.)
 
@@ -104,3 +104,4 @@
 - (P7-3) 2026-06-17 모델 업로드 웹 UI — ModelUpload 폼 + Next 멀티파트 프록시(스트리밍·키 부착·미노출) + 모델 페이지 통합. 브라우저 E2E: 실 ONNX UI 업로드→샌드박스 검증→성공 토스트→uploaded_<id> 카드 등장(비활성)·콘솔오류 0. 모델 업로드 Streamlit→웹 이관 완료. (다음: 갤러리·감사 로그)
 - (P7-4) 2026-06-17 갤러리 API — GET /api/captures(트리) + GET /api/captures/{date}/{camera}/{name}(image/jpeg). path-safety(YYYYMMDD·영숫자세그먼트·..차단·resolve확인)·.enc 서버복호화·PII 인증. 테스트 5(엔드포인트 serve/auth/404 포함, TestClient 실 ASGI). 472 passed. 웹 갤러리 뷰는 다음.
 - (P7-4b) 2026-06-17 갤러리 웹 뷰 — Next 이미지 프록시(키 서버부착) + /gallery(날짜·카메라·그리드·암호화 잠금 fallback) + 나브. 브라우저 E2E: 실 JPEG 캡처→날짜버튼·카메라그룹·이미지 실렌더(naturalWidth>0)·콘솔오류 0. 갤러리 Streamlit→웹 이관 완료. (다음: 감사 로그)
+- (P7-5) 2026-06-17 감사 로그 엔진 — write_audit/list_audit(dashboard_audit.jsonl 공유·마스킹·회전) + GET /api/audit(인증). 쓰기 엔드포인트(업로드/프롬프트/enabled/start·stop) 자동 감사로 웹콘솔 작업 미감사 갭 해소. 테스트 4. 476 passed. 웹 감사 뷰는 다음.
