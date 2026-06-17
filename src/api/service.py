@@ -27,6 +27,7 @@ _EVENT_POLICIES = _ROOT / "config" / "event_policies.yaml"
 _CAPTURES_DIR = _ROOT / "data" / "captures"
 _ALERT_PREFS = _ROOT / "config" / "alert_preferences.yaml"
 _ALERT_LEVELS = ("low", "medium", "high", "critical")
+_CAMERA_PROFILES = _ROOT / "config" / "camera_profiles.yaml"
 _DATE_RE = re.compile(r"^\d{8}$")  # YYYYMMDD
 _SAFE_SEG = re.compile(r"^[A-Za-z0-9._-]+$")  # 카메라/파일명(슬래시·.. 불허)
 # 감사 로그(JSONL) — Streamlit 대시보드와 동일 파일을 공유해 단일 감사 트레일을 만든다.
@@ -487,6 +488,50 @@ def read_capture_image(
         except Exception:
             return None
     return data
+
+
+def get_camera_profiles(profiles_path: Path | None = None) -> dict[str, Any]:
+    """카메라별 탐지 프로파일(도메인·활성 이벤트) 읽기(camera_profiles.yaml)."""
+    cfg = _load_yaml(profiles_path or _CAMERA_PROFILES)
+    cams = cfg.get("cameras")
+    out: dict[str, Any] = {}
+    if isinstance(cams, dict):
+        for cid, c in cams.items():
+            if isinstance(c, dict):
+                out[str(cid)] = {
+                    "domain": c.get("domain"),
+                    "enabled": bool(c.get("enabled", False)),
+                    "enabled_events": [str(e) for e in (c.get("enabled_events") or [])],
+                }
+    return {"cameras": out}
+
+
+def set_camera_profile(
+    camera_id: str,
+    domain: str,
+    enabled_events: list[str],
+    profiles_path: Path | None = None,
+    policies_path: Path | None = None,
+) -> dict[str, Any]:
+    """카메라 탐지 프로파일 저장(도메인·활성 이벤트). 도메인/이벤트는 정책에 대해 검증."""
+    pol = list_policies(policies_path)
+    profiles = pol.get("profiles", {})
+    if domain not in profiles:
+        raise ValueError(f"알 수 없는 도메인입니다: {domain} (허용: {', '.join(profiles)})")
+    valid = {e.get("name") for e in profiles[domain] if isinstance(e, dict)}
+    clean = [e for e in (enabled_events or []) if e in valid]
+    path = profiles_path or _CAMERA_PROFILES
+    cfg = _load_yaml(path)
+    cams = cfg.get("cameras")
+    if not isinstance(cams, dict):
+        cams = {}
+        cfg["cameras"] = cams
+    cam = cams.get(camera_id) if isinstance(cams.get(camera_id), dict) else {}
+    cam["domain"] = domain
+    cam["enabled_events"] = clean
+    cams[camera_id] = cam
+    _write_yaml(path, cfg)
+    return {"camera_id": camera_id, "domain": domain, "enabled_events": clean}
 
 
 def get_system_metrics() -> dict[str, Any]:

@@ -576,6 +576,69 @@ class TestModelDelete(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestCameraProfiles(unittest.TestCase):
+    """카메라 탐지 프로파일 — 읽기·도메인/이벤트 검증 저장·엔드포인트."""
+
+    def _setup(self, tmp):
+        import yaml
+        cp = Path(tmp) / "camera_profiles.yaml"
+        cp.write_text(yaml.safe_dump({"cameras": {
+            "cam_001": {"domain": "general", "enabled": True, "enabled_events": ["person_detected", "fire"]}
+        }}), encoding="utf-8")
+        pol = Path(tmp) / "event_policies.yaml"
+        pol.write_text(yaml.safe_dump({"profiles": {
+            "general": {"policies": {
+                "person_detected": {"enabled": True, "alert_level": "low"},
+                "fire": {"enabled": True, "alert_level": "critical"},
+                "fall": {"enabled": True, "alert_level": "high"},
+            }},
+            "construction": {"policies": {"no_helmet": {"enabled": True, "alert_level": "high"}}},
+        }}), encoding="utf-8")
+        return cp, pol
+
+    def test_get_profiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cp, _ = self._setup(tmp)
+            res = service.get_camera_profiles(profiles_path=cp)
+        self.assertEqual(res["cameras"]["cam_001"]["domain"], "general")
+        self.assertIn("fire", res["cameras"]["cam_001"]["enabled_events"])
+
+    def test_set_validates_and_filters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cp, pol = self._setup(tmp)
+            # construction으로 변경 + 잘못된 이벤트는 필터링
+            res = service.set_camera_profile("cam_001", "construction",
+                                             ["no_helmet", "person_detected"], profiles_path=cp, policies_path=pol)
+            self.assertEqual(res["domain"], "construction")
+            self.assertEqual(res["enabled_events"], ["no_helmet"])  # person_detected는 construction에 없어 제거
+            # 영속
+            self.assertEqual(service.get_camera_profiles(profiles_path=cp)["cameras"]["cam_001"]["domain"], "construction")
+
+    def test_set_unknown_domain_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cp, pol = self._setup(tmp)
+            with self.assertRaises(ValueError):
+                service.set_camera_profile("cam_001", "atlantis", [], profiles_path=cp, policies_path=pol)
+
+    def test_endpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cp, pol = self._setup(tmp)
+            client = TestClient(create_app())
+            with patch.object(service, "_CAMERA_PROFILES", cp), \
+                    patch.object(service, "_EVENT_POLICIES", pol), \
+                    patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+                h = {"X-API-Key": _KEY}
+                self.assertEqual(client.get("/api/camera-profiles", headers=h).json()["cameras"]["cam_001"]["domain"], "general")
+                r = client.put("/api/cameras/cam_001/profile", headers=h,
+                               json={"domain": "general", "enabled_events": ["fall"]})
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual(r.json()["enabled_events"], ["fall"])
+                self.assertEqual(client.put("/api/cameras/cam_001/profile", headers=h,
+                                            json={"domain": "nope", "enabled_events": []}).status_code, 400)
+                self.assertEqual(client.get("/api/camera-profiles").status_code, 401)
+
+
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
 class TestSystemInfo(unittest.TestCase):
     """시스템 상태 — 리소스 메트릭 스냅샷 + 헬스 컴포넌트."""
 

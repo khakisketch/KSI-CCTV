@@ -35,6 +35,13 @@ class EnabledBody(BaseModel):
     enabled: bool
 
 
+class CameraProfileBody(BaseModel):
+    """카메라 탐지 프로파일 저장 요청(도메인 + 활성 이벤트)."""
+
+    domain: str = Field(..., description="event_policies.yaml의 도메인 프로파일명")
+    enabled_events: list[str] = Field(default_factory=list)
+
+
 class AlertPrefsBody(BaseModel):
     """알림 환경설정 저장 요청(이메일 임계값 + 이벤트별 발송 on/off)."""
 
@@ -159,6 +166,25 @@ def create_app(
     def cameras() -> dict[str, Any]:
         items = service.list_cameras(app.state.config)
         return {"count": len(items), "cameras": items}
+
+    # ── 카메라 탐지 프로파일(도메인·이벤트 편집) ─────────────────────────
+    @app.get("/api/camera-profiles", tags=["cameras"], dependencies=auth)
+    def camera_profiles() -> dict[str, Any]:
+        return service.get_camera_profiles()
+
+    @app.put("/api/cameras/{camera_id}/profile", tags=["cameras"], dependencies=auth)
+    def set_camera_profile(camera_id: str, body: CameraProfileBody) -> dict[str, Any]:
+        try:
+            result = service.set_camera_profile(camera_id, body.domain, body.enabled_events)
+            service.write_audit(
+                "camera_profile_set",
+                camera=camera_id,
+                domain=body.domain,
+                event_count=len(result["enabled_events"]),
+            )
+            return result
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     # ── 모델 ─────────────────────────────────────────────────────────────
     @app.get("/api/models", tags=["models"], dependencies=auth)

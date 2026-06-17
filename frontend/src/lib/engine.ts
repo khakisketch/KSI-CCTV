@@ -142,3 +142,11 @@ export interface SystemInfo {
   health: { status?: string; components: HealthComponent[] };
 }
 export const getSystem = () => engineGet<SystemInfo>("/api/system");
+
+export interface CameraProfile {
+  domain?: string;
+  enabled?: boolean;
+  enabled_events: string[];
+}
+export const getCameraProfiles = () =>
+  engineGet<{ cameras: Record<string, CameraProfile> }>("/api/camera-profiles");

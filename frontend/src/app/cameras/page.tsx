@@ -1,15 +1,24 @@
 import { CameraLive } from "@/components/camera-live";
+import { CameraSettings } from "@/components/camera-settings";
 import { EngineStatus } from "@/components/engine-status";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getCameras } from "@/lib/engine";
+import { getCameraProfiles, getCameras, getPolicies } from "@/lib/engine";
 
 export const dynamic = "force-dynamic";
 
+type Ev = { name: string; alert_level?: string };
+
 export default async function CamerasPage() {
-  const res = await getCameras();
+  const [res, profilesRes, policiesRes] = await Promise.all([
+    getCameras(),
+    getCameraProfiles(),
+    getPolicies(),
+  ]);
   const connected = res !== null;
   const cameras = res?.cameras ?? [];
+  const profiles = profilesRes?.cameras ?? {};
+  const policyProfiles = (policiesRes?.profiles ?? {}) as Record<string, Ev[]>;
 
   return (
     <div className="space-y-6">
@@ -42,6 +51,14 @@ export default async function CamerasPage() {
                 {c.detection_type && <Badge variant="secondary">{c.detection_type}</Badge>}
                 <div className="truncate text-xs">{c.stream_url || "스트림 URL 미설정"}</div>
                 {c.id && <CameraLive cameraId={c.id} enabled={Boolean(c.enabled)} />}
+                {c.id && Object.keys(policyProfiles).length > 0 && (
+                  <CameraSettings
+                    cameraId={c.id}
+                    initialDomain={profiles[c.id]?.domain}
+                    initialEvents={profiles[c.id]?.enabled_events ?? []}
+                    policyProfiles={policyProfiles}
+                  />
+                )}
               </CardContent>
             </Card>
           ))}
