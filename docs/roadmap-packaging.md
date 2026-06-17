@@ -172,7 +172,7 @@ providers = [p for p in PREFERENCE[device] if p in available] or ["CPUExecutionP
 | **P3 (Windows 패키징)** | PyInstaller spec(데몬+대시보드), NSSM 서비스 래퍼, Inno Setup 스크립트, ARM64 빌드(QNN/CPU) | `packaging/windows/` | P1·P2 |
 | **P4 (오프라인 번들)** | wheelhouse·모델·Ollama blob 번들 절차, 저사양 프로파일 프리셋, 호스트 스펙 자동 감지 | `packaging/offline/`, `config/profiles/low_end.yaml` | P2 |
 | **P5 (VLM 옵션 확장)** | 외부서버 Ollama UI/문서, (선택)클라우드 VLM provider + PII 동의 게이트, 플랫폼별 VLM 기본 프리셋 | `vlm_inference.py` 분기, 문서 | ADR 확인 |
-| **P6 (macOS·CI)** | macOS .app/launchd, GitHub Actions 빌드 매트릭스(6 타깃), 서명/notarization | `.github/workflows/build-installers.yml` | P3 |
+| **P6 (macOS·빌드)** | macOS .app/launchd, 빌드 매트릭스(6 타깃 — **GitHub Actions 미사용**, 물리/로컬 빌드 머신 또는 비-GitHub CI), 서명/notarization | 타깃별 빌드 스크립트(`packaging/build/`) | P3 |
 | **P7 (문서·검증)** | OS별 설치 가이드, 업데이트/롤백 runbook, 각 타깃 실기 smoke(EP 실제 사용 로그 확인) | `docs/install/<os>.md` | 전체 |
 
 ---
@@ -206,7 +206,7 @@ providers = [p for p in PREFERENCE[device] if p in available] or ["CPUExecutionP
 - 클라우드 VLM provider(외부 API) 추가 여부 — ADR-0001이 'PII 외부전송 금지·외부 SaaS 미사용'을 명시하므로, '외부서버 선택' 목표가 (a)외부 Ollama 서버만 허용인지 (b)클라우드 API까지인지 product owner 확정 필요. 후자면 동의 게이트·법적 검토 필요
 - 오픈-vocab 탐지(YOLO-World/YOLOE)를 실제 번들 모델로 채택할지 — GPL/AGPL 라이선스가 상업 설치형과 양립 불가. enterprise license 구매 vs 별도 open-vocab 담당 영역과 경계 정리 필요
 - 런타임 번들에서 torch 분리 가능 여부 — ultralytics가 ONNX 추론 경로에서도 torch를 import하는지 실측 필요(현 코드는 yolo_detector가 onnxruntime만 직접 쓰지만 ultralytics 패키지 자체가 requirements에 있음)
-- PyInstaller로 onnxruntime+opencv+ultralytics 번들 시 실제 동작/용량 — DLL 수집 이슈(--collect-all onnxruntime) 실기 검증, 6개 타깃 빌드 인프라(CI 러너 macOS/Windows ARM64 가용성) 확보 여부
+- PyInstaller로 onnxruntime+opencv+ultralytics 번들 시 실제 동작/용량 — DLL 수집 이슈(--collect-all onnxruntime) 실기 검증, 6개 타깃 빌드 인프라(**GitHub Actions 미사용** → 물리 머신/비-GitHub CI로 macOS·Windows ARM64 빌드 확보) 여부
 - Windows ARM64 실기 검증 — onnxruntime-qnn NPU 가속이 YOLO ONNX 모델에서 실제 동작하는지, Snapdragon 타깃 고객이 실재하는지(투자 우선순위 판단)
 - 코드 서명/공증 정책 — Windows SmartScreen(Authenticode 인증서), macOS notarization 비용·절차 — 비기술 고객 더블클릭 설치의 경고 회피에 필수
 
