@@ -35,6 +35,13 @@ class EnabledBody(BaseModel):
     enabled: bool
 
 
+class AlertPrefsBody(BaseModel):
+    """알림 환경설정 저장 요청(이메일 임계값 + 이벤트별 발송 on/off)."""
+
+    email_alert_level_threshold: str = Field(..., description="low/medium/high/critical")
+    per_event_email_enabled: dict[str, bool] = Field(default_factory=dict)
+
+
 def create_app(
     config: Any | None = None,
     pipeline: Any | None = None,
@@ -168,6 +175,26 @@ def create_app(
     @app.get("/api/config", tags=["config"], dependencies=auth)
     def config_view() -> dict[str, Any]:
         return service.config_sanitized(app.state.config)
+
+    # ── 알림 환경설정(읽기/저장) ─────────────────────────────────────────
+    @app.get("/api/alert-preferences", tags=["settings"], dependencies=auth)
+    def alert_prefs_get() -> dict[str, Any]:
+        return service.get_alert_preferences()
+
+    @app.put("/api/alert-preferences", tags=["settings"], dependencies=auth)
+    def alert_prefs_put(body: AlertPrefsBody) -> dict[str, Any]:
+        try:
+            result = service.set_alert_preferences(
+                body.email_alert_level_threshold, body.per_event_email_enabled
+            )
+            service.write_audit(
+                "alert_preferences_saved",
+                threshold=body.email_alert_level_threshold,
+                enabled_count=result["enabled_count"],
+            )
+            return result
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     # ── 캡처 이미지 갤러리(이벤트 캡처 — PII라 인증 필수) ─────────────────
     @app.get("/api/captures", tags=["captures"], dependencies=auth)

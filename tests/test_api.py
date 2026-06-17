@@ -576,6 +576,52 @@ class TestModelDelete(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestAlertPreferences(unittest.TestCase):
+    """알림 환경설정 — 읽기 기본값·저장 검증·임계값 검증·엔드포인트."""
+
+    def test_get_defaults_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "alert_preferences.yaml"
+            prefs = service.get_alert_preferences(prefs_path=p)
+        self.assertEqual(prefs["email_alert_level_threshold"], "medium")
+        self.assertEqual(prefs["per_event_email_enabled"], {})
+
+    def test_set_and_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "alert_preferences.yaml"
+            res = service.set_alert_preferences("high", {"fire": True, "person_detected": False}, prefs_path=p)
+            self.assertEqual(res["enabled_count"], 1)
+            got = service.get_alert_preferences(prefs_path=p)
+        self.assertEqual(got["email_alert_level_threshold"], "high")
+        self.assertEqual(got["per_event_email_enabled"], {"fire": True, "person_detected": False})
+
+    def test_set_invalid_threshold_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "alert_preferences.yaml"
+            with self.assertRaises(ValueError):
+                service.set_alert_preferences("urgent", {}, prefs_path=p)
+
+    def test_endpoint_get_put(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "alert_preferences.yaml"
+            client = TestClient(create_app())
+            with patch.object(service, "_ALERT_PREFS", p), patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+                h = {"X-API-Key": _KEY}
+                self.assertEqual(client.get("/api/alert-preferences", headers=h).json()["email_alert_level_threshold"], "medium")
+                r = client.put("/api/alert-preferences", headers=h,
+                               json={"email_alert_level_threshold": "critical", "per_event_email_enabled": {"fire": True}})
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual(r.json()["email_alert_level_threshold"], "critical")
+                # 영속 확인
+                self.assertEqual(client.get("/api/alert-preferences", headers=h).json()["per_event_email_enabled"], {"fire": True})
+                # 잘못된 임계값 → 400
+                self.assertEqual(client.put("/api/alert-preferences", headers=h,
+                                            json={"email_alert_level_threshold": "x"}).status_code, 400)
+                # 미인증 → 401
+                self.assertEqual(client.get("/api/alert-preferences").status_code, 401)
+
+
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
 class TestAudit(unittest.TestCase):
     """감사 로그 — write/list 라운드트립·마스킹·엔드포인트·쓰기엔드포인트 자동 기록."""
 

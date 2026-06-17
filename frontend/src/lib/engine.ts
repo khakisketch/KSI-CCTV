@@ -113,3 +113,9 @@ export interface AuditEntry {
 }
 export const getAudit = (limit = 200) =>
   engineGet<{ count: number; entries: AuditEntry[] }>(`/api/audit?limit=${limit}`);
+
+export interface AlertPreferences {
+  email_alert_level_threshold: string;
+  per_event_email_enabled: Record<string, boolean>;
+}
+export const getAlertPreferences = () => engineGet<AlertPreferences>("/api/alert-preferences");

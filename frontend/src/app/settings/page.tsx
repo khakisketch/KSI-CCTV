@@ -1,8 +1,21 @@
+import { AlertSettings } from "@/components/alert-settings";
 import { EngineStatus } from "@/components/engine-status";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getConfig } from "@/lib/engine";
+import { getAlertPreferences, getConfig, getPolicies } from "@/lib/engine";
 
 export const dynamic = "force-dynamic";
+
+type PolicyEvent = { name?: string; alert_level?: string };
+
+function deriveEvents(policies: { profiles?: Record<string, unknown> } | null) {
+  const seen = new Map<string, string>(); // name → alert_level
+  for (const list of Object.values(policies?.profiles ?? {})) {
+    for (const e of (list as PolicyEvent[]) ?? []) {
+      if (e?.name && !seen.has(e.name)) seen.set(e.name, e.alert_level ?? "");
+    }
+  }
+  return [...seen].map(([name, alert_level]) => ({ name, alert_level }));
+}
 
 function Section({ title, data }: { title: string; data: Record<string, unknown> }) {
   return (
@@ -27,8 +40,9 @@ function Section({ title, data }: { title: string; data: Record<string, unknown>
 }
 
 export default async function SettingsPage() {
-  const cfg = await getConfig();
+  const [cfg, prefs, policies] = await Promise.all([getConfig(), getAlertPreferences(), getPolicies()]);
   const connected = cfg !== null;
+  const events = deriveEvents(policies);
 
   return (
     <div className="space-y-6">
@@ -37,8 +51,19 @@ export default async function SettingsPage() {
         <EngineStatus connected={connected} />
       </div>
       <p className="text-sm text-muted-foreground" style={{ wordBreak: "keep-all" }}>
-        엔진 운영 설정(읽기 전용 — 편집은 다음 단계). 시크릿은 마스킹되어 표시됩니다.
+        알림 설정은 편집·저장할 수 있습니다. 엔진 운영 설정은 읽기 전용이며 시크릿은 마스킹됩니다.
       </p>
+
+      {connected && prefs && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">알림 설정</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <AlertSettings initial={prefs} events={events} />
+          </CardContent>
+        </Card>
+      )}
 
       {!connected ? (
         <Card>

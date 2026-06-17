@@ -25,6 +25,8 @@ _ROOT = Path(__file__).resolve().parents[2]
 _MODEL_PROFILES = _ROOT / "config" / "model_profiles.yaml"
 _EVENT_POLICIES = _ROOT / "config" / "event_policies.yaml"
 _CAPTURES_DIR = _ROOT / "data" / "captures"
+_ALERT_PREFS = _ROOT / "config" / "alert_preferences.yaml"
+_ALERT_LEVELS = ("low", "medium", "high", "critical")
 _DATE_RE = re.compile(r"^\d{8}$")  # YYYYMMDD
 _SAFE_SEG = re.compile(r"^[A-Za-z0-9._-]+$")  # 카메라/파일명(슬래시·.. 불허)
 # 감사 로그(JSONL) — Streamlit 대시보드와 동일 파일을 공유해 단일 감사 트레일을 만든다.
@@ -485,6 +487,44 @@ def read_capture_image(
         except Exception:
             return None
     return data
+
+
+def get_alert_preferences(prefs_path: Path | None = None) -> dict[str, Any]:
+    """알림 환경설정 읽기(이메일 임계값 + 이벤트별 발송 on/off). SMTP 비밀은 env 전용이라 미포함."""
+    cfg = _load_yaml(prefs_path or _ALERT_PREFS)
+    threshold = cfg.get("email_alert_level_threshold", "medium")
+    if threshold not in _ALERT_LEVELS:
+        threshold = "medium"
+    per = cfg.get("per_event_email_enabled", {})
+    if not isinstance(per, dict):
+        per = {}
+    return {
+        "email_alert_level_threshold": threshold,
+        "per_event_email_enabled": {str(k): bool(v) for k, v in per.items()},
+    }
+
+
+def set_alert_preferences(
+    threshold: str, per_event: dict[str, Any], prefs_path: Path | None = None
+) -> dict[str, Any]:
+    """알림 환경설정 저장(검증 후 yaml). SMTP 비밀은 다루지 않는다(env). 주석은 safe_dump로 소실(ruamel 후속)."""
+    if threshold not in _ALERT_LEVELS:
+        raise ValueError(f"임계값은 {', '.join(_ALERT_LEVELS)} 중 하나여야 합니다.")
+    if not isinstance(per_event, dict):
+        raise ValueError("per_event_email_enabled는 객체(맵)여야 합니다.")
+    clean = {str(k)[:128]: bool(v) for k, v in per_event.items()}
+    if len(clean) > 500:
+        raise ValueError("이벤트 항목이 너무 많습니다(최대 500).")
+    path = prefs_path or _ALERT_PREFS
+    cfg = _load_yaml(path)  # 다른 키 보존(SMTP 주석은 소실 — 알려진 한계)
+    cfg["email_alert_level_threshold"] = threshold
+    cfg["per_event_email_enabled"] = clean
+    _write_yaml(path, cfg)
+    return {
+        "email_alert_level_threshold": threshold,
+        "per_event_email_enabled": clean,
+        "enabled_count": sum(1 for v in clean.values() if v),
+    }
 
 
 def config_sanitized(config: Any) -> dict[str, Any]:
