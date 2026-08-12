@@ -8,18 +8,27 @@ DGX Spark 기반 지능형 CCTV 안전 관제 시스템.
 
 | 문서 | 내용 |
 |---|---|
+| **`docs/release-gate.md`** | **출고 승인 기준 SSOT** — Advanced-AI v1 범위, 소프트웨어 CI와 실장비 증적의 독립 게이트. "완료/출고 가능"을 판단할 땐 여기가 우선한다 |
+| `docs/internal-ci.md` | 차단형 게이트 실행 절차와 필수 증적 |
+| `docs/offline-appliance.md` | 서명 오프라인 번들 생성·설치·복구 |
 | `docs/architecture.md` | 목표 아키텍처(MultiModelRegistry → EventPolicyEngine → VLM Dispatcher) |
 | `docs/project-definition.md` | 제품 비전 및 카메라별 프로파일 원칙 |
 | `docs/event-policy-engine.md` | 이벤트 정책 엔진 설계(trigger/rule/vlm/alert 흐름) |
 | `docs/model-management.md` | 기본 모델 vs 사용자 업로드 모델 관리 전략 |
 | `docs/adr/0001-multi-model-policy-architecture.md` | 다중 모델 + 정책 아키텍처 결정 기록 |
 
+> `docs/completion-plan.md`·`docs/delivery-checklist.md`·`docs/implementation-plan.md`·`.ai/*`는
+> **역사적 기록**이다. 과거 체크박스의 완료 표시는 출고 승인을 뜻하지 않는다.
+
 ## "완료" 게이트 — 모두 통과해야 함
 
 ```bash
-pip install pytest        # pytest는 dev 전용 — 런타임 requirements.txt에 없음(최초 1회만)
-python3 -m pytest tests/
+pip install -r requirements-dev.txt        # pytest·ruff·mypy·pip-audit (최초 1회)
+python3 -B -m pytest tests/ -p no:cacheprovider
 ```
+
+> `-B -p no:cacheprovider`를 붙여라. 그냥 `pytest`로 돌리면 `src/**/__pycache__`가 생기고,
+> 릴리스 게이트가 "production Docker context에 ignored 파일이 있다"며 실행 전에 차단된다.
 
 **웹 콘솔(`frontend/`) 변경 시 추가 게이트:**
 

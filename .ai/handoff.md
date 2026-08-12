@@ -1,4 +1,26 @@
-# Latest Build Handoff
+# 빌드 핸드오프 기록 (역사적 · 2026-08-12 기준 갱신)
+
+> **⚠️ 이 파일의 아래 내용은 대부분 Streamlit 대시보드 시절(2026-06-17 폐기) 기록이다.**
+> `src/dashboard`·`run_dashboard.sh`는 존재하지 않는다. "대시보드"라 적힌 항목은 전부
+> 지금의 Next.js 웹 콘솔(`frontend/`)로 이관·대체됐다.
+>
+> 현재 상태를 알고 싶으면 아래를 보지 말고 이쪽을 봐라:
+> - **`docs/release-gate.md`** — 출고 승인 기준 SSOT
+> - `.ai/plan.md` 상단 — 현행 마일스톤(Advanced-AI v1)
+> - `git log` — 실제 구현 이력
+>
+> ## 2026-08-12 현재 요약
+>
+> - 테스트 1001 passed / 5 skipped, 웹 콘솔 빌드 통과
+> - 신규 서브시스템 커밋 완료: durable SQLite 이벤트 저장소, ByteTrack 추적,
+>   pose/ST-GCN 경로(모델 파일 대기·기본 비활성), 카메라 온보딩·ONVIF 탐색·zone,
+>   현장 커미셔닝, 사건 처리, 오프라인 어플라이언스 설치·서명 번들
+> - VLM verification fail-open(`unverified` alert) 구현·테스트 완료
+> - 남은 블로커: pose/ST-GCN 모델 파일과 라이선스, 실장비(DGX Spark ARM64) 검증 전 항목
+
+---
+
+# Latest Build Handoff (아래부터 역사적 기록)
 
 ## Phase 10 M0 — Policy-mode 실행 경로 복구 + 통합 정확성 정리 (완료 ✅)
 
