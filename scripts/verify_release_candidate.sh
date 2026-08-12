@@ -255,4 +255,10 @@ printf '%s\n' '[7/9] Frontend unit/build gate'
 )
 
 printf '%s\n' '[9/9] Release contract regression coverage included in Python suite'
-printf '%s\n' 'PASS: runner-neutral developer baseline completed; only --strict is release evidence.'
+# 실행 모드를 그대로 말한다. 두 경우에 같은 문구를 내면 보관된 로그만 보고
+# strict 실행을 개발용 실행으로 오해한다(증적 판독 오류).
+if [ "$STRICT" -eq 1 ]; then
+    printf '%s\n' 'PASS: --strict gate completed; retain this log and reports/release-candidate/ as release evidence.'
+else
+    printf '%s\n' 'PASS: runner-neutral developer baseline completed; only --strict is release evidence.'
+fi
