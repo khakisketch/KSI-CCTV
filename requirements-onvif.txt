@@ -1,0 +1,3 @@
+# Optional installer bundle for authenticated ONVIF media profile discovery.
+# Keep separate so core/headless installs can run without Zeep/lxml.
+onvif-zeep==0.2.12
