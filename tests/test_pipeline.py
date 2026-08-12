@@ -1550,3 +1550,162 @@ class TestPipelineVlmWiringBatch2(unittest.TestCase):
 
         not_required = self._event(vlm_needed=False)
         self.assertFalse(not_required.vlm_unconfirmed)
+
+
+@unittest.skipUnless(HAS_RUNTIME_DEPS, "requirements.txt 의존성 설치 후 실행 가능")
+class TestVlmFailOpenContract(unittest.TestCase):
+    """VLM 검증 실패는 절대 이벤트를 억제하지 않는다 — docs/release-gate.md 요구.
+
+    provider·timeout·파싱 실패 어느 쪽이든 후보 이벤트는 남아야 하며,
+    상태는 unverified, 알림 상태도 unverified가 된다. 이 계약이 깨지면
+    현장에서 위험 상황이 조용히 사라진다.
+    """
+
+    # (reason, 이 reason에서 함께 올라가야 할 lifecycle 카운터 이름)
+    FAIL_REASONS = (
+        ("VLM_EMPTY", None),
+        ("NO_VLM", None),
+        ("MALFORMED", "malformed"),
+        ("VLM_INCONCLUSIVE", None),
+        ("PROVIDER_UNAVAILABLE", "provider_down"),
+        ("INSUFFICIENT_FRAMES", "insufficient_frames"),
+        ("SUBMIT_ERROR", None),
+        ("FORCED_SHUTDOWN", "timeout"),
+        ("QUEUE_DROP", "queue_drop"),
+        ("TIMEOUT", "timeout"),
+    )
+
+    def _event(self, **kw):
+        base = {
+            "event_id": "e1",
+            "camera_id": "cam_001",
+            "event_type": "fire",
+            "timestamp": __import__("datetime").datetime.now(),
+            "confidence": 0.8,
+            "image": np.zeros((10, 10, 3), dtype=np.uint8),
+        }
+        base.update(kw)
+        return SafetyEvent(**base)
+
+    def test_every_failure_reason_fails_open_to_unverified(self):
+        for reason, counter in self.FAIL_REASONS:
+            with self.subTest(reason=reason):
+                pipeline = SafetyPipeline(detector=Mock())
+                event = self._event(vlm_needed=True, verification_required=True,
+                                    verification_state="pending")
+
+                pipeline._finalize_verification(event, "unverified", reason)
+
+                # 이벤트가 억제되지 않고 unverified로 남는다
+                self.assertEqual(event.verification_state, "unverified")
+                self.assertEqual(event.alert_state, "unverified")
+                self.assertEqual(event.verification_reason_codes, [reason])
+                self.assertEqual(event.verification_summary["reason"], reason)
+                # 미확인 이벤트로 집계된다
+                self.assertEqual(pipeline._vlm_lifecycle_counts["unverified"], 1)
+                if counter:
+                    self.assertEqual(
+                        pipeline._vlm_lifecycle_counts[counter], 1,
+                        f"{reason}은 {counter} 카운터도 올려야 한다",
+                    )
+
+    def test_malformed_vlm_response_does_not_drop_the_event(self):
+        """파싱 실패(깨진 JSON)가 이벤트를 지우지 않는지 — 실 provider 실패 재현."""
+        from src.vlm.vlm_inference import VLMAnalysisResult
+
+        pipeline = SafetyPipeline(detector=Mock())
+        event = self._event(vlm_needed=True, verification_required=True,
+                            verification_mode="single", verification_state="pending",
+                            verification_quorum=1)
+
+        pipeline._apply_verification_results(
+            event, [VLMAnalysisResult(verdict="error", parse_success=False)]
+        )
+
+        self.assertEqual(event.verification_state, "unverified")
+        self.assertEqual(event.verification_reason_codes, ["MALFORMED"])
+        self.assertEqual(pipeline._vlm_lifecycle_counts["malformed"], 1)
+
+    def test_inconclusive_quorum_does_not_drop_the_event(self):
+        """정족수 미달(판단 유보)도 이벤트를 남긴다."""
+        from src.vlm.vlm_inference import VLMAnalysisResult
+
+        pipeline = SafetyPipeline(detector=Mock())
+        event = self._event(vlm_needed=True, verification_required=True,
+                            verification_mode="three_frame", verification_state="pending",
+                            verification_quorum=2)
+
+        pipeline._apply_verification_results(
+            event,
+            [VLMAnalysisResult(verdict="abstain"), VLMAnalysisResult(verdict="abstain")],
+        )
+
+        self.assertEqual(event.verification_state, "unverified")
+        self.assertEqual(event.verification_reason_codes, ["VLM_INCONCLUSIVE"])
+
+    def test_provider_failure_is_not_reported_as_malformed(self):
+        """provider 장애를 '응답 형식 오류'로 보고하면 엉뚱한 곳을 조사하게 된다."""
+        from src.vlm.vlm_inference import VLMAnalysisResult
+
+        cases = [
+            ("provider_unavailable", "PROVIDER_UNAVAILABLE", "provider_down"),
+            ("timeout", "TIMEOUT", "timeout"),
+            ("malformed", "MALFORMED", "malformed"),
+            ("input_rejected", "INPUT_REJECTED", None),
+        ]
+        for kind, expected_reason, counter in cases:
+            with self.subTest(failure_kind=kind):
+                pipeline = SafetyPipeline(detector=Mock())
+                event = self._event(vlm_needed=True, verification_required=True,
+                                    verification_mode="single", verification_state="pending",
+                                    verification_quorum=1)
+
+                pipeline._apply_verification_results(event, [
+                    VLMAnalysisResult(verdict="error", parse_success=False, failure_kind=kind)
+                ])
+
+                self.assertEqual(event.verification_state, "unverified")
+                self.assertEqual(event.verification_reason_codes, [expected_reason])
+                if counter:
+                    self.assertEqual(pipeline._vlm_lifecycle_counts[counter], 1)
+
+    def test_mixed_failures_report_the_operator_actionable_cause_first(self):
+        """provider 장애와 형식 오류가 섞이면 provider 장애를 먼저 알린다."""
+        from src.vlm.vlm_inference import VLMAnalysisResult
+
+        pipeline = SafetyPipeline(detector=Mock())
+        event = self._event(vlm_needed=True, verification_required=True,
+                            verification_mode="three_frame", verification_state="pending",
+                            verification_quorum=2)
+
+        pipeline._apply_verification_results(event, [
+            VLMAnalysisResult(verdict="error", parse_success=False, failure_kind="malformed"),
+            VLMAnalysisResult(verdict="error", parse_success=False, failure_kind="provider_unavailable"),
+        ])
+
+        self.assertEqual(event.verification_reason_codes, ["PROVIDER_UNAVAILABLE"])
+
+    def test_failure_without_kind_keeps_the_previous_malformed_reason(self):
+        """실패 종류를 안 보내는 provider도 기존대로 동작한다(하위호환)."""
+        from src.vlm.vlm_inference import VLMAnalysisResult
+
+        pipeline = SafetyPipeline(detector=Mock())
+        event = self._event(vlm_needed=True, verification_required=True,
+                            verification_mode="single", verification_state="pending",
+                            verification_quorum=1)
+
+        pipeline._apply_verification_results(
+            event, [VLMAnalysisResult(verdict="error", parse_success=False)]
+        )
+
+        self.assertEqual(event.verification_reason_codes, ["MALFORMED"])
+
+    def test_unverified_event_is_still_flagged_as_unconfirmed(self):
+        """unverified 이벤트는 '확인 안 됨'으로 표시돼 운영자가 놓치지 않는다."""
+        pipeline = SafetyPipeline(detector=Mock())
+        event = self._event(vlm_needed=True, verification_required=True,
+                            verification_state="pending")
+
+        pipeline._finalize_verification(event, "unverified", "PROVIDER_UNAVAILABLE")
+
+        self.assertTrue(event.vlm_unconfirmed)

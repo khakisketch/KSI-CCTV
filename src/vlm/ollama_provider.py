@@ -142,6 +142,7 @@ class OllamaProvider(VLMProvider):
             description="VLM 모델 자격 확인 실패",
             parse_success=False,
             verdict=VerificationVerdict.ERROR,
+            failure_kind="provider_unavailable",
         )
 
     def capabilities(self) -> dict[str, Any]:
@@ -152,7 +153,8 @@ class OllamaProvider(VLMProvider):
         """Analyze bounded ordered frames within one total deadline."""
         if not image_bytes or len(image_bytes) > self.max_images or sum(map(len, image_bytes)) > self.max_total_bytes:
             return [VLMAnalysisResult(description="VLM input limit exceeded", parse_success=False,
-                                      verdict=VerificationVerdict.ERROR)]
+                                      verdict=VerificationVerdict.ERROR,
+                                      failure_kind="input_rejected")]
         if self.model_digest and not self.is_available():
             return [self._qualification_failure() for _ in image_bytes]
         deadline = time.monotonic() + self.timeout_sec
@@ -216,7 +218,8 @@ class OllamaProvider(VLMProvider):
         logger.error("VLM analysis failed: %s", type(last_error).__name__)
         # 메트릭 기록 (실패)
         self._record_failure(inference_time_ms, type(last_error).__name__)
-        if isinstance(last_error, (TimeoutError, requests.Timeout)):
+        timed_out = isinstance(last_error, (TimeoutError, requests.Timeout))
+        if timed_out:
             with self._metrics_lock:
                 self._metrics["timeout_count"] += 1
         with self._metrics_lock:
@@ -227,6 +230,7 @@ class OllamaProvider(VLMProvider):
             inference_time_ms=round(inference_time_ms, 1),
             parse_success=False,
             verdict=VerificationVerdict.ERROR,
+            failure_kind="timeout" if timed_out else "provider_unavailable",
         )
 
     @staticmethod
@@ -381,4 +385,5 @@ class OllamaProvider(VLMProvider):
             raw_response=raw_excerpt,
             parse_success=False,
             verdict=VerificationVerdict.ERROR,
+            failure_kind="malformed",
         )

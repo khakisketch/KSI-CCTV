@@ -697,9 +697,35 @@ class SafetyPipeline:
         elif event.reject_count >= event.verification_quorum and event.metadata.get("verification_allow_reject", False):
             self._finalize_verification(event, "rejected", "VLM_REJECT")
         elif event.error_count:
-            self._finalize_verification(event, "unverified", "MALFORMED")
+            self._finalize_verification(event, "unverified", self._failure_reason(results))
         else:
             self._finalize_verification(event, "unverified", "VLM_INCONCLUSIVE")
+
+    # provider가 구분해 보낸 실패 종류 → 이벤트 사유 코드.
+    # 미상(구형 provider·미설정)이면 기존 동작대로 MALFORMED로 둔다.
+    _FAILURE_REASON_BY_KIND = {
+        "provider_unavailable": "PROVIDER_UNAVAILABLE",
+        "timeout": "TIMEOUT",
+        "malformed": "MALFORMED",
+        "input_rejected": "INPUT_REJECTED",
+    }
+
+    def _failure_reason(self, results: list[Any]) -> str:
+        """실패 결과들의 실패 종류를 사유 코드로 옮긴다.
+
+        종류가 섞이면 운영자가 먼저 손봐야 할 쪽(provider 장애 > 타임아웃 >
+        입력 거부 > 응답 형식)을 우선한다. provider가 죽었는데 "응답 형식 오류"로
+        보고하면 엉뚱한 곳을 조사하게 된다.
+        """
+        kinds = {
+            getattr(item, "failure_kind", "")
+            for item in results
+            if not getattr(item, "parse_success", False) or getattr(item, "verdict", "") == "error"
+        }
+        for kind in ("provider_unavailable", "timeout", "input_rejected", "malformed"):
+            if kind in kinds:
+                return self._FAILURE_REASON_BY_KIND[kind]
+        return "MALFORMED"
 
     def _fire_alert_callbacks(
         self, event: SafetyEvent, callbacks: list[Callable[[SafetyEvent], bool | None]] | None

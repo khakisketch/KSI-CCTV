@@ -35,6 +35,11 @@ class VLMAnalysisResult:
     raw_response: str = ""  # 원본 응답 (파싱 실패 시 디버깅용)
     parse_success: bool = True  # JSON 파싱 성공 여부
     verdict: str = VerificationVerdict.ABSTAIN  # 검증 판정
+    # 실패 원인 구분. 빈 문자열이면 실패가 아니다.
+    # provider_unavailable(연결/자격 실패) · timeout(마감 초과) · malformed(응답 파싱 실패)
+    # · input_rejected(입력 한도 초과). 이게 없으면 provider 장애가 운영자에게
+    # "응답 형식 오류"로 잘못 보고돼 엉뚱한 곳을 조사하게 된다.
+    failure_kind: str = ""
 
     def to_dict(self):
         return {
@@ -46,6 +51,7 @@ class VLMAnalysisResult:
             "inference_time_ms": self.inference_time_ms,
             "parse_success": self.parse_success,
             "verdict": self.verdict,
+            "failure_kind": self.failure_kind,
         }
 
 
