@@ -9,6 +9,12 @@
 *.weights
 models/backup/
 data/captures/
+data/outbox/
+# 런타임 SQLite 이벤트/사건 저장소 — 코드가 만드는 산출물이지 소스가 아님
+# (-shm/-wal은 WAL 모드 동반 파일)
+data/*.db
+data/*.db-shm
+data/*.db-wal
 logs/
 models/uploaded/
 reports/
@@ -61,3 +67,6 @@ desktop.ini
 *.y4m
 *.nut
 backups/
+frontend/playwright-report/
+frontend/test-results/
+frontend/data/
