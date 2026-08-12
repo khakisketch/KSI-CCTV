@@ -3,7 +3,8 @@
 # 차단형: lint·테스트 실패 시 비0으로 종료한다(가짜 초록불 방지).
 #   - ruff lint  : 차단 (위반 시 exit 1)
 #   - pytest     : 차단 (실패 시 exit 1, 캐시 우회로 가짜 green 방지)
-#   - coverage   : pytest-cov 있으면 리포트(현재 임계 미설정 — 측정 후 도입)
+#   - shell syntax: 배포/검증 스크립트의 bash 파싱 오류 차단
+#   - coverage   : pytest-cov 있으면 50% 하한으로 차단
 #   - mypy       : advisory(비차단) — 미타입 레거시 점진 도입
 set -euo pipefail
 
@@ -31,33 +32,34 @@ if [ -z "$RUFF_BIN" ]; then
     exit 1
 fi
 log_info "Ruff lint (차단)..."
-"$RUFF_BIN" check src/ tests/ scripts/
+"$RUFF_BIN" check src/ tests/ scripts/ installer/
 
-# ── 2) 단위 테스트 (차단, 캐시 우회) ──────────────────────────────────────────
-# tail 파이프로 종료코드를 가리지 않는다(파이프 마지막 명령의 코드가 새므로 분리 실행).
-log_info "pytest (차단, 캐시 우회)..."
-python -B -m pytest tests/ -q -p no:cacheprovider
+# ── 2) Shell syntax (차단) ───────────────────────────────────────────────────
+log_info "Bash syntax (차단)..."
+for script in scripts/*.sh; do
+    bash -n "$script"
+done
 
-# ── 3) 커버리지 (pytest-cov 있을 때 차단) ─────────────────────────────────────
+# ── 3) 단위 테스트/커버리지 (차단, 캐시 우회) ─────────────────────────────────
 if python -c "import pytest_cov" 2>/dev/null; then
-    # 실측 기준 src 전체 ~56%(핵심 로직 모듈은 ~90%, dashboard UI는 13%로 전체를 낮춤 —
-    # UI는 브라우저 검증 영역). 회귀 방지용 보수적 하한 50%를 차단 게이트로 둔다.
-    log_info "커버리지 (차단, 하한 50%)..."
+    log_info "pytest + 커버리지 (차단, 하한 50%)..."
     python -B -m pytest tests/ -q -p no:cacheprovider \
         --cov=src --cov-report=term-missing --cov-fail-under=50
 else
-    log_warn "pytest-cov 미설치 — 커버리지 게이트 미실행 (pip install -r requirements-dev.txt)."
+    log_warn "pytest-cov 미설치 — 커버리지 없이 pytest만 실행합니다 (pip install -r requirements-dev.txt 권장)."
+    python -B -m pytest tests/ -q -p no:cacheprovider
 fi
 
 # ── 4) mypy (advisory, 비차단) ────────────────────────────────────────────────
 MYPY_BIN="$(command -v mypy || true)"
 if [ -n "$MYPY_BIN" ]; then
     log_info "mypy 타입 검사 (advisory, 비차단)..."
-    "$MYPY_BIN" src/ || log_warn "mypy 타입 경고 발견 — 점진 해소 대상(게이트 차단 아님)."
+    "$MYPY_BIN" src/api src/storage installer || log_warn "mypy 타입 경고 발견 — 점진 해소 대상(게이트 차단 아님)."
 else
     log_warn "mypy 미설치 — 타입 점검 생략 (pip install -r requirements-dev.txt)."
 fi
 
 log_info "============================================"
 log_info "✅ 차단 게이트(lint + pytest) 통과"
+log_info "Release candidate 전체 게이트: bash scripts/verify_release_candidate.sh --strict"
 log_info "============================================"

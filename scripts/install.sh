@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# KSI-CCTV 설치 스크립트 (Phase 4)
-# Ubuntu/Debian 기반 시스템에서 KSI-CCTV를 설치하고 systemd 서비스로 등록합니다.
+# DEVELOPMENT/LAB ONLY: 저장소 체크아웃에서 의존성을 설치하는 개발 도구입니다.
+# 운영 납품은 서명된 오프라인 Appliance만 사용합니다(docs/offline-appliance.md).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,7 +58,7 @@ pip install -r requirements.txt -q
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
     log_info "NVIDIA GPU 감지 — onnxruntime-gpu로 교체 시도..."
     pip uninstall -y onnxruntime -q || true
-    if ! pip install -q onnxruntime-gpu; then
+    if ! pip install -q "onnxruntime-gpu==1.20.1"; then
         log_warn "onnxruntime-gpu 설치 실패(ARM64 휠 부재 가능) — CPU onnxruntime로 폴백합니다."
         pip install -q "onnxruntime==1.20.1"
     fi
@@ -142,12 +142,13 @@ log_info "============================================"
 log_info "KSI-CCTV 설치 완료!"
 log_info "============================================"
 log_info ""
-log_info "다음 단계:"
+log_warn "이 스크립트와 생성된 systemd 서비스는 개발/랩 용도입니다. 운영 납품에 사용하지 마세요."
+log_info "다음 단계(개발/랩):"
 log_info "  1. .env 파일 편집: nano .env"
-log_info "     (KSI_CCTV_DASHBOARD_PASSWORD 를 반드시 변경하세요)"
-log_info "  2. 카메라 설정 편집: nano config/cameras.json"
-log_info "  3. 배포 readiness 점검: python3 scripts/healthcheck.py"
-log_info "  4. 대시보드 실행: ./scripts/run_dashboard.sh"
+log_info "     (KSI_CCTV_API_KEY와 KSI_CCTV_WEB_PASSWORD를 반드시 변경하세요)"
+log_info "  2. 로컬 웹 콘솔 실행: bash scripts/run_web.sh"
+log_info "  3. 웹 콘솔에서 카메라 등록 및 readiness 확인"
+log_info "  4. 배포 점검: python3 scripts/healthcheck.py"
 log_info ""
-log_info "문서: docs/"
+log_info "운영 Appliance: docs/offline-appliance.md"
 log_info "============================================"

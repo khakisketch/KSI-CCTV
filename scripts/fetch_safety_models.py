@@ -132,7 +132,9 @@ def _export_to_onnx(pt_path: Path, output_path: Path, imgsz: int = 640, half: bo
         logger.info("Loading %s ...", pt_path)
         model = YOLO(str(pt_path))
         logger.info("Exporting to ONNX (imgsz=%s, half=%s) ...", imgsz, half)
-        model.export(format="onnx", imgsz=imgsz, half=half, simplify=True)
+        # Appliance inference is fixed at 640x640. Dynamic shape graphs leave Range/Shape
+        # nodes on the CPU EP, so make the deployment contract explicit.
+        model.export(format="onnx", imgsz=imgsz, half=half, dynamic=False, simplify=True, opset=18)
         # Export creates a file next to the .pt with .onnx extension
         expected = pt_path.with_suffix(".onnx")
         if expected.exists():

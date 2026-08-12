@@ -1,9 +1,12 @@
-# 기본 `docker compose up`은 무인 탐지 데몬(ksi-cctv)만 실행한다(24시간 탐지·알람·헬스).
+# 기본 `docker compose up`은 무인 탐지 데몬과 내부 영상 게이트웨이를 실행한다.
 # 웹 관제 콘솔(Next.js)은 옵션이다: `docker compose --profile web up` 으로 함께 띄운다.
-# 영상 게이트웨이만 필요하면 `--profile video`.
 
 x-common: &common
-  build: .
+  build:
+    context: .
+    # Local Compose remains a CPU-capable development/lab path. Signed Appliance images are built separately with ENABLE_GPU=1.
+    args:
+      ENABLE_GPU: ${KSI_CCTV_ENABLE_GPU:-0}
   volumes:
     # 런타임 모델 업로드 기능이 config/model_profiles.yaml과 models/uploaded/에 쓰므로 rw 필요.
     - ./config:/app/config
@@ -21,6 +24,11 @@ x-common: &common
     # 엔진 API(/api/*) 인증 키. 미설정이면 fail-closed(503)로 /api 차단(/health/live는 무인증 200 유지).
     # 웹 UI(--profile web) 사용 시 반드시 .env에 설정하고 ksi-cctv-web과 동일 값을 공유해야 한다.
     KSI_CCTV_API_KEY: ${KSI_CCTV_API_KEY:-}
+    # Evidence capture encryption key (Fernet). Default config encrypts captures, so
+    # Compose must not start without an explicit key. The daemon validates its format.
+    KSI_CCTV_CAPTURE_KEY: ${KSI_CCTV_CAPTURE_KEY:?KSI_CCTV_CAPTURE_KEY must be set to a valid Fernet key for encrypted evidence}
+    # 설치 업자가 등록한 카메라를 내부 MediaMTX HLS 경로와 동기화한다.
+    KSI_CCTV_MEDIAMTX_API_URL: ${KSI_CCTV_MEDIAMTX_API_URL:-http://ksi-cctv-gateway:9997}
   restart: unless-stopped
   # 24/7 무인 운영 시 컨테이너 stdout(PYTHONUNBUFFERED=1로 INFO 전량)이 기본 json-file 드라이버에
   # 무한 축적되어 디스크를 채운다 → 로그 로테이션으로 상한(앱 내부 alerts.log는 RotatingFileHandler 별도).
@@ -37,6 +45,9 @@ services:
   ksi-cctv:
     <<: *common
     container_name: ksi-cctv
+    depends_on:
+      ksi-cctv-gateway:
+        condition: service_started
     environment:
       <<: *common-env
       KSI_CCTV_MODE: daemon   # src/run.py 데몬 — 파이프라인 자동 기동 + 엔진 API/헬스(8081)
@@ -44,15 +55,9 @@ services:
       # 않고 compose 네트워크(ksi-cctv-web 등 형제 컨테이너)에서만 도달 가능하다(/api는 키 인증).
       # 호스트로도 8081을 열려면 ports에 "127.0.0.1:8081:8081"을 추가한다(외부 0.0.0.0 매핑은 지양).
       KSI_CCTV_HEALTH_HOST: ${KSI_CCTV_HEALTH_HOST:-0.0.0.0}
+      KSI_CCTV_GATEWAY_RTSP_URL: ${KSI_CCTV_GATEWAY_RTSP_URL:-rtsp://ksi-cctv-gateway:8554}
     # 헬스/API 포트(8081)는 호스트에 매핑하지 않는다(/health 운영상태 정보 보호). 필요 시 명시 opt-in.
-    # GPU 설정(Compose Spec 표준). CPU-only 배포는 이 deploy 블록을 주석 처리.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # GPU reservation은 docker-compose.gpu.yml overlay로 분리. CPU/lab 환경은 기본 Compose만으로 실행.
     # 런타임 liveness — /health/live(프로세스 생존 시 항상 200). /health는 카메라 stale 등에서
     # 503이라 컨테이너 재시작 루프를 유발하므로 liveness 프로브로 부적합(준비도는 /health/ready).
     healthcheck:
@@ -64,8 +69,10 @@ services:
 
   # ── 웹 UI(옵션: --profile web) — Next.js 관제 콘솔/모바일 뷰어 ─────────────────
   # 엔진 API(ksi-cctv:8081)를 서버사이드로 호출한다(API 키는 브라우저 미노출). Streamlit 대시보드를
-  # 대체하는 신규 UI다. 기동: KSI_CCTV_API_KEY/KSI_CCTV_WEB_PASSWORD를 .env에 설정 후
+   # 대체하는 신규 UI다. KSI_CCTV_API_KEY는 필수이고 WEB_PASSWORD는 선택이다.
   #   docker compose --profile web up --build
+  # GPU lab runs add the explicit overlay:
+  #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile web up --build
   ksi-cctv-web:
     build: ./frontend
     container_name: ksi-cctv-web
@@ -81,15 +88,28 @@ services:
       KSI_CCTV_ENGINE_URL: ${KSI_CCTV_ENGINE_URL:-http://ksi-cctv:8081}
       # 엔진과 동일한 API 키여야 /api 호출이 인증된다(미설정 시 엔진이 503 → UI는 "미연결"로 graceful).
       KSI_CCTV_API_KEY: ${KSI_CCTV_API_KEY:-}
-      # 프론트 로그인 비밀번호(미설정/change-me면 fail-closed로 접근 차단).
+       # 선택: 설정하면 environment-managed 로그인 보호를 강제한다.
       KSI_CCTV_WEB_PASSWORD: ${KSI_CCTV_WEB_PASSWORD:-}
-      # 세션 서명 시크릿(미설정 시 WEB_PASSWORD에서 파생 — 별도 강력한 값 권장).
+       # 환경변수 로그인 보호를 쓸 때만 32자 이상인 별도의 고엔트로피 session secret이 필수다.
       KSI_CCTV_WEB_SECRET: ${KSI_CCTV_WEB_SECRET:-}
+      # 비밀번호가 비어 있을 때 UI 최초 보호 설정에 필요한 일회용 현장 bootstrap capability.
+      KSI_CCTV_WEB_SETUP_TOKEN: ${KSI_CCTV_WEB_SETUP_TOKEN:-}
+      # Optional UI-managed local auth state and server session records. This fixed path is
+      # backed by the owner-only named volume below and is never populated with image secrets.
+      KSI_CCTV_WEB_AUTH_DIR: /var/lib/ksi-cctv-web
+      KSI_CCTV_WEB_SESSION_TTL_SEC: ${KSI_CCTV_WEB_SESSION_TTL_SEC:-43200}
+      # HTTPS 역프록시를 강제하는 현장은 true. 미설정 시 실제 요청 프로토콜을 따른다.
+      KSI_CCTV_WEB_COOKIE_SECURE: ${KSI_CCTV_WEB_COOKIE_SECURE:-}
+      # 전달 IP 헤더는 신뢰 가능한 역프록시 뒤에서만 활성화한다.
+      KSI_CCTV_TRUST_PROXY: ${KSI_CCTV_TRUST_PROXY:-false}
       # 영상 게이트웨이 주소(프론트 서버→게이트웨이, compose 네트워크 내부 서비스명). HLS는
       # same-origin 프록시를 거치므로 게이트웨이는 브라우저에 노출되지 않는다(8888 호스트 매핑 불요).
       KSI_CCTV_GATEWAY_URL: ${KSI_CCTV_GATEWAY_URL:-http://ksi-cctv-gateway:8888}
+    volumes:
+      - ksi-cctv-web-auth:/var/lib/ksi-cctv-web
     ports:
-      - "3000:3000"
+      # 개발 기본은 loopback-only. LAN 배포는 Appliance HTTPS 프록시를 사용한다.
+      - "${KSI_CCTV_WEB_BIND:-127.0.0.1}:3000:3000"
     restart: unless-stopped
     logging:
       driver: json-file
@@ -106,7 +126,7 @@ services:
       retries: 3
       start_period: 20s
 
-  # ── 영상 게이트웨이(옵션: --profile video 또는 --profile web) ────────────────────
+  # ── 영상 게이트웨이(기본 내부 서비스) ──────────────────────────────────────────
   # MediaMTX — RTSP 입력을 WebRTC(저지연)/HLS(호환)로 재발행한다. 추론 엔진은 영상 전송을
   # 하지 않는다(docs/architecture-target.md §2). 카메라 RTSP는 .env(CCTV_CAM_xxx_URL)에서
   # 공유하고, config/mediamtx.yml에서 카메라별 on-demand 풀 경로를 정의한다(주석 템플릿 참고).
@@ -114,14 +134,11 @@ services:
   ksi-cctv-gateway:
     image: bluenviron/mediamtx:1.19.1   # 핀 고정(재현성). MIT.
     container_name: ksi-cctv-gateway
-    profiles: ["web", "video"]
     volumes:
       - ./config/mediamtx.yml:/mediamtx.yml:ro
-    ports:
-      - "8554:8554"          # RTSP(카메라 발행/풀)
-      - "8888:8888"          # HLS(브라우저 호환 재생)
-      - "8889:8889"          # WebRTC(저지연, TCP 시그널링)
-      - "8189:8189/udp"      # WebRTC ICE(UDP). 원격 접속은 webrtcAdditionalHosts/TURN 필요.
+    # HLS/WebRTC/API/RTSP 모두 Docker 내부에서만 사용한다. 브라우저 영상은 인증된
+    # Next same-origin 프록시를 거친다. 외부 RTSP 진단은 docker-compose.diagnostics.yml을
+    # 명시적으로 겹쳐 실행해야 한다.
     restart: unless-stopped
     logging:
       driver: json-file
@@ -135,3 +152,7 @@ services:
 networks:
   cctv-network:
     driver: bridge
+
+volumes:
+  # Initialized from the image as nextjs:nodejs with mode 0700; it persists local auth state.
+  ksi-cctv-web-auth:

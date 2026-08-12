@@ -97,8 +97,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--opset",
         type=int,
-        default=17,
-        help="ONNX opset 버전. onnxruntime 1.16+ 는 opset 17 지원. 기본값: 17",
+        default=18,
+        help="ONNX opset 버전. qualified onnxruntime 1.28+ 는 opset 18 지원. 기본값: 18",
     )
     parser.add_argument(
         "--device",
@@ -233,7 +233,7 @@ def main() -> None:
     model = YOLO(str(args.weights))
 
     # ONNX export
-    # KSI-CCTV 표준: imgsz=640, opset=17
+    # KSI-CCTV 표준: imgsz=640, opset=18 (PyTorch 2.13 exporter compatible)
     # batch 미지정 → 기본 1 (단일 프레임 추론, 고정 입력)
     exported = model.export(
         format="onnx",

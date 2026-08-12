@@ -1,0 +1,5 @@
+#!/bin/bash
+set -euo pipefail
+
+exec /opt/ksi-cctv/installer-venv/bin/python \
+    /opt/ksi-cctv/installer/ksi_cctv_appliance.py "$@"

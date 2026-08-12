@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KSI-CCTV offline release manifest schema",
+  "description": "Schema reference only. Generate usable manifests with release_builder.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "state_schema", "version", "hardware_profiles", "files", "artifacts", "images", "source", "sboms", "third_party_notices", "model_inventory", "license_approvals", "persistent_state", "healthcheck"],
+  "properties": {
+    "schema_version": {"const": 3},
+    "state_schema": {"const": 1},
+    "version": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "hardware_profiles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"const": "dgx-spark-arm64"}},
+    "files": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/sha256"}},
+    "artifacts": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/sha256"}},
+    "images": {"type": "object", "minProperties": 4, "maxProperties": 4, "propertyNames": {"pattern": "^sha256:[a-f0-9]{64}$"}, "additionalProperties": {"type": "string", "pattern": "^images/.+\\.tar$"}},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "gate_attestation", "gate_signature", "bundle_attestation", "bundle_signature", "image_revisions"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "gate_attestation": {"type": "string"},
+        "gate_signature": {"type": "string"},
+        "bundle_attestation": {"const": "evidence/bundle-attestation.json"},
+        "bundle_signature": {"const": "evidence/bundle-attestation.json.sig"},
+        "image_revisions": {"type": "object", "minProperties": 4, "maxProperties": 4, "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{40}$"}}
+      }
+    },
+    "sboms": {"type": "object", "minProperties": 4, "maxProperties": 4, "additionalProperties": {"type": "string", "pattern": "^sbom/.+\\.spdx\\.json$"}},
+    "third_party_notices": {"type": "string"},
+    "model_inventory": {"type": "string", "pattern": ".+\\.json$"},
+    "license_approvals": {"type": "string", "pattern": ".+\\.json$"},
+    "persistent_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["migration_mode", "stores"],
+      "properties": {
+        "migration_mode": {"const": "none"},
+        "stores": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["events", "observations", "incidents", "cameras", "commissioning", "outbox", "config"],
+          "properties": {
+            "events": {"$ref": "#/$defs/storeV2"},
+            "observations": {"$ref": "#/$defs/storeV1"},
+            "incidents": {"$ref": "#/$defs/storeV1"},
+            "cameras": {"$ref": "#/$defs/storeV1"},
+            "commissioning": {"$ref": "#/$defs/storeV1"},
+            "outbox": {"$ref": "#/$defs/storeV1"},
+            "config": {"$ref": "#/$defs/storeV1"}
+          }
+        }
+      }
+    },
+    "healthcheck": {"type": "object", "additionalProperties": false, "required": ["command", "timeout_seconds"], "properties": {"command": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "timeout_seconds": {"type": "integer", "minimum": 1}}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+    "storeV1": {"type": "object", "additionalProperties": false, "required": ["schema", "rollback_readable_versions"], "properties": {"schema": {"const": 1}, "rollback_readable_versions": {"const": [1]}}},
+    "storeV2": {"type": "object", "additionalProperties": false, "required": ["schema", "rollback_readable_versions"], "properties": {"schema": {"const": 2}, "rollback_readable_versions": {"const": [2]}}}
+  }
+}

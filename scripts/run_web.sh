@@ -1,29 +1,91 @@
 #!/usr/bin/env bash
-# 로컬에서 웹 콘솔 전체 스택을 한 번에 띄워 UI/UX를 직접 확인한다.
+# DEVELOPMENT/LAB ONLY: 로컬에서 웹 콘솔 전체 스택을 한 번에 띄워 UI/UX를 직접 확인한다.
+# 운영 납품은 서명된 오프라인 Appliance만 사용한다(docs/offline-appliance.md).
 #   엔진 API(FastAPI) + 영상 게이트웨이(MediaMTX, docker 있으면) + Next.js 웹 콘솔
 #
 # 포트는 KSI-CCTV 전용 대역을 써서 다른 프로젝트(예: KSI-Scout·carescience의 3000/8000/8080)와
 # 충돌하지 않는다: 웹 3100 · 엔진 8181 · 게이트웨이 HLS 8910 / RTSP 8954. (모두 env로 override 가능)
 #
 # 사용:
-#   bash scripts/run_web.sh                 # http://localhost:3100 (로그인 비번: 아래 출력)
+#   bash scripts/run_web.sh                 # http://localhost:3100
 #   KSI_CCTV_DEMO=1 bash scripts/run_web.sh # 데모 이벤트/캡처 시드 + sample.mp4를 cam_001 라이브로 송출
-#   KSI_CCTV_WEB_PORT=3200 KSI_CCTV_WEB_PASSWORD=강한비번 bash scripts/run_web.sh
+#   KSI_CCTV_WEB_PASSWORD='local-password' bash scripts/run_web.sh
+#   KSI_CCTV_WEB_DEV=1 KSI_CCTV_DEV_AUTH_BYPASS=1 bash scripts/run_web.sh # loopback + 일회용 browser capability
+#   KSI_CCTV_BIND_HOST=192.0.2.10 KSI_CCTV_INSECURE_REMOTE_DEV=1 bash scripts/run_web.sh
 # 종료: Ctrl+C (모든 프로세스/컨테이너 정리)
 #
 # 참고: 헤드리스 Chromium은 H.264 미탑재라 라이브 영상이 안 보일 수 있으나, 실 브라우저
-# (Chrome/Edge/Safari/Firefox)에서는 정상 재생된다. 원격은 Tailscale IP:<웹포트>로 접속.
+# (Chrome/Edge/Safari/Firefox)에서는 정상 재생된다. 원격 개발은 평문 HTTP이므로 비공개 시험망에서만 한다.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-export KSI_CCTV_API_KEY="${KSI_CCTV_API_KEY:-local-dev-key}"
-export KSI_CCTV_WEB_PASSWORD="${KSI_CCTV_WEB_PASSWORD:-ksicctv}"
+BIND_HOST="${KSI_CCTV_BIND_HOST:-127.0.0.1}"
+case "$BIND_HOST" in
+  127.0.0.1|::1|localhost) ;;
+  *)
+    if [ "${KSI_CCTV_INSECURE_REMOTE_DEV:-}" != "1" ]; then
+      echo "[run_web] Refusing non-loopback bind ($BIND_HOST)."
+      echo "[run_web] This development/lab launcher uses plaintext HTTP; set KSI_CCTV_INSECURE_REMOTE_DEV=1 only on an isolated test network."
+      exit 2
+    fi
+    ;;
+esac
+
+DEV_AUTH_BYPASS=0
+if [ "${KSI_CCTV_DEV_AUTH_BYPASS:-}" = "1" ]; then
+  DEV_AUTH_BYPASS=1
+fi
+if [ "$DEV_AUTH_BYPASS" = "1" ]; then
+  if [ "${KSI_CCTV_WEB_DEV:-}" != "1" ]; then
+    echo "[run_web] Refusing auth bypass outside KSI_CCTV_WEB_DEV=1."
+    exit 2
+  fi
+  case "$BIND_HOST" in
+    127.0.0.1|::1|localhost) ;;
+    *)
+      echo "[run_web] Refusing auth bypass on non-loopback bind ($BIND_HOST)."
+      exit 2
+      ;;
+  esac
+fi
+export KSI_CCTV_WEB_BIND_HOST="$BIND_HOST"
+# 개발/랩 launcher에서는 재로그인 마찰을 줄이되, Appliance 기본값은 12시간으로 유지한다.
+export KSI_CCTV_WEB_SESSION_TTL_SEC="${KSI_CCTV_WEB_SESSION_TTL_SEC:-604800}"
+
+generate_secret() {
+  od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+CREDENTIALS_FILE=""
+GENERATED_CREDENTIALS=0
+if [ -z "${KSI_CCTV_API_KEY:-}" ]; then
+  export KSI_CCTV_API_KEY="$(generate_secret)"
+  GENERATED_CREDENTIALS=1
+fi
+if [ "$DEV_AUTH_BYPASS" = "0" ] && [ -z "${KSI_CCTV_WEB_PASSWORD:-}" ]; then
+  export KSI_CCTV_WEB_PASSWORD="$(generate_secret)"
+  GENERATED_CREDENTIALS=1
+fi
+if [ "$DEV_AUTH_BYPASS" = "0" ] && [ -z "${KSI_CCTV_WEB_SECRET:-}" ]; then
+  export KSI_CCTV_WEB_SECRET="$(generate_secret)"
+  GENERATED_CREDENTIALS=1
+fi
 ENGINE_PORT="${KSI_CCTV_ENGINE_PORT:-8181}"   # KSI-CCTV 전용(데몬 8081과도 분리)
 WEB_PORT="${KSI_CCTV_WEB_PORT:-3100}"         # 3000 회피(타 프로젝트 Next 기본값)
 GW_HLS_PORT="${KSI_CCTV_GW_HLS_PORT:-8910}"   # 게이트웨이 HLS(컨테이너 8888 → 호스트 8910)
 GW_RTSP_PORT="${KSI_CCTV_GW_RTSP_PORT:-8954}" # 게이트웨이 RTSP(컨테이너 8554 → 호스트 8954)
+
+if [ "$GENERATED_CREDENTIALS" = "1" ]; then
+  umask 077
+  CREDENTIALS_FILE="$(mktemp "${TMPDIR:-/tmp}/ksi-cctv-dev-credentials.XXXXXX")"
+  {
+    printf 'KSI_CCTV_API_KEY=%s\n' "$KSI_CCTV_API_KEY"
+    [ "$DEV_AUTH_BYPASS" = "1" ] || printf 'KSI_CCTV_WEB_PASSWORD=%s\n' "$KSI_CCTV_WEB_PASSWORD"
+    [ "$DEV_AUTH_BYPASS" = "1" ] || printf 'KSI_CCTV_WEB_SECRET=%s\n' "$KSI_CCTV_WEB_SECRET"
+  } > "$CREDENTIALS_FILE"
+fi
 
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
@@ -42,6 +104,7 @@ cleanup() {
   echo; echo "[run_web] 종료 중..."
   for p in "${pids[@]:-}"; do kill_tree "$p"; done
   docker rm -f ksi-cctv-gateway-dev >/dev/null 2>&1 || true
+  [ -z "$CREDENTIALS_FILE" ] || rm -f "$CREDENTIALS_FILE"
 }
 trap cleanup INT TERM EXIT
 
@@ -80,17 +143,17 @@ mkdir -p logs data/captures models/uploaded
 # DEMO 모드는 합성 파이프라인 주입 앱(demo_app)을 서빙 → 텔레메트리·제어가 데이터를 갖고 동작.
 APP_MODULE="src.api.app:app"
 [ "${KSI_CCTV_DEMO:-}" = "1" ] && APP_MODULE="src.api.demo_app:app"
-echo "[run_web] 엔진 API 시작 (:$ENGINE_PORT, $APP_MODULE)..."
-"$PY" -m uvicorn "$APP_MODULE" --host 0.0.0.0 --port "$ENGINE_PORT" --log-level warning &
+echo "[run_web] 엔진 API 시작 (127.0.0.1:$ENGINE_PORT, $APP_MODULE)..."
+"$PY" -m uvicorn "$APP_MODULE" --host 127.0.0.1 --port "$ENGINE_PORT" --log-level warning &
 pids+=($!)
 
 # ── 영상 게이트웨이(선택) ──────────────────────────────────────────────────────
 GATEWAY_UP=0
 if command -v docker >/dev/null 2>&1; then
-  echo "[run_web] 영상 게이트웨이(MediaMTX) 시작 (HLS :$GW_HLS_PORT / RTSP :$GW_RTSP_PORT)..."
+  echo "[run_web] 영상 게이트웨이(MediaMTX) 시작 (loopback HLS :$GW_HLS_PORT / RTSP :$GW_RTSP_PORT)..."
   docker rm -f ksi-cctv-gateway-dev >/dev/null 2>&1 || true
   if docker run -d --rm --name ksi-cctv-gateway-dev \
-      -p "$GW_RTSP_PORT":8554 -p "$GW_HLS_PORT":8888 \
+      -p "127.0.0.1:$GW_RTSP_PORT":8554 -p "127.0.0.1:$GW_HLS_PORT":8888 \
       -v "$ROOT/config/mediamtx.yml:/mediamtx.yml:ro" \
       bluenviron/mediamtx:1.19.1 >/dev/null 2>&1; then
     GATEWAY_UP=1
@@ -119,7 +182,8 @@ if [ "${KSI_CCTV_WEB_DEV:-}" = "1" ]; then
   ( cd frontend
     KSI_CCTV_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
     KSI_CCTV_GATEWAY_URL="http://127.0.0.1:$GW_HLS_PORT" \
-    npm run dev -- -H 0.0.0.0 -p "$WEB_PORT" ) &
+    KSI_CCTV_WEB_BIND_HOST="$BIND_HOST" \
+    npm run dev -- -H "$BIND_HOST" -p "$WEB_PORT" ) &
   pids+=($!)
 else
   echo "[run_web] 웹 콘솔(Next.js) 빌드 중... (최초/코드변경 시 수십 초)"
@@ -128,7 +192,7 @@ else
     ( cd frontend
       KSI_CCTV_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
       KSI_CCTV_GATEWAY_URL="http://127.0.0.1:$GW_HLS_PORT" \
-      npm run start -- -H 0.0.0.0 -p "$WEB_PORT" ) &
+      npm run start -- -H "$BIND_HOST" -p "$WEB_PORT" ) &
     pids+=($!)
   else
     echo "[run_web] ✗ 웹 빌드 실패 — /tmp/ksi_web_build.log 확인. (DEV로 재시도하려면 KSI_CCTV_WEB_DEV=1)"
@@ -138,10 +202,16 @@ fi
 
 echo
 echo "════════════════════════════════════════════════════════════════"
-echo "  웹 콘솔   : http://localhost:$WEB_PORT   (원격: http://<Tailscale-IP>:$WEB_PORT)"
-echo "  로그인 비번: $KSI_CCTV_WEB_PASSWORD"
+echo "  웹 콘솔   : http://$BIND_HOST:$WEB_PORT"
 echo "  엔진 API  : http://localhost:$ENGINE_PORT/api/health/live"
-echo "  포트(전용): 웹 $WEB_PORT · 엔진 $ENGINE_PORT · 게이트웨이 HLS $GW_HLS_PORT / RTSP $GW_RTSP_PORT"
+echo "  포트(전용): 웹 $WEB_PORT · 엔진/게이트웨이(loopback) $ENGINE_PORT/$GW_HLS_PORT/$GW_RTSP_PORT"
+echo "  바인드     : $BIND_HOST"
+if [ "$DEV_AUTH_BYPASS" = "1" ]; then
+  echo "  인증 모드  : 개발 전용 bypass (loopback-only)"
+else
+  echo "  인증 모드  : password (session ${KSI_CCTV_WEB_SESSION_TTL_SEC}s)"
+fi
+echo "  자격증명  : ${CREDENTIALS_FILE:-환경변수에서 제공됨} (종료 시 생성 파일 삭제, 내용은 출력하지 않음)"
 echo "  종료      : Ctrl+C"
 echo "════════════════════════════════════════════════════════════════"
 wait

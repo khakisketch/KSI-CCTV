@@ -1,0 +1,22 @@
+[Unit]
+Description=KSI-CCTV offline appliance compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/ksi-cctv/current
+EnvironmentFile=-/etc/ksi-cctv/ksi-cctv.env
+ExecStartPre=/usr/bin/python3 /opt/ksi-cctv/current/bin/transaction_guard.py
+ExecStart=/usr/bin/docker compose --project-name ksi-cctv --file /opt/ksi-cctv/current/compose.yaml up --remove-orphans --abort-on-container-exit
+ExecStartPost=/usr/bin/python3 /opt/ksi-cctv/current/bin/activation_health.py --timeout 120
+ExecStop=/usr/bin/docker compose --project-name ksi-cctv --file /opt/ksi-cctv/current/compose.yaml down
+ExecStopPost=-/usr/bin/docker compose --project-name ksi-cctv --file /opt/ksi-cctv/current/compose.yaml down
+TimeoutStartSec=240
+TimeoutStopSec=90
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

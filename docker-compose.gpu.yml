@@ -1,0 +1,18 @@
+# GPU-only override overlay. 기본 docker-compose.yml은 CPU/lab 경로로 동작합니다.
+# NVIDIA GPU가 필요한 경우에만 이 overlay를 함께 사용합니다:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+
+services:
+  ksi-cctv:
+    build:
+      args:
+        ENABLE_GPU: 1
+        ONNXRUNTIME_GPU_WHEEL_URL: ${ONNXRUNTIME_GPU_WHEEL_URL:-}
+        ONNXRUNTIME_GPU_WHEEL_SHA256: ${ONNXRUNTIME_GPU_WHEEL_SHA256:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

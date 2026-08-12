@@ -1,0 +1,132 @@
+# Copy this into a release as compose.yaml and replace every image digest placeholder.
+# Web is the only LAN-facing service. All MediaMTX protocols remain on the private Compose network.
+services:
+  engine:
+    image: sha256:REPLACE_ENGINE_ARM64_DIGEST
+    pull_policy: never
+    user: "1000:1000"
+    container_name: ksi-cctv
+    init: true
+    env_file:
+      - /etc/ksi-cctv/engine.env
+    environment:
+      KSI_CCTV_MODE: daemon
+      KSI_CCTV_HEALTH_HOST: 0.0.0.0
+      KSI_CCTV_CAMERA_DIR: /app/data/cameras
+      KSI_CCTV_MEDIAMTX_API_URL: http://mediamtx:9997
+      KSI_CCTV_GATEWAY_RTSP_URL: rtsp://mediamtx:8554
+      KSI_CCTV_REQUIRE_GPU: "1"
+      KSI_CCTV_REQUIRE_ALL_MODELS: "1"
+    volumes:
+      - /var/lib/ksi-cctv:/app/data
+      - /var/lib/ksi-cctv/config:/app/config
+      - /var/lib/ksi-cctv/models:/app/models/uploaded
+      - /var/log/ksi-cctv:/app/logs
+    depends_on:
+      mediamtx:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8081/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    restart: "no"
+    networks: [cctv]
+
+  web:
+    image: sha256:REPLACE_WEB_ARM64_DIGEST
+    pull_policy: never
+    user: "1001:1001"
+    container_name: ksi-cctv-web
+    init: true
+    env_file:
+      - /etc/ksi-cctv/web.env
+    environment:
+      KSI_CCTV_ENGINE_URL: http://engine:8081
+      KSI_CCTV_GATEWAY_URL: http://mediamtx:8888
+      KSI_CCTV_TRUST_PROXY: "true"
+      KSI_CCTV_WEB_COOKIE_SECURE: "true"
+    depends_on:
+      engine:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/login',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    restart: "no"
+    networks: [cctv]
+
+  https:
+    image: sha256:REPLACE_CADDY_ARM64_DIGEST
+    pull_policy: never
+    container_name: ksi-cctv-https
+    environment:
+      KSI_CCTV_SITE_ADDRESS: ${KSI_CCTV_SITE_ADDRESS:?site address is required}
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /etc/ksi-cctv/caddy-data:/data
+      - /etc/ksi-cctv/caddy-config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    restart: "no"
+    networks: [cctv]
+
+  mediamtx:
+    image: sha256:REPLACE_MEDIAMTX_ARM64_DIGEST
+    pull_policy: never
+    user: "65532:65532"
+    container_name: ksi-cctv-gateway
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    restart: "no"
+    networks: [cctv]
+
+networks:
+  cctv:
+    driver: bridge

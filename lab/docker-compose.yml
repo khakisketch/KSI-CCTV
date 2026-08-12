@@ -1,0 +1,49 @@
+# 독립적인 가상 CCTV 랩이다. 기존 docker-compose.yml과 함께 사용하지 않는다.
+# 16개 publisher를 모두 선언해 카메라 경로와 서비스 이름을 항상 결정적으로 유지한다.
+x-publisher: &publisher
+  image: ${LAB_FFMPEG_IMAGE:-linuxserver/ffmpeg:7.1.1}
+  restart: unless-stopped
+  depends_on:
+    mediamtx:
+      condition: service_started
+  volumes:
+    - ${LAB_SAMPLE_FILE:-../data/sample.mp4}:/input/sample.mp4:ro
+  # MPEG-4 Visual sample.mp4를 HLS-compatible H.264 360p/5fps로 낮춰 16개도 CPU 부담을 제한한다.
+  entrypoint: ["/bin/sh", "-ec"]
+  command: ["exec ffmpeg -hide_banner -loglevel warning -stream_loop -1 -re -fflags +genpts -i /input/sample.mp4 -map 0:v:0 -an -vf fps=5,scale=-2:360 -c:v libx264 -preset ultrafast -tune zerolatency -g 10 -b:v 400k -maxrate 500k -bufsize 800k -f rtsp -rtsp_transport tcp rtsp://mediamtx:8554/$${CAMERA_PATH}"]
+  networks:
+    - cctv-lab
+
+services:
+  mediamtx:
+    image: ${LAB_MEDIAMTX_IMAGE:-bluenviron/mediamtx:1.19.1}
+    restart: unless-stopped
+    volumes:
+      - ./config/mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "${LAB_BIND_ADDRESS:-127.0.0.1}:8554:8554"
+      - "${LAB_BIND_ADDRESS:-127.0.0.1}:8888:8888"
+      - "${LAB_BIND_ADDRESS:-127.0.0.1}:9997:9997"
+    networks:
+      - cctv-lab
+
+  publisher_001: { <<: *publisher, environment: { CAMERA_PATH: cam_001 } }
+  publisher_002: { <<: *publisher, environment: { CAMERA_PATH: cam_002 } }
+  publisher_003: { <<: *publisher, environment: { CAMERA_PATH: cam_003 } }
+  publisher_004: { <<: *publisher, environment: { CAMERA_PATH: cam_004 } }
+  publisher_005: { <<: *publisher, environment: { CAMERA_PATH: cam_005 } }
+  publisher_006: { <<: *publisher, environment: { CAMERA_PATH: cam_006 } }
+  publisher_007: { <<: *publisher, environment: { CAMERA_PATH: cam_007 } }
+  publisher_008: { <<: *publisher, environment: { CAMERA_PATH: cam_008 } }
+  publisher_009: { <<: *publisher, environment: { CAMERA_PATH: cam_009 } }
+  publisher_010: { <<: *publisher, environment: { CAMERA_PATH: cam_010 } }
+  publisher_011: { <<: *publisher, environment: { CAMERA_PATH: cam_011 } }
+  publisher_012: { <<: *publisher, environment: { CAMERA_PATH: cam_012 } }
+  publisher_013: { <<: *publisher, environment: { CAMERA_PATH: cam_013 } }
+  publisher_014: { <<: *publisher, environment: { CAMERA_PATH: cam_014 } }
+  publisher_015: { <<: *publisher, environment: { CAMERA_PATH: cam_015 } }
+  publisher_016: { <<: *publisher, environment: { CAMERA_PATH: cam_016 } }
+
+networks:
+  cctv-lab:
+    name: ksi-cctv-lab

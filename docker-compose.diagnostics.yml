@@ -1,0 +1,6 @@
+services:
+  # Opt-in local diagnostic access only. Do not use this overlay in production:
+  # the normal stack keeps MediaMTX protocols on the private Docker network.
+  ksi-cctv-gateway:
+    ports:
+      - "${KSI_CCTV_GW_RTSP_BIND:-127.0.0.1}:8554:8554"

@@ -26,6 +26,11 @@ else
 fi
 echo "[INFO] Python 인터프리터: $PYTHON"
 
+if [ "${KSI_CCTV_REQUIRE_GPU:-}" = "1" ]; then
+    "$PYTHON" -c "import onnxruntime as ort; assert 'CUDAExecutionProvider' in ort.get_available_providers()" \
+        || { echo "[ERROR] CUDAExecutionProvider가 필요한 Appliance profile에서 사용할 수 없습니다." >&2; exit 1; }
+fi
+
 # ── 런타임 디렉토리 확인 ────────────────────────────────────────────────────────
 echo "[INFO] KSI-CCTV 컨테이너 시작..."
 mkdir -p logs data/captures models/uploaded
