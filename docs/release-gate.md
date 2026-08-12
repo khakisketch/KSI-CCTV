@@ -16,6 +16,22 @@ VLM verification must fail open: provider, timeout, or parsing failure creates a
 apps, RBAC, production-default open-vocab, LLM reporting, automatic few-shot/GNN workflows,
 and theft/weapons/smoking are outside v1.
 
+### VLM Qualification Findings (2026-08-12, developer host)
+
+Measured on the local development host, not the target ARM64 Appliance. These are inputs to the
+model/legal gate, not an approval.
+
+| Observation | Value | Consequence |
+|---|---|---|
+| `qwen3-vl:latest` single-frame latency | **214.5 s** (model fully resident in VRAM, 44.9 GB) | Unusable for per-event verification at the configured `timeout_sec: 60`; every call fails open to `unverified` |
+| Fail-open path, real provider | Verified end to end | Qualification failure produced `unverified` + `PROVIDER_UNAVAILABLE`, event retained |
+| Fail-open contract coverage | 10 failure reasons | `tests/test_pipeline.py::TestVlmFailOpenContract`, mutation-checked |
+
+Before VLM verification can be proposed for release, a smaller or quantized model, a longer
+approved deadline with an async verification path, or both must be qualified on the target
+appliance. `config/default.yaml` keeps `models.vlm.enabled: false` and `runtime_qualified: false`
+until that evidence exists.
+
 No ARM64 CUDA artifact, field-data accuracy approval, real-camera/HLS soak, recovery record,
 or concurrent-channel capacity has been accepted by this document. In particular, 16-channel
 operation is a required evidence target only, not a proven or approved claim.
