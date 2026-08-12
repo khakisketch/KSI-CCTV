@@ -2,8 +2,8 @@ boolean.py==5.0 \
     --hash=sha256:ef28a70bd43115208441b53a045d1549e2f0ec6e3d08a9d142cbc41c1938e8d9
 cffi==2.1.0 \
     --hash=sha256:b6422532152adf4e59b110cb2808cee7a033800952f5c036b4af047ee43199e7
-cryptography==49.0.0 \
-    --hash=sha256:36d1709f992593689b45bda411498d62c6e365f2ca00b84657d4dadd24de16db
+cryptography==50.0.0 \
+    --hash=sha256:fd9192b7b70c573d7f214eb1ae35e00d359f6f5e4b27c7e21e30de1fc6204645
 license-expression==30.4.4 \
     --hash=sha256:421788fdcadb41f049d2dc934ce666626265aeccefddd25e162a26f23bcbf8a4
 pycparser==3.0 \
