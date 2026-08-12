@@ -1,7 +1,7 @@
-# KSI-CCTV 영상 게이트웨이(MediaMTX) 설정 — RTSP 입력 → WebRTC(저지연)/HLS(호환) 재발행.
+# KSI-CCTV 영상 게이트웨이(MediaMTX) 설정 — RTSP 입력 → HLS 재발행.
 # 설계 근거: docs/architecture-target.md §2 "라이브 영상 — 직접 구현 금지, 게이트웨이 활용".
 # 추론 엔진(src/run.py)은 영상 전송 책임이 없다 — 카메라 RTSP는 엔진/게이트웨이가 공유하고,
-# 브라우저는 이 게이트웨이의 WebRTC/HLS만 구독한다(RTSP 자격증명 브라우저 미노출).
+# 브라우저는 이 게이트웨이의 HLS만 구독한다(RTSP 자격증명 브라우저 미노출).
 
 logLevel: info
 logDestinations: [stdout]
@@ -17,16 +17,15 @@ hlsAddress: :8888
 hlsVariant: mpegts              # 최대 호환(모든 HLS 플레이어). 저지연은 WebRTC로.
 hlsAlwaysRemux: no             # 시청자 있을 때만 리먹스(유휴 CPU 0)
 
-# ── 출력: WebRTC(서브초 저지연) ───────────────────────────────────────────────
-webrtc: yes
-webrtcAddress: :8889
-webrtcLocalUDPAddress: :8189   # ICE 후보 UDP(설치형 LAN 직결). 원격은 TURN/HLS 폴백.
+# ── 출력: WebRTC는 첫 HLS-only Appliance 릴리스에서 비활성 ──────────────────
+# 별도 WHEP proxy, ICE/TURN, 실장비 브라우저 검증이 완료되기 전에는 노출하지 않는다.
+webrtc: no
 
 # ── 미사용 프로토콜 비활성(공격면 축소) ───────────────────────────────────────
 rtmp: no
 srt: no
 
-# ── 내부 관리 API(헬스/검증용 — 호스트 미매핑, 컨테이너 내부에서만) ───────────
+# ── 내부 관리 API(동적 카메라 경로/헬스 — 호스트 미매핑, Compose 내부 전용) ─────
 api: yes
 apiAddress: :9997
 
@@ -36,6 +35,8 @@ pathDefaults:
   source: publisher
 
 paths:
+  # 설치 업자 UI로 등록한 카메라는 엔진이 내부 v3 API를 통해 이름 있는 경로로
+  # 추가/수정/삭제한다. source에는 DNS 검증 후 고정한 사설 IP만 전달한다.
   # 카메라가 직접 발행하지 못하는 일반적인 경우, 게이트웨이가 카메라 RTSP를 on-demand로
   # 풀하도록 아래 형태로 카메라별 경로를 정의한다(자격증명은 .env의 CCTV_CAM_xxx_URL SSOT 공유):
   #   cam_001:

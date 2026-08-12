@@ -29,5 +29,5 @@ per_event_email_enabled: {}
 # AlertConfig(encrypt_images=True) 설정 후 아래 환경변수를 주입하세요.
 # KSI_CCTV_CAPTURE_KEY : Fernet URL-safe base64 키
 #   키 생성 방법: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-# 키가 없으면 경고 후 평문 .jpg로 fallback합니다.
+# 키가 없으면 capture 저장을 켠 AlertManager가 fail-closed로 시작을 거부합니다.
 # 암호화 파일 확장자: .jpg.enc

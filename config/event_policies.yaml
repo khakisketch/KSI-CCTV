@@ -1,27 +1,163 @@
 # Event policies for KSI-CCTV.
 # Policies map model detections to safety events.
+#
+# 설계 원칙(KSI-CCTV 제품 정의):
+#   - '관측(Observation)'과 '사건(Event)'을 분리한다.
+#   - 사람·차량 자체의 단순 존재는 사건이 아니라 관측값이다. 원본 녹화·트랙킹·집계
+#     메타데이터로만 유지하고 이벤트 히스토리·알림·VLM·캡처를 발생시키지 않는다.
+#   - 사건은 구역·시간·행동 규칙이 성립할 때만 생성된다(침입·배회·PPE·쓰러짐·화재 등).
+#   - 가능한 한 단일 프레임 판정을 피하고 temporal 조건으로 지속성을 확인한다.
+#   - VLM은 사건 후보에 대해서만 비동기 검증용으로 호출한다.
+
+# 이벤트 카탈로그 SSOT.
+# - status=active/experimental만 사용자 선택 가능하다.
+# - runtime=detection은 EventPolicyEngine이 평가한다.
+# - runtime=health/tracking은 전용 runtime에서 평가한다.
+# - canonical_profile은 선택한 도메인에 정책 정의가 없을 때 사용할 기준 정책이다.
+catalog:
+  fall:
+    label: "쓰러짐 의심"
+    category: safety
+    status: experimental
+    runtime: detection
+    canonical_profile: general
+    verification: {mode: three_frame, frames: 3, quorum: 2, allow_reject: true}
+    behavior:
+      enabled: false
+      person:
+        models: [general_yolo]
+        classes: [person]
+      pose_model: pose_onnx
+      action_model: stgcn_onnx
+      action_label: fall
+      min_confidence: 0.75
+      temporal: {min_hits: 2, window_frames: 4, max_gap_sec: 2, clear_after_sec: 10}
+      verification_mode: policy_vlm
+  fire:
+    label: "화재 감지"
+    category: lifesafety
+    status: active
+    runtime: detection
+    canonical_profile: general
+    verification: {mode: single, frames: 1, quorum: 1, allow_reject: false}
+  smoke:
+    label: "연기 감지"
+    category: lifesafety
+    status: active
+    runtime: detection
+    canonical_profile: general
+    verification: {mode: single, frames: 1, quorum: 1, allow_reject: false}
+  crowding:
+    label: "혼잡 감지"
+    category: observation_derived
+    status: active
+    runtime: detection
+    canonical_profile: general
+  fight:
+    label: "싸움/폭력 의심"
+    category: safety
+    status: experimental
+    runtime: detection
+    canonical_profile: school
+    verification: {mode: three_frame, frames: 3, quorum: 2, allow_reject: true}
+    behavior:
+      enabled: false
+      person:
+        models: [general_yolo]
+        classes: [person]
+      pose_model: pose_onnx
+      action_model: stgcn_onnx
+      action_label: fight
+      min_confidence: 0.75
+      temporal: {min_hits: 2, window_frames: 4, max_gap_sec: 2, clear_after_sec: 10}
+      verification_mode: policy_vlm
+  no_helmet:
+    label: "안전모 미착용"
+    category: ppe
+    status: active
+    runtime: detection
+    canonical_profile: construction
+    verification: {mode: single, frames: 1, quorum: 1, allow_reject: false}
+  no_vest:
+    label: "안전조끼 미착용"
+    category: ppe
+    status: experimental
+    runtime: detection
+    canonical_profile: construction
+    verification: {mode: single, frames: 1, quorum: 1, allow_reject: false}
+  restricted_area:
+    label: "제한구역 침입"
+    category: zone
+    status: active
+    runtime: detection
+    canonical_profile: general
+    requires_zone: restricted
+  loitering:
+    label: "배회 의심"
+    category: zone
+    status: experimental
+    runtime: tracking
+    canonical_profile: general
+    requires_zone: loitering
+  camera_disconnect:
+    label: "카메라 영상 단절"
+    category: system
+    status: active
+    runtime: health
+  camera_recovered:
+    label: "카메라 영상 복구"
+    category: system
+    status: active
+    runtime: health
+    selectable: false
+    reason: "카메라 단절 감지를 켜면 복구 상태가 자동으로 기록됩니다."
+  tamper:
+    label: "카메라 조작 의심"
+    category: system
+    status: experimental
+    runtime: health
+    reason: "현장 조도에 따라 임계값 검증이 필요한 시험 기능입니다."
+  tamper_recovered:
+    label: "카메라 화면 복구"
+    category: system
+    status: active
+    runtime: health
+    selectable: false
+    reason: "카메라 조작 감지를 켜면 복구 상태가 자동으로 기록됩니다."
+  wrong_way:
+    label: "차량 역주행"
+    category: traffic
+    status: planned
+    runtime: tracking
+    reason: "객체 Tracking과 방향 판정 구현 후 활성화됩니다."
+  line_crossing:
+    label: "지정선 통과"
+    category: traffic
+    status: experimental
+    runtime: tracking
+    canonical_profile: parking
+    requires_zone: line
+    reason: "카메라별 두 점 감지선이 필요합니다."
+  abandoned_object:
+    label: "방치 물체"
+    category: object
+    status: planned
+    runtime: tracking
+    reason: "객체 Tracking과 정지 상태 판정 구현 후 활성화됩니다."
+  object_removal:
+    label: "물체 제거"
+    category: object
+    status: planned
+    runtime: tracking
+    reason: "객체 Tracking과 기준 객체 상태 판정 구현 후 활성화됩니다."
 
 profiles:
   # ── 범용(general) — 어느 현장에나 바로 쓰는 기본 프로파일 ──────────────────────────
-  # 사람·쓰러짐·화재·연기·혼잡 + (zone 설정 시)침입. 건설 특화 PPE(안전모/조끼)는 제외해
+  # 쓰러짐·화재·연기 + 영업시간 외/침입·배회·혼잡(zone·schedule 설정 시). PPE는 제외해
   # 일반 현장 오탐을 줄인다. 임계값은 다양한 CCTV 화각에서 false alarm을 낮추도록 보수적으로 정함.
   # 사용 모델: general_yolo(COCO 사람/객체) + fire_smoke_yolo. (ppe_yolo 불필요)
   general:
     policies:
-      person_detected:
-        enabled: true
-        trigger:
-          models: [general_yolo]
-          classes: [person]
-          # 0.25는 다양한 현장에서 부분/가림 박스 오탐 과다 → 0.35(presence 적정 균형)
-          min_confidence: 0.35
-        rule:
-          type: direct_detection
-        vlm: never
-        alert_level: low
-        cooldown_sec: 60
-        description: "사람 감지"
-
       fall:
         enabled: true
         trigger:
@@ -36,6 +172,7 @@ profiles:
         vlm: always
         alert_level: high
         cooldown_sec: 20
+        provisional_alert: true
         description: "쓰러짐 의심"
 
       fire:
@@ -47,9 +184,16 @@ profiles:
           min_confidence: 0.45
         rule:
           type: direct_detection
+          temporal:
+            # 화재는 즉시성 중시지만 단일 프레임 오탐 차단을 위해 최소 2프레임/1초.
+            min_duration_sec: 1
+            min_hits: 2
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: always
         alert_level: critical
         cooldown_sec: 15
+        provisional_alert: true
         description: "화재 감지"
 
       smoke:
@@ -61,9 +205,16 @@ profiles:
           min_confidence: 0.40
         rule:
           type: direct_detection
+          temporal:
+            # 연기는 지속성 중요 — 3초 이상 지속 시에만 사건.
+            min_duration_sec: 3
+            min_hits: 4
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: on_high_confidence
         alert_level: high
         cooldown_sec: 20
+        provisional_alert: true
         description: "연기 감지"
 
       crowding:
@@ -76,10 +227,34 @@ profiles:
           type: count_threshold
           # 단일 카메라 화각 기준 적정값(20은 과다) — 현장 FOV에 맞춰 조정.
           min_count: 10
+          temporal:
+            # 혼잡은 10초 이상 지속될 때만 사건.
+            min_duration_sec: 10
+            min_hits: 3
+            max_gap_sec: 3
+            clear_after_sec: 15
         vlm: never
         alert_level: low
         cooldown_sec: 60
         description: "혼잡 감지"
+
+      loitering:
+        # 배회 — 같은 사람이 zone에서 60초 이상 체류. zones.loitering 미설정 시 미발생.
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.40
+        rule:
+          type: track_loitering
+          zone_id: loitering
+          dwell_time_sec: 60
+          grace_sec: 3
+          emit_once_per_episode: true
+        vlm: never
+        alert_level: medium
+        cooldown_sec: 120
+        description: "배회 의심(지정 구역 장기 체류)"
 
       restricted_area:
         # zone(폴리곤 좌표)을 카메라별로 설정해야 발생한다(zones 비어있으면 미발생).
@@ -87,30 +262,38 @@ profiles:
         trigger:
           models: [general_yolo]
           classes: [person]
-          min_confidence: 0.35
+          min_confidence: 0.40
         rule:
           type: zone_intrusion
           zone_id: restricted
+          temporal:
+            # 단일 프레임 zone 진입 오탐 방지 — 1초 이상 체류.
+            min_duration_sec: 1
+            min_hits: 2
+            max_gap_sec: 1
+            clear_after_sec: 10
         vlm: never
         alert_level: medium
         cooldown_sec: 30
         description: "제한구역 침입"
 
+      camera_disconnect:
+        # 카메라 단절 — pipeline/health 레이어에서 30초 동안 프레임 미수신 시 발생.
+        # 정책 YAML이 아닌 pipeline 측 상태 게이트로 평가된다. 카탈로그 노출용으로 예약.
+        enabled: false
+        alert_level: high
+        cooldown_sec: 60
+        description: "카메라 영상 수신 단절(30초 이상)"
+
+      tamper:
+        # 화면 가림/초점 상실 — pipeline 측 장면 급변·검은 화면 감지 게이트로 평가된다.
+        enabled: false
+        alert_level: high
+        cooldown_sec: 60
+        description: "카메라 화면 가림/조작 의심"
+
   construction:
     policies:
-      person_detected:
-        enabled: true
-        trigger:
-          models: [general_yolo]
-          classes: [person]
-          min_confidence: 0.25
-        rule:
-          type: direct_detection
-        vlm: never
-        alert_level: low
-        cooldown_sec: 60
-        description: "사람 감지"
-
       no_helmet:
         enabled: true
         # ppe_yolo가 NO-Hardhat(=no_helmet)을 직접 탐지하므로 person+helmet overlap 룰이 아니라
@@ -121,6 +304,12 @@ profiles:
           min_confidence: 0.30
         rule:
           type: direct_detection
+          temporal:
+            # PPE 위반은 5프레임 중 3프레임 이상 지속 시 사건.
+            min_hits: 3
+            window_frames: 5
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: on_ambiguous
         alert_level: medium
         cooldown_sec: 30
@@ -136,6 +325,11 @@ profiles:
           min_confidence: 0.30
         rule:
           type: direct_detection
+          temporal:
+            min_hits: 3
+            window_frames: 5
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: on_ambiguous
         alert_level: medium
         cooldown_sec: 30
@@ -149,24 +343,35 @@ profiles:
           min_confidence: 0.40
         rule:
           type: direct_detection
+          temporal:
+            min_duration_sec: 1
+            min_hits: 2
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: always
         alert_level: critical
         cooldown_sec: 15
+        provisional_alert: true
         description: "화재 감지"
 
       smoke:
         enabled: true
         # fire_smoke_yolo의 factory-smoke 클래스를 smoke로 매핑(model_profiles.yaml class_map) → 직접 탐지.
-        # (이전에는 smoke 클래스가 없는 general_yolo(COCO)로 라우팅되어 영구 미발생하는 dead config였음)
         trigger:
           models: [fire_smoke_yolo]
           classes: [smoke]
           min_confidence: 0.30
         rule:
           type: direct_detection
+          temporal:
+            min_duration_sec: 3
+            min_hits: 4
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: on_high_confidence
         alert_level: high
         cooldown_sec: 20
+        provisional_alert: true
         description: "연기 감지 (fire_smoke_yolo의 factory-smoke → smoke 매핑)"
 
       fall:
@@ -174,18 +379,22 @@ profiles:
         trigger:
           models: [general_yolo]
           classes: [person]
-          # trigger.min_confidence를 명시해 저신뢰 person 박스를 coarse 게이트에서 차단한다.
-          # rule에 min_confidence가 없으면 이 값을 상속한다(SSOT — 한 곳에만 명시).
           min_confidence: 0.25
         rule:
           type: pose_anomaly
           aspect_ratio_threshold: 2.0
-          # temporal 파라미터 — 이전 프레임 대비 높이/중심 변화로 쓰러짐 보강 판단
           height_drop_ratio: 0.45
           cy_drop_ratio: 0.35
+          temporal:
+            # 쓰러짐은 pose 단일 프레임 + temporal 보강이 이미 있지만 사건은 2회 이상 anomaly hit 시.
+            min_hits: 2
+            window_frames: 4
+            max_gap_sec: 2
+            clear_after_sec: 10
         vlm: always
         alert_level: high
         cooldown_sec: 20
+        provisional_alert: true
         description: "쓰러짐 의심"
 
       restricted_area:
@@ -193,9 +402,15 @@ profiles:
         trigger:
           models: [general_yolo]
           classes: [person]
+          min_confidence: 0.40
         rule:
           type: zone_intrusion
           zone_id: restricted
+          temporal:
+            min_duration_sec: 1
+            min_hits: 2
+            max_gap_sec: 1
+            clear_after_sec: 10
         vlm: never
         alert_level: medium
         cooldown_sec: 30
@@ -203,19 +418,6 @@ profiles:
 
   school:
     policies:
-      person_detected:
-        enabled: true
-        trigger:
-          models: [general_yolo]
-          classes: [person]
-          min_confidence: 0.25
-        rule:
-          type: direct_detection
-        vlm: never
-        alert_level: low
-        cooldown_sec: 60
-        description: "사람 감지"
-
       fall:
         enabled: true
         trigger:
@@ -227,9 +429,15 @@ profiles:
           aspect_ratio_threshold: 2.0
           height_drop_ratio: 0.45
           cy_drop_ratio: 0.35
+          temporal:
+            min_hits: 2
+            window_frames: 4
+            max_gap_sec: 2
+            clear_after_sec: 10
         vlm: always
         alert_level: high
         cooldown_sec: 20
+        provisional_alert: true
         description: "쓰러짐 의심"
 
       fight:
@@ -242,10 +450,17 @@ profiles:
           type: person_proximity
           min_persons: 2
           max_distance_px: 50
+          temporal:
+            # 싸움은 근접 지속이어야 사건 — 2초 이상 지속.
+            min_duration_sec: 2
+            min_hits: 3
+            max_gap_sec: 1
+            clear_after_sec: 15
         vlm: always
-        alert_level: critical
+        alert_level: high
         cooldown_sec: 20
-        description: "싸움/폭력 의심"
+        provisional_alert: true
+        description: "싸움/폭력 의심(근접 지속)"
 
       crowding:
         enabled: true
@@ -256,27 +471,20 @@ profiles:
         rule:
           type: count_threshold
           min_count: 20
+          temporal:
+            min_duration_sec: 10
+            min_hits: 3
+            max_gap_sec: 3
+            clear_after_sec: 15
         vlm: never
         alert_level: low
         cooldown_sec: 60
         description: "혼잡 감지"
 
-  # ── 공장(factory) — 사람·안전모·화재·연기 + (zone)침입 ─────────────────────────────
+  # ── 공장(factory) — 안전모·화재·연기 + (zone)침입 ──────────────────────────────
   # camera_profiles.yaml의 factory 도메인 대응 프로파일(이전엔 프로파일 부재로 미발생하던 dead 도메인).
   factory:
     policies:
-      person_detected:
-        enabled: true
-        trigger:
-          models: [general_yolo]
-          classes: [person]
-          min_confidence: 0.35
-        rule:
-          type: direct_detection
-        vlm: never
-        alert_level: low
-        cooldown_sec: 60
-        description: "사람 감지"
 
       no_helmet:
         enabled: true
@@ -286,6 +494,11 @@ profiles:
           min_confidence: 0.35
         rule:
           type: direct_detection
+          temporal:
+            min_hits: 3
+            window_frames: 5
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: on_ambiguous
         alert_level: medium
         cooldown_sec: 30
@@ -299,9 +512,15 @@ profiles:
           min_confidence: 0.45
         rule:
           type: direct_detection
+          temporal:
+            min_duration_sec: 1
+            min_hits: 2
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: always
         alert_level: critical
         cooldown_sec: 15
+        provisional_alert: true
         description: "화재 감지"
 
       smoke:
@@ -312,9 +531,15 @@ profiles:
           min_confidence: 0.40
         rule:
           type: direct_detection
+          temporal:
+            min_duration_sec: 3
+            min_hits: 4
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: on_high_confidence
         alert_level: high
         cooldown_sec: 20
+        provisional_alert: true
         description: "연기 감지"
 
       restricted_area:
@@ -322,32 +547,24 @@ profiles:
         trigger:
           models: [general_yolo]
           classes: [person]
-          min_confidence: 0.35
+          min_confidence: 0.40
         rule:
           type: zone_intrusion
           zone_id: restricted
+          temporal:
+            min_duration_sec: 1
+            min_hits: 2
+            max_gap_sec: 1
+            clear_after_sec: 10
         vlm: never
         alert_level: medium
         cooldown_sec: 30
         description: "제한구역 침입"
 
-  # ── 주차장/빌딩(parking) — 사람·쓰러짐·화재·연기 + (zone)침입 ──────────────────────
+  # ── 주차장/빌딩(parking) — 쓰러짐·화재·연기 + (zone)침입 ──────────────────────
   # camera_profiles.yaml의 parking 도메인 대응 프로파일(이전엔 프로파일 부재로 미발생하던 dead 도메인).
   parking:
     policies:
-      person_detected:
-        enabled: true
-        trigger:
-          models: [general_yolo]
-          classes: [person]
-          min_confidence: 0.35
-        rule:
-          type: direct_detection
-        vlm: never
-        alert_level: low
-        cooldown_sec: 60
-        description: "사람 감지"
-
       fall:
         enabled: true
         trigger:
@@ -359,9 +576,15 @@ profiles:
           aspect_ratio_threshold: 2.0
           height_drop_ratio: 0.45
           cy_drop_ratio: 0.35
+          temporal:
+            min_hits: 2
+            window_frames: 4
+            max_gap_sec: 2
+            clear_after_sec: 10
         vlm: always
         alert_level: high
         cooldown_sec: 20
+        provisional_alert: true
         description: "쓰러짐 의심"
 
       fire:
@@ -372,9 +595,15 @@ profiles:
           min_confidence: 0.45
         rule:
           type: direct_detection
+          temporal:
+            min_duration_sec: 1
+            min_hits: 2
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: always
         alert_level: critical
         cooldown_sec: 15
+        provisional_alert: true
         description: "화재 감지"
 
       smoke:
@@ -385,9 +614,15 @@ profiles:
           min_confidence: 0.40
         rule:
           type: direct_detection
+          temporal:
+            min_duration_sec: 3
+            min_hits: 4
+            max_gap_sec: 1
+            clear_after_sec: 5
         vlm: on_high_confidence
         alert_level: high
         cooldown_sec: 20
+        provisional_alert: true
         description: "연기 감지"
 
       restricted_area:
@@ -395,11 +630,80 @@ profiles:
         trigger:
           models: [general_yolo]
           classes: [person]
-          min_confidence: 0.35
+          min_confidence: 0.40
         rule:
           type: zone_intrusion
           zone_id: restricted
+          temporal:
+            min_duration_sec: 1
+            min_hits: 2
+            max_gap_sec: 1
+            clear_after_sec: 10
         vlm: never
         alert_level: medium
         cooldown_sec: 30
         description: "제한구역 침입"
+
+      wrong_way:
+        # 역주행 — 차량 Track이 허용 방향과 반대로 이동. Tracking 도입 전까지 비활성.
+        # 카탈로그 예약항목(enabled: false). Tracking 도입 시 evaluator 연결.
+        enabled: false
+        trigger:
+          models: [general_yolo]
+          classes: [car, truck, bus]
+          min_confidence: 0.40
+        rule:
+          type: direct_detection
+        vlm: on_ambiguous
+        alert_level: high
+        cooldown_sec: 30
+        description: "차량 역주행 의심(Tracking 평가 없이는 발생 안 함)"
+
+      line_crossing:
+        # Line crossing — 지정 선을 지정 방향으로 통과하는 experimental Tracking 정책.
+        enabled: true
+        trigger:
+          models: [general_yolo]
+          classes: [person, car, truck, bus]
+          min_confidence: 0.40
+        rule:
+          type: track_line_crossing
+          zone_id: line
+          min_displacement_px: 2
+        vlm: never
+        alert_level: medium
+        cooldown_sec: 30
+        description: "지정선 통과(Tracking 평가 없이는 발생 안 함)"
+
+      abandoned_object:
+        # 방치 물체 — 정지 객체가 지정 시간 이상 유지. Tracking 도입 전까지 비활성.
+        enabled: false
+        trigger:
+          models: [general_yolo]
+          classes: [backpack, suitcase, bag]
+          min_confidence: 0.40
+        rule:
+          type: direct_detection
+        vlm: on_ambiguous
+        alert_level: medium
+        cooldown_sec: 60
+        description: "방치 물체 의심(Tracking 평가 없이는 발생 안 함)"
+
+      object_removal:
+        # 물체 제거 — 보호 대상 객체가 사라짐. Tracking 도입 전까지 비활성.
+        enabled: false
+        trigger:
+          models: [general_yolo]
+          classes: [person]
+          min_confidence: 0.40
+        rule:
+          type: direct_detection
+        vlm: never
+        alert_level: medium
+        cooldown_sec: 60
+        description: "물체 제거 의심(Tracking 평가 없이는 발생 안 함)"
+
+  # 창고는 카메라별 명시 선택을 사용하고, 각 이벤트의 canonical policy를 재사용한다.
+  warehouse:
+    default_events: [fire, smoke, restricted_area]
+    policies: {}

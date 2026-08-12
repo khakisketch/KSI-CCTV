@@ -9,13 +9,6 @@ app:
   log_dir: "./logs"
   timezone: "Asia/Seoul"
 
-# 대시보드 설정
-ui:
-  dashboard_port: 8080
-  dashboard_title: "KSI-CCTV 안전 관리 대시보드"
-  refresh_interval_ms: 1000
-  max_display_alerts: 50
-
 # CCTV 채널 설정
 # 실제 운영에서는 config/cameras.yaml에서 관리
 cameras:
@@ -26,6 +19,11 @@ cameras:
   # 마지막 프레임 수신 후 이 시간(초) 초과 시 stale(프레임 지연)로 판정 → /health unhealthy.
   # 네트워크/카메라 fps에 맞춰 조정(저fps 카메라는 상향). 이전엔 코드 고정(30s)이라 조정 불가였음.
   stale_threshold_sec: 30
+  # 운영 상태 이벤트: 10초부터 영상 지연, 30초부터 단절로 전이한다.
+  health_stale_after_sec: 10
+  disconnect_after_sec: 30
+  tamper_duration_sec: 5
+  tamper_recovery_sec: 3
 
 # 모델 설정
 models:
@@ -43,12 +41,26 @@ models:
     # safety_custom 모델을 사용할 때만 classes를 모델 학습 순서와 동일하게 지정하세요.
     # classes: [person, helmet, vest, fire, smoke, fall]
   vlm:
+    # VLM runtime/provider SSOT. This is intentionally not a detector profile in model_profiles.yaml.
     provider: "ollama"
     model_name: "qwen3-vl:latest"
-    base_url: "http://localhost:11434"
-    enabled: true
+    base_url: "http://127.0.0.1:11434"
+    # First offline Appliance release has no signed Ollama/model artifact. Enable only in a separately qualified release.
+    enabled: false
+    runtime_qualified: false
+    model_digest: ""
     timeout_sec: 60
     max_retries: 2
+    cooldown_sec: 60
+    max_concurrent: 2
+    allowed_hosts: []
+    max_frames: 3
+    max_dimension: 640
+    jpeg_quality: 80
+    max_total_bytes: 3145728
+    frame_window_sec: 5
+    queue_soft_limit: 8
+    queue_hard_limit: 16
     prompt_template: "./config/prompts/construction.yaml"
 
 # 감지 설정
@@ -59,13 +71,35 @@ detection:
   alert_cooldown_sec: 30
   # 관심 클래스 (쉼표 구분)
   # COCO pretrained 모델은 fire/smoke/fall/helmet/vest 직접 탐지가 어렵습니다.
-  # 해당 이벤트는 VLM 분석 또는 safety_custom YOLO 모델로 보강하세요.
+  # 해당 이벤트는 safety_custom YOLO 모델 또는 VLM에서 보강하세요.
   target_classes: "person,fire,smoke,fall"
-  # COCO pretrained 모델에서도 person 탐지 프레임을 VLM 분석 후보로 보냅니다.
-  # 이 이벤트는 AlertManager로 전달하지 않아 이메일/캡처 알람 폭주를 방지합니다.
-  vlm_trigger_classes: "person"
+  # VLM 트리거 클래스 — 기본 비활성(빈 문자열).
+  # 정책 엔진(config/event_policies.yaml)에서 사건 후보에만 VLM을 예약하므로,
+  # legacy 경로로 person 감지 프레임을 무조건 VLM 후보로 보내지 않는다.
+  # people이 정상 통행할 때마다 VLM 호출이 폭주하고 무의미한 'vlm_analysis_candidate'
+  # 관찰이 쌓이는 것을 방지한다. VLM 사건 검증은 정책 vlm: always/on_high_confidence로 동작.
+  vlm_trigger_classes: ""
   vlm_cooldown_sec: 60
   # 참고: 안전모/조끼 판정은 class_profile=safety_custom 모델 또는 VLM에서 수행합니다.
+
+# 카메라별 ByteTrack 실행 설정. 사건별 class/confidence/cooldown은
+# config/event_policies.yaml이 SSOT이며 여기에는 tracker 자체 설정만 둔다.
+tracking:
+  track_high_thresh: 0.35
+  track_low_thresh: 0.10
+  new_track_thresh: 0.40
+  track_buffer: 30
+  match_thresh: 0.80
+  trajectory_size: 120
+  stale_history_sec: 300
+
+# Pose/ST-GCN behavior inference is opt-in. Missing disabled assets are nonfatal.
+behavior:
+  enabled: false
+  iou_threshold: 0.50
+  inference_stride: 5
+  stale_after_sec: 10
+  max_tracks_per_camera: 100
 
 # 디바이스 설정
 device:
@@ -90,15 +124,27 @@ alerts:
   image_dir: "./data/captures"
   # 이미지 보관 기간 (일)
   image_retention_days: 30
-  # 저장 전 얼굴 블러링(개인정보 보호)
+  # 저장 evidence와 snapshot의 얼굴 블러링. 인증된 live HLS는 원본 관제 스트림이다.
   blur_faces: true
   face_blur_strength: 35
   # 캡처 이미지 암호화 저장(개인정보 보호). true이면 KSI_CCTV_CAPTURE_KEY 환경변수에
   # Fernet 키가 있어야 하며 .jpg.enc로 저장된다. 대시보드 갤러리는 동일 키로 복호화 표시.
-  encrypt_images: false
+  # 운영 기본값은 암호화. KSI_CCTV_CAPTURE_KEY(Fernet)가 없으면 캡처 저장을 켠
+  # 데몬은 fail-closed로 기동하지 않는다. 캡처가 전혀 필요 없는 현장은 save_images:false를 명시.
+  encrypt_images: true
   # 알람 로그 로테이션
   log_max_bytes: 10485760
   log_backup_count: 5
+
+# 메타데이터 전용 관측 저장. 원본 영상/프레임은 이 DB에 저장하지 않는다.
+storage:
+  observations_db: "./data/observations.db"
+  observation_retention_days: 30
+  observation_max_buckets_per_camera: 43200  # 30일 × 24시간 × 60분
+  # Event lifecycle/history는 observations DB와 동일한 SQLite 파일에 저장한다.
+  # 운영상 분리가 필요하면 KSI_CCTV_EVENTS_DB 또는 events_db로 별도 파일을 지정한다.
+  events_db: "./data/observations.db"
+  event_retention_days: 30
 
 # RTSP 설정
 rtsp:

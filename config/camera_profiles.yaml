@@ -1,21 +1,22 @@
-# Camera-level detection profile draft.
-# In Phase 1 this is documentation/config foundation only.
+# Camera-level detection profile contract.
+#
+# 설계 원칙(제품 정의):
+#   - 'person_detected'는 이벤트가 아니라 '관측값'이다. event_policies.yaml에서 제거됐다.
+#   - 카메라별 활성 이벤트(enabled_events)는 사용자가 카메라 설정 UI에서 선택한다.
+#   - 도메인(general/construction/school/factory/parking)은 이벤트 목록 프리셋 역할만 한다.
+#   - 실행 모델은 enabled_events에서 EventPolicyEngine이 결정한다.
+#   - Line crossing/Loitering은 experimental opt-in이며 기본값은 off.
+#     Wrong way/Abandoned object/Object removal은 planned 상태로 유지한다.
 
 cameras:
-  # 기본(예시) 카메라 — 범용 CCTV 프로파일. 어느 현장에나 바로 동작(사람·쓰러짐·화재·연기·혼잡).
-  # 건설/공장 등 특화가 필요하면 domain을 construction/factory/parking/school로 바꾼다.
+  # 기본(예시) 카메라 — 범용 CCTV 프로파일.
   cam_001:
     domain: general
     enabled: true
     enabled_events:
-      - person_detected
-      - fall
       - fire
       - smoke
       - crowding
-    models:
-      - general_yolo
-      - fire_smoke_yolo
     zones: {}
 
   cam_002:
@@ -23,14 +24,9 @@ cameras:
     enabled: false
     enabled_events:
       - no_helmet
-      - no_vest
       - fire
       - smoke
       - restricted_area
-    models:
-      - general_yolo
-      - ppe_yolo
-      - fire_smoke_yolo
     zones:
       restricted:
         type: polygon
@@ -40,36 +36,30 @@ cameras:
     domain: school
     enabled: false
     enabled_events:
-      - person_detected
-      - fall
-      - fight
       - crowding
-    models:
-      - general_yolo
     zones: {}
 
 domains:
   general:
     label: "범용 CCTV"
-    default_events: [person_detected, fall, fire, smoke, crowding]
-    default_models: [general_yolo, fire_smoke_yolo]
+    default_events: [fire, smoke, crowding]
 
   construction:
     label: "건설현장"
-    default_events: [person_detected, no_helmet, no_vest, fire, smoke, fall]
-    default_models: [general_yolo, ppe_yolo, fire_smoke_yolo]
+    default_events: [no_helmet, fire, smoke, restricted_area]
 
   school:
     label: "학교"
-    default_events: [person_detected, fall, fight, crowding]
-    default_models: [general_yolo]
+    default_events: [crowding]
 
   factory:
     label: "공장"
-    default_events: [person_detected, no_helmet, restricted_area, fire, smoke]
-    default_models: [general_yolo, ppe_yolo, fire_smoke_yolo]
+    default_events: [no_helmet, restricted_area, fire, smoke]
 
   parking:
     label: "주차장/빌딩"
-    default_events: [person_detected, restricted_area, fire, smoke]
-    default_models: [general_yolo, fire_smoke_yolo]
+    default_events: [restricted_area, fire, smoke]
+
+  warehouse:
+    label: "창고"
+    default_events: [fire, smoke, restricted_area]

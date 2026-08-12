@@ -1,5 +1,5 @@
 # KSI-CCTV model profiles
-# Phase 1 draft. Only general_yolo is currently expected to exist.
+# Enabled profiles are the current Appliance model contract. Model assets are baked into signed release images.
 
 models:
   general_yolo:
@@ -85,20 +85,25 @@ models:
     device: auto
     description: "Open-vocab YOLO-World — 학습 없이 텍스트 프롬프트로 임의 객체 탐지(검증: CPU 실추론 PASS)."
 
-  pose_fall_model:
+  pose_onnx:
     enabled: false
-    type: future_pose_or_yolo
+    type: pose_onnx
     source: built_in
-    model_path: "./models/pose_fall.onnx"
-    classes: [person, fall]
-    description: "Future pose/fall model. Disabled until implemented."
+    model_path: "./models/pose.onnx"
+    input_size: [640, 640]
+    keypoint_count: 17
+    confidence_threshold: 0.25
+    output_layout: bcn
+    device: auto
+    description: "Feature-gated YOLO-pose ONNX contract."
 
-vlm:
-  enabled: true
-  provider: ollama
-  model_name: "qwen3-vl:latest"
-  base_url: "http://localhost:11434"
-  timeout_sec: 60
-  max_retries: 2
-  cooldown_sec: 60
-  max_concurrent: 2
+  stgcn_onnx:
+    enabled: false
+    type: stgcn_onnx
+    source: built_in
+    model_path: "./models/stgcn.onnx"
+    class_names: [normal, fall, fight]
+    keypoint_count: 17
+    sequence_length: 30
+    device: auto
+    description: "Feature-gated ST-GCN ONNX [1,C,T,V,M] action contract."
