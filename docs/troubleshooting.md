@@ -1,12 +1,14 @@
 # KSI-CCTV 문제 해결 가이드
 
-현장 운영 중 발생할 수 있는 문제별 진단 절차와 해결 방법을 설명합니다.
+현장 운영 중 발생할 수 있는 문제별 진단 절차와 해결 방법을 설명합니다. 현장 설치업자는 먼저 HTTPS 웹 콘솔의
+`진단`에서 `다시 확인`을 실행하고, 권장 조치를 확인한 뒤 `지원 자료 내려받기`로 redacted ZIP을 생성합니다.
+이 문서의 shell 명령은 지원 자료를 전달받은 권한 있는 service engineer가 사용하는 2차 복구 절차입니다.
 
 ---
 
 ## 빠른 진단
 
-문제 발생 시 가장 먼저 헬스체크를 실행합니다.
+Service engineer가 추가 분석할 때 다음 헬스체크를 실행합니다.
 
 ```bash
 ./.venv/bin/python scripts/healthcheck.py --json
@@ -33,15 +35,16 @@
 
 **원인 및 해결:**
 
-1. 환경 변수 확인
+1. 웹 콘솔 `카메라 > 연결 관리`에서 `스트림 검사`를 실행합니다.
+2. Service engineer가 필요할 때만 환경을 추가 확인합니다.
    ```bash
    # URL이 설정되었는지 확인 (실제 값은 노출되지 않음)
    ./.venv/bin/python scripts/healthcheck.py --check-cameras --json
    ```
-2. RTSP URL 형식 확인: `rtsp://user:password@IP:554/stream1`
-3. 카메라와의 네트워크 연결 확인 (`ping IP`)
-4. 포트 `554`가 방화벽에서 허용되었는지 확인
-5. 카메라 계정 정보가 올바른지 확인
+3. RTSP 주소 형식 확인: `rtsp://IP:554/stream1` (계정과 비밀번호는 URL이 아닌 별도 입력란 사용)
+4. 카메라와의 네트워크 연결 확인
+5. 포트 `554`가 방화벽에서 허용되었는지 확인
+6. 카메라 계정 정보가 올바른지 확인
 
 ### 증상: 프레임이 끊기거나 FPS가 낮음
 
@@ -154,7 +157,7 @@ VLM이 JSON 형식이 아닌 자유 텍스트를 반환한 것입니다.
 
 ```bash
 # 환경 변수가 설정되었는지 확인
-echo "KSI_CCTV_DASHBOARD_PASSWORD is set: $([ -n "$KSI_CCTV_DASHBOARD_PASSWORD" ] && echo yes || echo no)"
+echo "KSI_CCTV_WEB_PASSWORD is set: $([ -n "$KSI_CCTV_WEB_PASSWORD" ] && echo yes || echo no)"
 ```
 
 `.env` 파일이 올바른 경로에 있는지, 비밀번호에 특수문자가 포함된 경우 따옴표로 감쌌는지 확인합니다.
@@ -257,9 +260,10 @@ bash scripts/install.sh
 
 ### 증상: `onnxruntime` ARM64 호환 오류
 
-DGX Spark (ARM64 `aarch64`)에서는 x86_64 전용 패키지가 동작하지 않습니다.  
-`scripts/install.sh`가 ARM64 환경을 감지하고 적절한 패키지를 설치합니다.  
-수동 설치 시 `onnxruntime` 대신 `onnxruntime-gpu` (cu130 빌드) 또는 ARM 빌드를 사용합니다.
+Ubuntu ARM64 Appliance(DGX Spark profile)에서는 x86_64 전용 패키지가 동작하지 않습니다.
+운영 환경은 source-tree `scripts/install.sh` 대신 signed Appliance image를 사용합니다.
+개발/랩에서 GPU를 시험할 경우 `onnxruntime-gpu` 설치 성공만으로는 충분하지 않으며 실제
+`CUDAExecutionProvider`를 target device에서 확인해야 합니다.
 
 ### 증상: Python 컴파일 오류 또는 테스트 실패
 
@@ -269,7 +273,7 @@ python3 -m compileall -q src tests scripts
 
 # 단위 테스트 실행
 ./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q
-# 기대 결과: 전체 통과, 1 skipped (VLM opt-in). 실제 수는 실행 시마다 다를 수 있음.
+# 기준선(2026-07-25): 680 passed, 5 skipped. skip 사유와 실제 수는 release record에 보관합니다.
 ```
 
 ---

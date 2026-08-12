@@ -38,18 +38,19 @@ KSI-CCTV는 **카메라마다 감지 목적을 다르게 설정하고, 기본 �
 
 ## 현재 상태
 
-- Phase 0: 프로토타입 완료 (단일 YOLO + VLM + 대시보드)
-- Phase 1+: 다중 모델/이벤트 정책 기반 플랫폼으로 확장 중
-- 설치형 제품화: 헤드리스 엔진(FastAPI) + **Next.js 웹 콘솔**(데스크톱 관제/모바일 뷰어, 다크·라이트) +
-  **MediaMTX 영상 게이트웨이**(라이브 HLS) 구축 — 기존 Streamlit 대시보드와 **병존**(점진 이관 진행,
-  [implementation-plan](implementation-plan.md) 참조). open-vocab 텍스트 탐지(학습 없이 탐지대상 변경) 지원.
+> **권위 있는 현재 마일스톤, Advanced-AI v1 (2026-08-01):** DGX Spark ARM64 오프라인
+> Appliance, HLS, single-admin을 대상으로 한다. 이 절의 상태 구분이 이전 로드맵보다 우선한다.
 
-## 비목표 (현재 버전)
+- **구현됨:** 헤드리스 엔진(FastAPI), **Next.js 단일 웹 콘솔**, MediaMTX HLS, COCO/PPE/화재·연기 정책 탐지,
+  ByteTrack 기반 `line_crossing`/`loitering` tracking. Streamlit은 폐기됐으며 지원하지 않는다.
+- **개발 중:** pose + ST-GCN 기반 fall/fight와 bounded local VLM verification. VLM은 후보 알림을
+  조용히 억제하지 않으며, 실패·시간초과·파싱 실패는 `unverified` 알림으로 남겨야 한다.
+- **qualification 필요:** DGX Spark ARM64 CUDA artifact, 모델 라이선스와 현장 정확도 데이터, 실제 RTSP/HLS,
+  복구 및 동시 채널 soak 증적. 16채널은 아직 입증되거나 승인된 용량이 아니다.
 
-> 갱신(2026-06-17): 사용자 확정 제품 목표에 따라 **실시간 영상 스트리밍·모바일 뷰어를 목표로 승격**했다
-> (영상 게이트웨이 HLS 라이브 재생 + 반응형 웹 모바일 뷰어 제공). 아래는 갱신된 비목표다.
-> 근거: [architecture-target](architecture-target.md) §1–2.
+## 비목표 (Advanced-AI v1)
 
 - **네이티브** 모바일 앱 (반응형 웹 모바일 뷰어는 제공하므로 별도 앱은 비목표)
-- 클라우드 호스팅 서비스 (설치형 오프라인이 1차 — Tailscale 등 원격 접속은 운영 옵션)
-- 자동 모델 학습 파이프라인 (학습은 NON-GOAL — 범용 사전학습 모델 + open-vocab 텍스트 탐지로 대체)
+- WebRTC, 클라우드 호스팅, RBAC
+- production 기본 활성화 open-vocab, LLM 보고, 자동 few-shot 학습, GNN
+- theft, weapons, smoking 이벤트

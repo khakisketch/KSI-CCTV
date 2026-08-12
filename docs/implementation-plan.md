@@ -1,4 +1,6 @@
-# 구현 실행 계획 (설치형 AI CCTV 제품화) — 진행 SSOT
+# 구현 실행 계획 (설치형 AI CCTV 제품화) — 역사적 진행 로그
+
+> 현재 release SSOT는 `docs/release-gate.md`, `docs/internal-ci.md`, `docs/offline-appliance.md`다.
 
 > 작성 2026-06-16 · 이 문서는 **로드맵 3종을 실행 가능한 단계로 쪼갠 진행 트래커**다.
 > 근거 설계: [architecture-target](architecture-target.md) · [roadmap-capability](roadmap-capability.md) · [roadmap-packaging](roadmap-packaging.md)
@@ -42,32 +44,33 @@
 - ⏭ 프롬프트→정책 자동배선 UX는 P4(프론트)/API 쓰기에서(신규 클래스 vlm:on_ambiguous 기본 규칙은 설계 확정)
 - **검증 완료:** ruff·mypy clean(34)·445 passed. CPU 1.49s/frame(실시간은 [HW] GPU 필요 — 연구 예측 일치).
 
-### P4. 프론트엔드(Next.js+Tailwind+shadcn) — 🔄 진행(scaffold+디자인베이스 완료)
+### P4. 프론트엔드(Next.js+Tailwind+shadcn) — ✅ 완료(scaffold+디자인베이스+연동+인증 모두 완료)
 - ✅ scaffold(Next 16·React 19·Tailwind 4·TS·App Router, `frontend/`) + shadcn init(11 컴포넌트) + next-themes
 - ✅ 디자인 시스템 베이스 + 레이아웃: ThemeProvider(다크 기본/라이트 토글), AppShell(데스크톱 사이드바 + 모바일 하단탭=경량 뷰어), 대시보드(메트릭 카드·이벤트 테이블 빈상태), 스텁 5라우트
 - ✅ `npm run build` 성공(6라우트, TS·eslint clean). node_modules gitignore.
 - ✅ **P4b 엔진 API 연동(읽기)**: `lib/engine.ts` 서버사이드 페치(API 키 서버 전용·브라우저 미노출, AbortSignal 타임아웃, 미연결 graceful) + 대시보드·이벤트·모델·카메라·설정을 force-dynamic Server Component로 실데이터 렌더 + EngineStatus 배지.
 - ✅ **브라우저 렌더 E2E 검증(스크린샷)**: 엔진(uvicorn) + Next 동시 기동 → SSR이 실데이터 렌더 확인. 데스크톱 다크/라이트·모바일(하단탭) 스크린샷 육안 검증 — 메트릭(카메라1·모델3 실값)·모델5카드(open_vocab 포함)·"엔진 연결됨".
 - ✅ **P4c 프롬프트 UI + 인증**: 프롬프트 관리(PromptManager + Next route, 키 서버보관, E2E POST→config 실갱신·비-openvocab 400). **프론트 인증**: HMAC 서명 세션쿠키(lib/auth, Web Crypto) + middleware fail-closed 게이트 + /login + 로그아웃. E2E: 미인증/→307·틀린비번 401·맞는비번 200+쿠키·인증후 200·보호 API proxy 307·로그아웃 후 307. frontend/.env.example 추가.
-- ⬜ **남음: start/stop 제어** — 엔진 API를 데몬 프로세스에 mount해 라이브 파이프라인 제어(P1의 보류 control/SSE와 동일 — 별도 통합 단계).
+- ✅ **start/stop 제어 완료** — 엔진 API 데몬 mount(P1c-2) + 웹 제어(P7-G2), 단일 파이프라인을 웹 콘솔에서 시작/중지.
 - ⚠️ **알려진 한계(P1b 쓰기):** set_model_prompts가 yaml.safe_dump로 model_profiles.yaml을 재작성하며 **주석을 제거**한다(라이선스 경고 등). 후속: ruamel.yaml round-trip 또는 경고를 docs로 이전.
-- **검증 완료:** build·lint clean·SSR 실데이터 + 쓰기 E2E·다크/라이트·반응형. start/stop·영상·인증은 후속.
+- **검증 완료:** build·lint clean·SSR 실데이터 + 쓰기 E2E·다크/라이트·반응형. 영상/인증·start/stop 모두 완료.
 
 ### P5. 라이브 영상 게이트웨이(MediaMTX) — ✅ 완료(브라우저 실재생 검증)
-- ✅ **P5a 게이트웨이**: `config/mediamtx.yml`(RTSP 입력 → HLS mpegts/WebRTC 출력, RTMP/SRT 비활성, API auth 기본 default-deny=보안) + compose `ksi-cctv-gateway`(MediaMTX 1.19.1 핀, `--profile video`/`web`, 포트 8554/8888/8889/8189udp, scratch라 healthcheck 없음). 엔진은 영상 전송 안 함(architecture-target §2 준수). 카메라 RTSP는 .env SSOT 공유 + on-demand 풀 경로 템플릿(주석).
+- ✅ **P5a 게이트웨이**: `config/mediamtx.yml`(RTSP 입력 → HLS/WebRTC, RTMP/SRT 비활성) + MediaMTX 1.19.1. HLS/WebRTC/control/RTSP는 Compose 내부 전용이며, 로컬 RTSP 진단은 명시적 `docker-compose.diagnostics.yml` overlay에서만 loopback으로 연다. 설치 업자 등록 시 엔진이 LAN 검증·DNS 고정한 RTSP를 v3 API의 on-demand 경로로 동기화하고 30초 주기로 재조정한다.
 - ✅ **P5b 프론트 플레이어 + same-origin HLS 프록시**: `/api/cameras/{id}/stream`(same-origin 프록시 URL 발급) + **`/api/cameras/{id}/hls/[...seg]` 프록시**(브라우저→Next→게이트웨이; MediaMTX의 cookieCheck(Secure 쿠키) CSRF 핸드셰이크를 서버에서 처리해 평문 HTTP·교차출처에서 막히는 문제 우회 + 게이트웨이 주소·RTSP 자격증명 브라우저 미노출). 카메라 페이지 hls.js `<video>` 플레이어(on-demand 토글, Safari 네이티브 HLS 폴백). 세션 게이트(middleware) 뒤. 의존성 hls.js 1.6(npm audit high+ 0).
 - **검증 완료(카메라 없이, 브라우저 종단):** ffmpeg로 sample.mp4를 합성 RTSP(cam_001) 발행 → 풀스택(엔진 API+게이트웨이+next) 기동 → **Firefox(시스템 H.264)로 로그인→카메라 페이지→라이브 토글→hls.js가 프록시 경유 HLS 재생: VIDEO_STATE readyState=4·currentTime 진행·640x480·paused=false, 데스크톱+모바일(390px) 스크린샷 실프레임 렌더 확인**. 프록시 체인 curl도 index/main_stream/segment(534KB) 200. (헤드리스 Chromium은 H.264 코덱 미탑재라 재생 불가 — 테스트환경 한계이지 제품 결함 아님; 실 Chrome/Edge/Safari/Firefox는 H.264 지원.) [DATA] 실 카메라 RTSP·원격 WebRTC(webrtcAdditionalHosts/TURN)는 타깃.
 
 ### P6. 설치형 패키징 — 🔄 진행(Docker 웹 컨테이너 검증 완료, Windows/PyInstaller [HW] 보류)
 - ✅ **P6a 웹 UI Docker 이미지**: `frontend/Dockerfile`(멀티스테이지 standalone, 비root nextjs:1001) + `.dockerignore`. next.config.ts `output:"standalone"` + `outputFileTracingRoot`/`turbopack.root`를 frontend/로 고정(상위 lockfile 오추론으로 standalone이 절대경로 미러로 중첩되는 버그 수정 — 평면 server.js 확인).
 - ✅ **P6a compose 와이어링**: `ksi-cctv-web` 서비스(`--profile web`) — 엔진(ksi-cctv:8081)을 서비스명으로 서버사이드 호출(API 키 브라우저 미노출), depends_on healthy, node 헬스프로브(alpine curl 부재). 엔진 `KSI_CCTV_HEALTH_HOST` 기본 0.0.0.0(호스트 미매핑 → compose 네트워크 내부만 도달) + `KSI_CCTV_API_KEY`를 common-env로 승격(엔진/웹 동일 키 공유). obsolete `version` 키 제거.
-- ⬜ Windows Service+인스톨러 · PyInstaller · 오프라인 번들 · EP별 onnxruntime 휠 선택(P2 연계)
+- ✅ **Ubuntu ARM64 Appliance 소프트웨어**: distinct CI/release Ed25519 schema-v3 contract, Compose digest↔오프라인 image tar 매핑/inspect, stable state, site secret 검증, non-root engine/web, Caddy internal-CA HTTPS, systemd boot health, transaction-journal install/upgrade/code-only rollback/explicit restore recovery, 1~16대 software admission(동시 처리용량 증거 아님), ONVIF/수동 wizard, 가상 CCTV E2E.
+- ⏸ **출고 게이트**: 실제 DGX Spark ARM64 4-image 서명 번들, 1/4/8/16채널·PoE/ONVIF/NVR·열/전원복구 검증, YOLO 계열 상용 라이선스 확정. Jetson, Windows/PyInstaller는 별도 범위.
 - **검증 완료:** `docker build ./frontend` 성공 → 컨테이너 실기동(✓ Ready)·`/login` 200·미인증 `/`→307 로그인 리다이렉트(middleware fail-closed 컨테이너에서 동작). 엔진 Dockerfile `docker build --check` 무경고. compose config(daemon/web 양 프로파일) 통과. pytest 462 passed. [HW] Windows·macOS 설치 + 엔진 GPU 이미지 풀빌드는 타깃 검증.
 
-### P7. 정리·마이그레이션 — 🔄 진행(SSOT 갱신·docs 동기화 완료, Streamlit 폐기는 패리티 후)
+### P7. 정리·마이그레이션 — ✅ 완료(Streamlit 폐기 완료, 단일 Next.js 웹 콘솔 통합)
 - ✅ **project-definition.md §비목표 SSOT 갱신**: "실시간 영상 스트리밍" 비목표 제거(P5로 승격·구현), "모바일 앱"→"네이티브 모바일 앱(반응형 웹 뷰어는 제공)", 클라우드=설치형 1차의 옵션, 학습=NON-GOAL 명시. architecture-target가 지적한 SSOT 모순 해소.
 - ✅ **docs 동기화**: README 아키텍처에 엔진 API·Next.js 웹 콘솔·MediaMTX 게이트웨이 추가 + Streamlit "레거시(점진 이관)" 표기 + 웹 콘솔 Docker 기동법 + 구조(src/api·frontend) + 테스트수(462)·다음 단계(학습→패키징/이관) 갱신. project-definition 현재 상태에 제품화 진척 반영.
-- 🔄 **Streamlit 잔여 탭 웹 이관(단계 3)**:
+- ✅ **Streamlit 잔여 탭 웹 이관 완료**:
   - ✅ **P7-2 모델 업로드 API**: `POST /api/models/upload`(멀티파트) — 기존 하드닝 `upload_validator.upload_model`(external-data 차단→load→shape→smoke를 단일 rlimit sandbox) 재사용, 인증 필수, 메모리 OOM 가드(read 상한), disabled 등록, 서버경로 미노출. **실 ONNX(yolo26) 업로드 E2E: 샌드박스 검증 통과→models/uploaded/<id> 격리저장→uploaded_<id> 등록(disabled)→/api/models 노출 확인**(config 백업/복원). 단위테스트 4(plumbing·인증·크기가드). **SCA**: python-multipart 신규 추가→pip-audit가 CVE-2026-53538/9/40 탐지→0.0.31+로 픽스(재감사 클린).
   - ✅ **P7-3 모델 업로드 웹 UI**: `ModelUpload` 폼(파일·이름·클래스·입력크기) + Next 멀티파트 프록시(`/api/models/upload` — 본문 스트리밍·키 서버부착·키 미노출) + 모델 페이지 통합. **브라우저 E2E: 실 ONNX(yolo26) UI 업로드→샌드박스 검증→성공 토스트→router.refresh로 uploaded_<id> 카드 등장(비활성)·콘솔오류 0** 스크린샷 확인. 모델 업로드 Streamlit→웹 이관 완료.
   - ✅ **P7-4 갤러리(API+웹)**: 엔진 `GET /api/captures`(트리) + `GET /api/captures/{date}/{camera}/{name}`(image/jpeg, 경로주입 방지·`.enc` 서버복호화·PII 인증). 웹: Next 이미지 프록시(`<img>`는 헤더 못 보내므로 키 서버부착) + `/gallery` 페이지(날짜 선택·카메라 그룹·이미지 그리드·암호화 잠금 fallback) + 나브 항목. **브라우저 E2E: 실 JPEG 캡처→갤러리 페이지에서 날짜버튼·카메라그룹·이미지 실렌더(naturalWidth>0)·콘솔오류 0** 스크린샷 확인. 단위/엔드포인트 테스트 5. 갤러리 Streamlit→웹 이관 완료.
@@ -115,7 +118,7 @@
 - (P7-G2) 2026-06-17 파이프라인 제어 웹(블로커 해소 2/6) — Next /api/control/[action] 프록시(status GET·start/stop POST·키 부착) + PipelineControl 위젯(상태 5초 폴링·시작/중지·미연결 안내) 대시보드 통합. 엔진 /api/control는 기존+테스트됨(TestApiControl). 브라우저 E2E(fake pipeline uvicorn): 연결됨→시작→실행중→중지→중지됨·콘솔오류0. 프론트 전용(엔진 무변경, pytest 480 불변)·build green.
 - (P7-G3) 2026-06-17 알림 설정 웹(블로커 해소 3/6) — 엔진 GET/PUT /api/alert-preferences(임계값 검증·이벤트별 on/off·저장·감사) + Next PUT 프록시 + AlertSettings(임계값 선택·이벤트 토글, 이벤트는 정책에서 도출) 설정 페이지 통합. 단위테스트 4. 브라우저 E2E: 임계값 critical·이벤트 토글 off→저장→alert_preferences.yaml 영속 확인·콘솔오류0. 484 passed. (SMTP는 env 전용 유지)
 - (P7-G4) 2026-06-17 시스템 상태/메트릭 웹(블로커 해소 4/6) — 엔진 GET /api/system(collect_metrics + 헬스 컴포넌트) + Next 프록시 + SystemStatus 위젯(CPU/메모리/디스크/GPU 막대·헬스 배지·10초 폴링) 대시보드 통합(나브 혼잡 회피). Streamlit system_metrics/system_status/health_check 패리티. 단위테스트 2. 브라우저 E2E: 메트릭 막대·헬스 배지 렌더·콘솔오류0. 486 passed.
-- (P7-G5) 2026-06-17 카메라 설정 편집 웹(**마지막 high 블로커 해소 — 블로커 6/6 완료**) — 엔진 GET /api/camera-profiles + PUT /api/cameras/{id}/profile(도메인·이벤트 정책검증·camera_profiles.yaml 저장·감사) + Next PUT 프록시 + CameraSettings(도메인 선택·이벤트 토글, 정책에서 도출) 카메라 페이지 통합. 단위테스트 4. 브라우저 E2E: cam_001 도메인 construction 변경·이벤트 필터(crowding 제거)→저장→yaml 영속·콘솔오류0. 490 passed. (라이브 적용은 재시작 후 — 다른 설정과 동일)
+- (P7-G5) 2026-06-17 카메라 설정 편집 웹(**마지막 high 블로커 해소 — 블로커 6/6 완료**) — 엔진 GET /api/camera-profiles + PUT /api/cameras/{id}/profile(카탈로그 기반 정책검증·저장·감사·runtime 즉시 적용) + Next PUT 프록시 + CameraSettings(도메인 프리셋 + 카메라별 전체 이벤트 선택) 카메라 페이지 통합. 미구현 이벤트는 준비 중으로 비활성 표시하고, 빈 선택은 영상 전용 모드로 저장 가능.
 - (P7-G6) 2026-06-17 이벤트 필터/검색·VLM상세·통계·export 웹(medium/low 갭 해소) — EventsLive 확장: 등급/유형 필터 + 설명/카메라/권고 검색 + 등급별 통계 카운트 + CSV export + VLM 상세 펼침(위험도·신뢰도·탐지상황·권고조치, 백엔드 기존 서빙 데이터 렌더). EventItem 타입에 VLM 필드 추가. 브라우저 E2E: 등급필터(critical→fire만)·검색(안전모)·VLM상세 펼침·CSV버튼·콘솔오류0. Streamlit alert_log/event_search/event_log/statistics 패리티. 프론트 전용.
 - **패리티 상태**: high 블로커 6/6 + medium/low 갭(G6) 해소. 잔여 = stream_view의 뷰-피델리티(카메라별 FPS/드롭/지연 텔레메트리·탐지박스 오버레이) — 웹은 실 HLS 라이브영상 제공(Streamlit은 정적 스냅샷)이라 시청은 오히려 향상, 텔레메트리/오버레이는 향후 보강(폐기 비차단 minor). → **Streamlit 폐기 완료(아래 단계4).**
 - (B-1 엔진) 2026-06-17 카메라 라이브 텔레메트리 엔드포인트 — GET /api/cameras/telemetry(데몬 파이프라인 mount 시 카메라별 connected/fps/dropped_frames/is_stale 등 RTSPCapture.get_status 노출, standalone이면 connected=false·빈 맵). 테스트 2(fake pipeline·미인증). 451 passed. 프론트 표시(카메라 페이지)는 사용자 examination 종료 후(핫리로드/.next 클래시 회피).

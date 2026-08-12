@@ -35,9 +35,9 @@ cd frontend && npm run build      # tsc + eslint + 라우트 생성(타입/린�
 - 브라우저 콘솔에 JavaScript 오류가 없는가
 - 데스크톱 + 모바일(390px) 양쪽 렌더
 
-> ruff/mypy: 현재 프로젝트에 설정 파일(pyproject.toml, mypy.ini 등)이 없어 게이트에서 제외함.
-> 도입 시 pyproject.toml에 `[tool.ruff]` / `[tool.mypy]` 섹션을 추가하고 이 항목을 갱신한다.
-> (참고: 저장 시 ruff 훅이 .py를 자동 점검한다.)
+> Ruff 설정은 `ruff.toml`, mypy 설정은 `pyproject.toml`에 있다. 빠른 개발 게이트는
+> `bash scripts/test.sh`, release candidate 게이트는 `bash scripts/verify_release_candidate.sh --strict`다.
+> mypy strict 범위는 인증/SSE service, durable event store, Appliance CLI/unit validator부터 점진적으로 확대한다.
 
 ## 웹 콘솔 확인
 

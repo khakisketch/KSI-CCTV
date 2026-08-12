@@ -1,6 +1,20 @@
 # KSI-CCTV 개발 계획
 
-## 전체 로드맵
+> **권위 있는 현재 계획, Advanced-AI v1 (2026-08-01):** 이 문서의 아래 Phase 0-10 기록은
+> 역사적 계획이다. 현재 build/release 기준은 DGX Spark ARM64 offline Appliance, HLS, single-admin이며
+> `docs/release-gate.md`가 출고 증적의 SSOT다.
+
+## 현재 마일스톤
+
+- **구현됨:** COCO/PPE/fire-smoke 정책 탐지, ByteTrack `line_crossing`/`loitering`, Next.js 단일 콘솔과 HLS.
+- **개발 중:** pose/ST-GCN fall/fight, bounded local VLM verification. VLM provider/timeout/parser 실패는
+  후보를 억제하지 않고 `unverified` alert를 생성해야 한다.
+- **qualification 필요:** DGX Spark ARM64 CUDA artifact, 현장 데이터·정확도와 라이선스, 실제 RTSP/HLS,
+  recovery 및 동시 채널 soak. 16채널은 미입증이다.
+- **v1 제외:** WebRTC, cloud/native app, RBAC, production 기본 open-vocab, LLM reporting, 자동 few-shot/GNN,
+  theft/weapons/smoking.
+
+## 역사적 전체 로드맵
 
 | Phase | 내용 | 상태 |
 |---|---|---|
@@ -14,7 +28,7 @@
 | 7 | 운영/배포/보안 강화 | 완료 |
 | 8 | Custom Safety Model + 대시보드/알림 개선 | 완료 |
 | 9 | 개발 개선 (observability, stress test, profiling) | 완료 |
-| 10 | **생산 준비 + 커스텀 모델 학습** | **진행 중 (M0+M1 완료, 전체 단위 테스트 green)** |
+| 10 | **생산 준비 + 커스텀 모델 학습** | **진행 중 (Track A SW 항목 완료, Track B/HW 항목 보류)** |
 
 ## Phase 10 — 생산 준비 + 커스텀 모델 학습
 
@@ -88,14 +102,14 @@ KSI-CCTV를 실제 배포 가능한 상태로 완성합니다. 두 개의 병행
 
 ### Track A — 생산 준비 (Production Readiness)
 
-#### M1: `.ai/*` 문서 동기화
+#### M1: `.ai/*` 문서 동기화 ✅ — 2026-06-21
 **목표**: `.ai/*` 계획 문서들이 현재 실제 완료 상태를 반영하도록 갱신
 
-- `plan.md`: Phase 7, 8, 9 완료 상태로 업데이트 (완료)
-- `project-brief.md`: 모델 상태 테이블을 ppe_yolo/fire_smoke_yolo active로 갱신
-- `review-checklist.md`: Phase 7, 8, 9 완료 항목 체크, Phase 10 항목 추가
-- `decisions.md`: Phase 8/9 주요 결정사항(class_adapter, fire 모델 repo 대체, VLM cache, dynamic_skip 등) 기록
-- `docs/development-roadmap.md`: Phase 7, 8, 9 완료 상태로 갱신
+- `plan.md`: Phase 7~10 현실화 (2026-06-21 완료)
+- `project-brief.md`: 모델 상태 테이블을 ppe_yolo/fire_smoke_yolo active로 갱신 (이전 완료)
+- `review-checklist.md`: Phase 7~10 항목 현실화 (2026-06-21 완료)
+- `decisions.md`: Phase 8/9 주요 결정사항(class_adapter, fire 모델 repo 대체, VLM cache, dynamic_skip 등) 기록 (이전 완료)
+- `docs/development-roadmap.md`: Phase 7~10 완료 상태로 갱신 (2026-06-21 완료)
 
 **수용 기준**:
 - 모든 `.ai/*` 파일이 현재 실제 상태와 일치
@@ -103,19 +117,19 @@ KSI-CCTV를 실제 배포 가능한 상태로 완성합니다. 두 개의 병행
 
 **위험 게이트**: 없음 (읽기 전용 검증)
 
-#### M2: Git 초기화 + LFS 설정
+#### M2: Git 초기화 + LFS 설정 ✅ — 2026-06-10
 **목표**: 프로젝트를 Git 저장소로 초기화하고 모델 파일을 LFS로 관리
 
-- `git init`
-- `.gitignore` 작성 (`.env`, `__pycache__`, `logs/`, `data/captures/`, `models/uploaded/`, `reports/`, `.venv/` 등)
-- `.gitattributes` 작성 (`.onnx` → LFS, `.pt` → LFS)
-- `git lfs install` 및 `git lfs track "*.onnx" "*.pt"`
-- 초기 커밋: 소스 코드 + 설정 + 문서 (모델 파일은 LFS로)
+- `git init` — 2026-06-10 initial commit 완료
+- `.gitignore` 작성 (`.env`, `__pycache__`, `logs/`, `data/captures/`, `models/uploaded/`, `reports/`, `.venv/` 등) — 적용됨
+- `.gitattributes` 작성 (`.onnx` → LFS, `.pt` → LFS) — 적용됨
+- `git lfs install` 및 `git lfs track "*.onnx" "*.pt"` — 적용됨
+- `.onnx` 파일은 AGPL/repo 비대화 회피를 위해 의도적으로 `.gitignore`로 미추적
 - `scripts/healthcheck.py` 실행 확인
 
 **수용 기준**:
 - `git status`가 정상
-- `.onnx` 파일이 LFS로 트래킹됨
+- `.gitattributes` LFS 설정 완료 (`.onnx`/`.pt`)
 - `.env` 파일이 `.gitignore`에 포함됨
 - `python3 -m compileall -q src tests scripts` 통과
 
@@ -123,7 +137,7 @@ KSI-CCTV를 실제 배포 가능한 상태로 완성합니다. 두 개의 병행
 - Git LFS 미설치 시 `apt install git-lfs` 필요
 - 초기 커밋에 비밀번호/URL이 포함되지 않도록 주의
 
-#### M3: DGX Spark CUDA provider 검증
+#### M3: DGX Spark CUDA provider 검증 ⬜ — [HW] 미실행
 **목표**: 실제 GPU 환경에서 ONNX Runtime CUDA provider 동작 확인
 
 - `scripts/healthcheck.py --require-gpu` 실행
@@ -140,10 +154,10 @@ KSI-CCTV를 실제 배포 가능한 상태로 완성합니다. 두 개의 병행
 - DGX Spark ARM64 + CUDA 13 환경에서 `onnxruntime-gpu` 호환성
 - 통합메모리 제한으로 대형 배치 사용 불가
 
-#### M4: RTSP 재연결 시뮬레이션 (Phase 9 M3.5 백로그)
+#### M4: RTSP 재연결 시뮬레이션 ✅ — `stress_test.py --simulate-disconnect` 하니스
 **목표**: RTSP 연결 끊김/재연결 시나리오에 대한 시뮬레이션 테스트 추가
 
-- `scripts/stress_test.py`에 `--simulate-disconnect` 옵션 추가
+- `scripts/stress_test.py`에 `--simulate-disconnect` 옵션 추가 — 완료 (그룹 G)
 - 일정 간격으로 연결 끊김/재연결 시뮬레이션
 - 재연결 후 파이프라인 정상 복구 확인
 - `CameraManager`에 재연결 로직 검증
@@ -159,7 +173,7 @@ KSI-CCTV를 실제 배포 가능한 상태로 완성합니다. 두 개의 병행
 
 ### Track B — 커스텀 모델 학습 (Custom Model Training)
 
-#### M5: 데이터셋 준비
+#### M5: 데이터셋 준비 ⬜ — [DATA] 스크립트 완성, 실행 미검증
 **목표**: PPE 및 화재/연기 데이터셋을 다운로드하고 YOLO 형식으로 변환/검증
 
 - `python scripts/download_datasets.py --dataset ppe` 실행
@@ -178,7 +192,7 @@ KSI-CCTV를 실제 배포 가능한 상태로 완성합니다. 두 개의 병행
 - 네트워크 연결 필요
 - 디스크 공간 (데이터셋 크기에 따라 1~5GB)
 
-#### M6: PPE 모델 학습 + ONNX export
+#### M6: PPE 모델 학습 + ONNX export ⬜ — [HW] 스크립트 완성, 실행 미검증
 **목표**: 안전모/조끼 감지 커스텀 YOLO 모델 학습 및 ONNX 변환
 
 - `scripts/train_ppe.py` 작성 (Ultralytics YOLO 학습 스크립트)
@@ -200,7 +214,7 @@ KSI-CCTV를 실제 배포 가능한 상태로 완성합니다. 두 개의 병행
 - 학습 시간 (epochs=100, batch=16 → 수 시간 소요 예상)
 - ONNX export 시 `half=True`가 FP16 미지원 모델에서 실패할 수 있음 → `half=False` 폴백
 
-#### M7: 화재/연기 모델 학습 + ONNX export
+#### M7: 화재/연기 모델 학습 + ONNX export ⬜ — [HW] 스크립트 완성, 실행 미검증
 **목표**: 화재/연기 감지 커스텀 YOLO 모델 학습 및 ONNX 변환
 
 - `scripts/train_fire_smoke.py` 작성
@@ -220,7 +234,7 @@ KSI-CCTV를 실제 배포 가능한 상태로 완성합니다. 두 개의 병행
 - 화재/연기 데이터셋 품질 (실제 화재 영상 부족 가능)
 - 클래스 불균형 (fire > smoke)
 
-#### M8: 모델 등록 및 설정 갱신
+#### M8: 모델 등록 및 설정 갱신 ⬜ — 학습 완료 후
 **목표**: 학습된 커스텀 모델을 시스템에 정식 등록하고 설정 갱신
 
 - `config/model_profiles.yaml`:
@@ -237,22 +251,25 @@ KSI-CCTV를 실제 배포 가능한 상태로 완성합니다. 두 개의 병행
 - smoke 이벤트가 `fire_smoke_yolo` 직접 감지로 변경됨
 - `docs/custom-model-training.md`에 학습 이력 기록
 
-#### M9: 최종 검증
+#### M9: 최종 검증 ✅ (SW 게이트) / ⬜ (HW 게이트)
 **목표**: 전체 시스템 통합 검증
 
-- `python3 -m compileall -q src tests scripts`
-- `./.venv/bin/python -m unittest discover tests -v`
-- `./.venv/bin/python scripts/e2e_smoke_test.py --policy-mode`
-- `./.venv/bin/python scripts/stress_test.py --duration 60 --policy-mode`
-- `./.venv/bin/python scripts/profile_pipeline.py --cprofile`
-- `./.venv/bin/python scripts/healthcheck.py --json`
-- `bash scripts/run_dashboard.sh` (수동 UI 확인)
+- [x] `python3 -m pytest tests/ -q -p no:cacheprovider` — 462 passed, 3 skipped
+- [x] `ruff check src/ tests/` — All checks passed
+- [x] `cd frontend && npm run build` — 성공 (24 라우트)
+- [x] `cd frontend && npm run lint` — 에러 0
+- [x] `cd frontend && npm run test` (Vitest) — 14 tests passed
+- [ ] `scripts/e2e_smoke_test.py --policy-mode` — [HW] 모델 파일 필요
+- [ ] `scripts/stress_test.py --duration 60 --policy-mode` — [DATA] sample.mp4 필요
+- [ ] `scripts/healthcheck.py --json` — [HW] GPU 검증
+- [ ] 웹 콘솔 UI 수동 확인 — [HW] 브라우저
 
 **수용 기준**:
-- 모든 검증 통과
+- SW 게이트: pytest/ruff/프론트 빌드+린트+테스트 통과
+- HW 게이트: 모델 파일/실제 GPU/브라우저 확보 후 실행
 - `failed_models={}`
 - `failed_frames=0`
-- 대시보드에서 모든 모델 active 표시
+- 웹 콘솔에서 모든 모델 active 표시
 
 ## Phase 10 기존 마일스톤 우선순위 (M0 완료 전에는 보류)
 

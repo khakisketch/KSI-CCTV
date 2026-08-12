@@ -1,11 +1,12 @@
 # E2E 스모크 테스트 결과
 
-> **이력 기준선 (2026-05-27)**: 아래 "2026-05-27 기준 이력" 섹션은 Phase 4 이전 32 tests 기준 기록입니다.  
-> **현재 기준선 (Phase 10 M1, 2026-06-14)**: 전체 단위/통합 테스트 통과 (`./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider`, 1건 VLM opt-in skip), policy-mode 기본 실행.
+> **역사적 실행 보고서**: 아래 결과는 2026-05~06의 모델/영상 자산 기준 기록이며 현재 release
+> 증거가 아닙니다. 현재 software baseline과 internal runner 절차는 `docs/internal-ci.md`,
+> release 판정은 `docs/release-gate.md`를 따릅니다.
 
 ---
 
-## 현재 기준선 (2026-06-14, Phase 10 M1)
+## 2026-06-14 기준 이력
 
 ### 실행한 검증
 
@@ -22,7 +23,7 @@
 
 ### 결과 요약
 
-- 단위 테스트: **전체 통과, 1 skipped** (VLM opt-in 테스트 skip). 실제 수는 `./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider -q` 실행으로 확인한다.
+- 단위 테스트: 당시 전체 통과, 1 skipped (VLM opt-in 테스트 skip).
 - E2E 스모크 테스트 (policy-mode): `ok: true`, `failed_models: {}`
 - 헬스체크: `ok: true`, 12 passes, 1 warning (CUDA unavailable — CPU fallback 정상)
 
@@ -48,7 +49,7 @@
 ## 남은 수동 확인 항목
 
 - [ ] 실제 사람 포함 영상 또는 RTSP 카메라에서 YOLO 탐지 박스 표시 확인
-- [ ] `bash scripts/run_dashboard.sh` → 브라우저에서 대시보드 UI 수동 확인
+- [ ] 당시 Streamlit 대시보드 수동 확인 항목 (현재는 Next.js Playwright 및 Appliance HTTPS 검증으로 대체)
 - [ ] DGX Spark 환경에서 `CUDAExecutionProvider` 동작 확인
 - [ ] 장시간 실행(30분 이상) FPS/dropped frame 확인
 

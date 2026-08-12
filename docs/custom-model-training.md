@@ -191,8 +191,9 @@ fire_smoke_yolo:
 # healthcheck 실행
 python scripts/healthcheck.py --json
 
-# 대시보드에서 모델 상태 확인
-# http://localhost:8080 → "시스템 상태" 탭
+# 개발/랩 Next.js 콘솔에서 모델 상태 확인
+# http://127.0.0.1:3100 → "통합 관제" 또는 "모델 · 프롬프트"
+# 운영 환경은 Appliance HTTPS endpoint를 사용
 ```
 
 ## 학습 팁

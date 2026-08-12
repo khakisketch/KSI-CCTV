@@ -16,7 +16,13 @@ repo가 README에 "MIT/Apache"라 적어도 그건 *코드*에만 적용되고 *
 → **KSI-CCTV의 배포 형태(폐쇄망 내부 운영 vs 외부 납품)에 따른 AGPL 의무를 법무/상용 정책으로 먼저
 확정**해야 한다. 아래 후보는 모두 이 경고가 적용된다(예외: 데이터가 CC BY인 fall 데이터셋).
 
-## 권장 모델 (즉시 적용 가능 — 커스텀 학습 0)
+## 후보 모델 (출고 승인 전 사용 금지)
+
+아래 항목은 sourcing 후보일 뿐 release-qualified capability가 아니다. Schema-v3 bundle은 실제 engine image의
+digest/path/model SHA-256, immutable HTTPS source revision, code/weight/dataset license expression, notices section,
+외부 approval reference를 `model-inventory.json`에 기록하고 같은 내용을 `license-approvals.json`의 approved
+record와 일치시켜야 한다. CI bundle signature는 이 파일과 image/SBOM hashes를 exact payload에 묶는다.
+이는 법무 판단을 자동화하지 않으며, 승인된 artifact가 없으면 builder가 출고를 거부한다.
 
 ### 1. PPE (helmet + **vest**) — 현재 vest 미지원 공백 해소
 - **추천: `Hansung-Cho/yolov8-ppe-detection` (Hugging Face)**
@@ -48,14 +54,14 @@ from ultralytics import YOLO
 p = hf_hub_download(repo_id="Hansung-Cho/yolov8-ppe-detection", filename="best.pt")
 print("PPE class names(class_map 확정용):", YOLO(p).names)   # ← verbatim 확인 필수
 PY
-yolo export model=<위 best.pt 경로> format=onnx opset=12 simplify=True dynamic=True imgsz=640
+yolo export model=<위 best.pt 경로> format=onnx opset=18 simplify=True dynamic=False imgsz=640
 # 산출 .onnx → models/yolo26_ppe.onnx 로 교체
 
 # 2) 화재/연기 — Flare Guard YOLO11n (직접 다운로드)
 curl -L -o models/flareguard_yolo11n.pt \
   https://raw.githubusercontent.com/sayedgamal99/Real-Time-Smoke-Fire-Detection-YOLO11/main/models/best_nano_111.pt
 python3 -c "from ultralytics import YOLO; print('Fire/Smoke names:', YOLO('models/flareguard_yolo11n.pt').names)"
-yolo export model=models/flareguard_yolo11n.pt format=onnx opset=12 simplify=True imgsz=640
+yolo export model=models/flareguard_yolo11n.pt format=onnx opset=18 simplify=True dynamic=False imgsz=640
 ```
 
 그 다음 `config/model_profiles.yaml`에 등록(코드 직접수정 금지 — config+MultiModelRegistry 경로):

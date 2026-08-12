@@ -37,10 +37,10 @@ RTSP / 로컬 영상
                            카메라별 camera_profile 반영)
      -> VLM Dispatcher (필요한 이벤트만 Ollama qwen3-vl 분석,
                         TTL cache + backpressure + ThreadPool)
-  -> AlertManager (이벤트 로그, 캡처 이미지 저장, 얼굴 블러링,
-                   이미지 암호화 옵션, SMTP 알람, 자동 정리)
-  -> Streamlit 대시보드 (13탭: 실시간 모니터링, 이벤트, 갤러리,
-                          카메라 설정, 알람 설정, 모델 업로드, 시스템 상태, ...)
+   -> AlertManager (이벤트 로그, 캡처 이미지 저장, 얼굴 블러링,
+                    이미지 암호화, SMTP 알람, 자동 정리)
+   -> FastAPI engine API -> Next.js 웹 콘솔 (관제, 이벤트, 갤러리,
+                                     카메라/정책/알림/모델/감사/인수인계)
 ```
 
 legacy 단일 detector 경로(`_process_frame_legacy()`)는 하위 호환 fallback으로만 유지됩니다.
@@ -54,6 +54,14 @@ legacy 단일 detector 경로(`_process_frame_legacy()`)는 하위 호환 fallba
 - **VLM TTL cache**: `(camera_id, event_type)` 키 + critical/high bypass.
 - **캡처 이미지 암호화**: `encrypt_images: true` + `KSI_CCTV_CAPTURE_KEY` Fernet 키.
 - **scrypt 인증 + rate limit + 세션 만료 + 감사 로그** 대시보드 보안.
+
+### Tracking 데이터 수명
+
+- 실시간 Tracking API의 bbox, 최근 trajectory, zone 좌표는 메모리 기반 overlay 정보이며 영속화하지 않습니다.
+- `line_crossing`과 `loitering` 사건은 track ID, class, zone ID, 방향 또는 체류시간 같은 판정 사실만 metadata로 저장합니다.
+- 사건 시점 객체 bbox는 event detection에, 운영자 확인용 프레임은 보존정책이 적용되는 evidence에 저장합니다. 전체 trajectory, zone 좌표, crossing centroid는 사건 metadata에 복제하지 않습니다.
+- `blur_faces: true`에서 얼굴 detector를 로드할 수 없거나 `encrypt_images: true`에서 유효한 Fernet 키를 로드할 수 없으면 AlertManager 시작을 실패시켜 보호 설정이 조용히 강등되지 않게 합니다.
+- `blur_faces: true`는 저장 evidence와 최신 JPEG snapshot에 동일하게 적용됩니다. 인증된 live HLS는 실시간 관제를 위한 원본 스트림이며 frontend proxy가 `no-store`로 전달합니다.
 
 ## 목표 컴포넌트
 
@@ -108,7 +116,7 @@ legacy 단일 detector 경로(`_process_frame_legacy()`)는 하위 호환 fallba
 
 ## 확장 방향
 
-1. YAML 기반 설정으로 먼저 구성
-2. 이후 Streamlit 설정 UI에서 YAML을 생성/수정
+1. YAML 기반 정책을 Appliance 초기값으로 제공
+2. Next.js 설정 UI와 인증된 API로 현장 설정을 생성/수정
 3. 사용자 ONNX 모델 업로드와 smoke test 연결
 4. 모델별 성능/오류/latency 대시보드화

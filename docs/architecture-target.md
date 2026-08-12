@@ -1,10 +1,12 @@
-> **상태: 로드맵 초안(설계 단계 — 구현 전)** · 작성 2026-06-16 · 근거: multi-agent 리서치(실 코드 read + 웹 검증)
+> **상태: 역사적 타깃 로드맵** · 작성 2026-06-16 · 현재 기준은 `docs/architecture.md`,
+> `docs/offline-appliance.md`, `docs/release-gate.md`다. FastAPI·Next.js·MediaMTX 전환은 완료됐고,
+> 현재 release 범위는 DGX Spark ARM64 Appliance, HLS-only, single-admin, VLM-disabled다.
 > 관련 문서: [능력 로드맵](roadmap-capability.md) · [패키징 로드맵](roadmap-packaging.md)
 > ⚠️ 이 문서는 방향·후보·단계를 정리한 것으로, 표기된 FPS·라이선스·EP 가용성 등은 구현 착수 시 "사실 검증 플래그"의 [검증필요] 항목을 실측·확정해야 한다.
 
 # 타깃 아키텍처 — 엔진 + API + 웹UI + 영상 (설치형 AI CCTV 제품)
 
-> 본 문서는 `docs/architecture-target.md` 초안이다. 현 `docs/architecture.md`(현행 policy-mode 구현)를 **대체하지 않고**, 그것이 지향할 "제품 형태"의 목표를 정의한다. 현 구조(헤드리스 데몬 + Streamlit)에서 **엔진 자산을 보존한 채** 얇은 API와 웹 프론트로 진화하는 경로를 그린다.
+> 본 문서는 구현 전 설계 결정을 보존한다. 현행 구조는 헤드리스 엔진 + FastAPI + Next.js 단일 콘솔 + MediaMTX이며, Streamlit 병존/마이그레이션 단계는 완료됐다.
 
 ## 0. 현 상태 vs 타깃 (한눈에)
 
@@ -12,11 +14,11 @@
 |---|---|---|
 | 탐지 엔진 | `src/run.py` 헤드리스 데몬 (MultiModelRegistry→EventPolicyEngine→VLM Dispatcher→AlertManager) | **유지** — 그대로 서비스화 |
 | 모델 | YOLO ONNX 고정 클래스(COCO/safety_custom) | + **open-vocab 텍스트 프롬프트 탐지**(YOLOE/YOLO-World ONNX) |
-| API | 없음. `http.server` 기반 `/health*`만(port 8081, loopback) | **FastAPI**(REST 설정/이벤트/제어 + WS/SSE 실시간) |
-| UI | Streamlit 13탭, 단일 화면, **영상=placeholder 검은 이미지(실 스트리밍 없음)** | **Next.js+TS+Tailwind+shadcn** (데스크톱 관제 / 모바일 뷰어, 다크·라이트) |
-| 라이브 영상 | 없음(상태·캡처 중심) | RTSP→**MediaMTX/go2rtc**→WebRTC/HLS 브라우저 재생 |
-| 배포 | Docker Compose / systemd | + 데스크톱 설치본(Tauri 래퍼, 선택) · macOS/Linux/Windows/Win ARM64 |
-| AI 위치 | on-prem Ollama(고정), `VLMProvider` ABC로 교체 가능 | 로컬 **또는** 외부서버 선택(설정 토글) |
+| API | FastAPI 엔진 API, 인증, SSE/WS, 제어 | 현행 구현 |
+| UI | Next.js+TS+Tailwind+shadcn 단일 콘솔 | 현행 구현 |
+| 라이브 영상 | RTSP→MediaMTX→HLS, same-origin proxy | 현행 구현; WebRTC는 별도 검증 전 제외 |
+| 배포 | 서명된 Ubuntu ARM64 Appliance | Windows/macOS/Tauri는 후순위·현재 범위 밖 |
+| AI 위치 | VLM 구현은 보존되지만 첫 Appliance release에서는 비활성 | 별도 signed runtime/model qualification 후 검토 |
 
 > **중요(SSOT 충돌 주의):** 현 `docs/project-definition.md` §비목표는 "실시간 영상 스트리밍 / 모바일 앱 / 클라우드 호스팅"을 **현재 비목표**로 명시한다. 본 타깃은 사용자 확정 제품 목표(①~⑥)에 따라 그 중 **영상 스트리밍·모바일 뷰어를 목표로 승격**한다. 채택 시 `project-definition.md` §비목표를 함께 갱신해야 SSOT 모순이 없어진다. (클라우드 호스팅은 여전히 선택 — "설치형 오프라인"이 1차.)
 
@@ -99,17 +101,9 @@
 
 ---
 
-## 3. Streamlit → 웹 프론트 마이그레이션 (자산 보존)
+## 3. 웹 전환 상태
 
-**원칙:** 탐지/정책/보안/알람 **백엔드는 한 줄도 다시 안 짠다.** Streamlit은 "엔진을 직접 import해 in-process로 쓰는 UI"라 백엔드와 강결합돼 있다. 마이그레이션은 **그 결합을 FastAPI 경계로 끊는 것**이 본질이다.
-
-### 단계 (점진적 strangler-fig — Streamlit과 신규 UI 병존)
-
-- **단계 0 — 영속화 선행(차단요인 제거).** 현 `event_history`는 in-memory(휘발). FastAPI/웹UI 이전에 **이벤트를 SQLite에 영속화**한다(AlertManager 로그 파서 `parse_alert_log_line` 재사용). 이게 없으면 새 UI가 재시작마다 빈 화면.
-- **단계 1 — FastAPI 골격 + 엔진 in-process 마운트.** `src/run.py`의 조립부(`build_pipeline`)를 그대로 FastAPI `lifespan`에 넣어 엔진을 띄우고, 기존 `/health*`를 FastAPI로 흡수(중복 HTTP 서버 제거). 인증(scrypt)·rate limit·감사 로그(`_write_audit_log`)를 FastAPI 미들웨어/디펜던시로 이식. **이 시점에 Streamlit은 그대로 둔다.**
-- **단계 2 — 읽기 표면부터 REST/WS화.** `pipeline.get_status()`·`get_metrics()`·이벤트 목록을 REST로, 실시간 이벤트/상태를 **WS 또는 SSE**로 노출. Next.js로 **읽기 전용 관제 화면(라이브 영상 + 이벤트 피드 + 메트릭)** 부터 구축 — 가장 가치 높고 위험 낮음.
-- **단계 3 — 쓰기/제어 표면 이관.** 카메라 설정·모델 업로드·정책·알림 설정 같은 mutating 탭을 REST POST로. 모델 업로드 검증기(`src/models/upload_validator.py`)·격리 저장은 그대로 호출.
-- **단계 4 — Streamlit 폐기.** 모든 13탭 기능이 웹 UI에 도달하면 Streamlit 제거. (그 전까지 운영자는 둘 중 하나 사용 가능 — 무중단 전환.)
+FastAPI 경계, SQLite 이벤트 영속화, Next.js 읽기/쓰기 화면, HLS proxy, 인증, 모델/카메라/알림/감사/commissioning 이관은 완료됐다. Streamlit은 제거됐으며 새 기능은 Next.js와 엔진 API에만 추가한다. Tauri 및 Windows/macOS 패키징은 현재 Ubuntu ARM64 release 범위 밖이다.
 
 ### API 표면 스케치 (엔드포인트 목록)
 
@@ -227,7 +221,7 @@
 
 ---
 
-## 핵심 권장 요약
+## 구현 전 핵심 권장 요약 (역사적 기록)
 - 엔진을 다시 짜지 마라 — src/run.py의 build_pipeline(MultiModelRegistry→EventPolicyEngine→VLM→AlertManager)을 그대로 FastAPI lifespan에 in-process 마운트하고 그 위에 얇은 REST+SSE만 얹는다. 백엔드 자산 100% 보존이 마이그레이션의 핵심.
 - 마이그레이션 차단요인은 영속화다 — 현 event_history는 in-memory(휘발). FastAPI/웹UI보다 먼저 이벤트를 SQLite에 영속화(AlertManager parse_alert_log_line 재사용)해야 새 UI가 재시작 후 빈 화면이 안 된다.
 - 라이브 영상은 직접 구현 금지 — RTSP→MediaMTX(MIT, 단순·문서풍부) WebRTC passthrough(<0.5s)로 브라우저 재생. 추론 엔진과 영상 전송을 같은 프로세스에 두지 않는다(Frigate/Viso 공통 패턴). 코덱 폴백 필요시 go2rtc로 교체(둘 다 MIT).
@@ -237,7 +231,7 @@
 - 이벤트/상태 실시간 푸시는 단방향이라 WS보다 SSE로 시작(재연결·프록시·구현 단순), 양방향 제어가 필요해지면 WS로 승급.
 - Tauri 2 데스크톱 래퍼(Win ARM64 포함 가능)는 후순위 — LAN 관제는 브라우저 접속으로 충분. Python 엔진+영상 게이트웨이를 sidecar로 동봉해야 하므로 '단일PC 올인원 설치본'이 실제로 필요할 때만 착수.
 
-## 구현 전 결정·검증 필요(open questions)
+## 구현 전 결정·검증 필요(open questions, 역사적 기록)
 - 엔진↔API 결합 방식: in-process(설치형 단일PC 단순) vs 별도 서비스/IPC(격리·다중노드 확장). 초기엔 in-process 권장하나 확정 필요.
 - 이벤트 영속 저장소: SQLite(설치형 기본·무설정)로 시작 vs 처음부터 Postgres(다중노드·대규모). 스키마를 SafetyEvent.to_dict 필드와 어떻게 매핑할지 설계 필요.
 - WebRTC 원격접속 시 STUN/TURN 인프라가 설치형 오프라인 전제와 충돌 — LAN 직결만 지원할지, HLS 폴백+TURN을 기본 제공할지 결정.
@@ -246,7 +240,7 @@
 - project-definition.md §비목표(실시간 영상스트리밍·모바일앱)를 본 타깃에 맞춰 갱신해야 SSOT 모순 제거 — 갱신 시점/범위 합의 필요.
 - 웹 프론트 착수 전 UX 목표(페르소나·클릭예산·상태인벤토리·마이크로카피·접근성) 정의 — /deep-interview 권장.
 
-## 사실 검증 플래그(근거·출처)
+## 사실 검증 플래그(근거·출처, 역사적 기록)
 - 확인됨(WebSearch 2026-06): YOLOE(2025-03, Tsinghua, YOLOv10 기반)·YOLO-World v2는 ONNX export 지원, 실시간(YOLOE T4 161 FPS) — open-vocab 텍스트/비주얼/프롬프트프리 모드. 출처: docs.ultralytics.com/models/yoloe, /models/yolo-world
 - 확인됨(WebSearch): Ultralytics YOLO(YOLOE/YOLO-World 포함)=AGPL-3.0 — 상업적 설치형 제품은 전체 소스공개 또는 Enterprise 유료라이선스 필요. 원조 AILab-CVC/YOLO-World=GPL-v3. MIT는 ONNX 추론 래퍼 코드뿐, 가중치 라이선스는 별도. 출처: ultralytics.com/license, github issue #19390
 - 확인됨(WebSearch): MediaMTX·go2rtc 모두 MIT, RTSP→WebRTC H.264 passthrough로 서브초(go2rtc ~0.3s) 저지연, Linux/mac/Win 지원. go2rtc가 프로토콜 더 다양(Frigate 채택). 출처: go2rtc.com, stable-learn.com mediamtx 가이드

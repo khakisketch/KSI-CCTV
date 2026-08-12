@@ -26,7 +26,7 @@ cp .env.example .env
 
 ```env
 CCTV_CAM_001_URL=./data/sample.mp4
-KSI_CCTV_DASHBOARD_PASSWORD=change-me
+KSI_CCTV_WEB_PASSWORD=local-test-password
 ```
 
 주의: 실제 RTSP 계정/비밀번호는 저장소에 커밋하지 않습니다.
@@ -45,7 +45,7 @@ KSI_CCTV_DASHBOARD_PASSWORD=change-me
 
 ## 3. 실행
 
-먼저 Streamlit을 띄우지 않는 스모크 테스트로 모델/영상 경로를 확인합니다.
+먼저 Next.js 콘솔과 독립적인 headless smoke test로 모델/영상 경로를 확인합니다.
 
 ```bash
 python3 scripts/e2e_smoke_test.py
@@ -57,16 +57,16 @@ Ollama VLM까지 함께 확인하려면 다음을 실행합니다.
 python3 scripts/e2e_smoke_test.py --with-vlm
 ```
 
-이후 대시보드를 실행합니다.
+이후 개발/랩 Next.js 콘솔을 실행합니다. 운영 환경은 이 경로 대신 signed Appliance HTTPS endpoint를 사용합니다.
 
 ```bash
-scripts/run_dashboard.sh
+bash scripts/run_web.sh
 ```
 
 브라우저에서 다음 주소를 엽니다.
 
 ```text
-http://localhost:8080
+http://127.0.0.1:3100
 ```
 
 ## 4. 확인 항목
@@ -118,6 +118,25 @@ http://localhost:8080
 
 합성 샘플 영상은 파이프라인 경로 검증용이며, COCO `person` 탐지를 보장하지 않습니다.
 실제 탐지 박스 검증은 실제 사람 영상 또는 실제 RTSP 카메라로 수행해야 합니다.
+
+### 브라우저 콘솔 자동 스모크
+
+Next.js 콘솔의 인증 경계와 보호된 화면 이동은 Playwright로 재현합니다. 이 테스트는 내장 mock engine과
+MediaMTX HLS mock을 사용하므로 실제 카메라 영상/추론 결과의 증거가 아닙니다.
+
+```bash
+cd frontend
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+로그인 거부/성공, 보호된 통합 관제, LiveWall, 카메라 등록/작업, 이벤트 export, 모델 제어,
+commissioning/handoff를 확인합니다. HLS spec은 same-origin stream URL, 활성 카메라 확인, MediaMTX
+`cookieCheck` redirect와 최종 `Set-Cookie`, playlist/TS segment body 및 content type 전달, 비활성 카메라
+거부를 API 수준에서 검증합니다. 브라우저 codec decode나 실제 카메라 하드웨어는 요구하지 않습니다.
+Internal runner HTML report는 release record에 보관하고, 실 카메라 검증은 `docs/release-gate.md`의 target
+soak 절차로 분리합니다.
 
 ## 6. 실패 시 기록할 정보
 

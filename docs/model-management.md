@@ -60,7 +60,8 @@ model_name:
 4. input/output shape 검사
 5. 샘플 이미지 smoke test
 6. 성공 시 model_profiles에 등록
-7. 카메라 프로파일에서 모델 선택
+7. 승인된 이벤트 정책의 `trigger.models`에 연결
+8. 카메라에서 해당 이벤트를 활성화해 필요한 모델만 실행
 
 ## 버전/롤백
 
@@ -86,6 +87,7 @@ versions:
 
 - 모델 로드 실패는 전체 앱 장애로 이어지면 안 됩니다.
 - 업로드 모델은 기본 disabled 상태로 등록하고 smoke test 성공 후 활성화합니다.
+- 업로드는 파일당 500 MiB, 보존 20개, 총 5 GiB로 제한하며 기존 모델 삭제 시 quota가 회수됩니다.
 - 모델별 latency, detection count, error count를 수집해야 합니다.
 
 ## VLM provider (2차 정밀분석) — 결정 기록
@@ -96,18 +98,21 @@ YOLO 1차 탐지를 보완하는 2차 정밀분석(VLM)은 **선택적 컴포넌
 - **기본 = on-prem Ollama (`qwen3-vl`).** CCTV 프레임에는 얼굴 등 PII가 포함되므로 외부 API로
   전송하지 않는 **로컬 추론**을 채택한다(ADR-0001 "외부 SaaS 미사용", 클라우드 호스팅은 제품 비목표).
 - **provider는 교체 가능(pluggable).** `src/vlm/vlm_inference.py`의 `VLMProvider`(ABC)를 구현하고
-  `config/model_profiles.yaml`의 `vlm.provider` 키 + `create_vlm_provider()` 팩토리에 분기를 추가하면
+  `config/default.yaml`의 `models.vlm.provider` 키 + `create_vlm_provider()` 팩토리에 분기를 추가하면
   된다. 현재 `ollama` 지원. `vlm.enabled: false`이거나 미지원 provider면 VLM은 비활성(2차 분석 생략).
 - **개발 환경 주의:** 로컬에 Ollama 런타임이 없으면 VLM은 inert이며 실 VLM 테스트는 skip된다(정상).
   실 VLM 종단 검증은 `KSI_CCTV_TEST_VLM=1`로 Ollama 가동 시 수행한다(`docs/phase-cd-readiness.md` C4).
+- **endpoint/digest 경계:** endpoint는 loopback 또는 private IP literal만 허용하고 `localhost`는
+  `127.0.0.1`로 고정한다. Qualified model digest는 startup뿐 아니라 각 분석 직전에도 재확인한다.
 - **provider 설정:**
   ```yaml
-  # config/model_profiles.yaml
-  vlm:
-    enabled: true        # false면 2차 분석 없이 1차 YOLO만
-    provider: ollama     # 현재 지원: ollama
-    model_name: "qwen3-vl:latest"
-    base_url: "http://localhost:11434"
+  # config/default.yaml
+  models:
+    vlm:
+      enabled: true        # false면 2차 분석 없이 1차 YOLO만
+      provider: ollama     # 현재 지원: ollama
+      model_name: "qwen3-vl:latest"
+      base_url: "http://127.0.0.1:11434"
   ```
 
 ## 현재 구현 상태 (Phase 10 기준 — 통합 완료)

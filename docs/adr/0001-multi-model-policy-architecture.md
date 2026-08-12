@@ -12,8 +12,8 @@ Accepted
 
 - 제한구역 침입은 YOLO + zone rule만으로 충분
 - 안전모 미착용은 PPE YOLO + overlap rule 필요
-- 화재는 fire/smoke 모델 + VLM 확인 필요
-- 쓰러짐/싸움은 VLM 또는 pose 모델 확인 필요
+- 화재는 fire/smoke 모델 + 정책 규칙으로 후보를 생성
+- 쓰러짐/싸움은 현재 heuristic 후보이며 safety-grade pose/action 모델은 별도 범위
 
 또한 고객이 자체 모델을 업로드해 사용하는 커스터마이징 요구가 예상됩니다.
 
@@ -22,11 +22,14 @@ Accepted
 KSI-CCTV는 다음 구조로 확장합니다.
 
 1. Model Profile로 모델 정의
-2. Camera Profile로 카메라별 도메인/이벤트/모델 선택
+2. Camera Profile로 카메라별 도메인/이벤트 선택
 3. Event Policy로 이벤트별 trigger/rule/VLM/alert 정책 정의
 4. MultiModelRegistry로 여러 모델 관리
 5. EventPolicyEngine으로 이벤트 판단
-6. VLM은 필요한 이벤트에만 호출
+6. VLM은 구현돼 있으나 첫 Appliance release에서는 비활성
+
+실행 모델은 Camera Profile의 활성 이벤트와 Event Policy의 `trigger.models`에서 결정한다.
+카메라별 임의 모델 allowlist/override는 첫 Appliance release 범위가 아니다.
 
 ## Consequences
 
