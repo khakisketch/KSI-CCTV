@@ -92,7 +92,7 @@ def test_appliance_host_dependencies_are_pinned_and_audited() -> None:
     for package in (
         "boolean.py==5.0",
         "cffi==2.1.0",
-        "cryptography==49.0.0",
+        "cryptography==50.0.0",
         "license-expression==30.4.4",
         "pycparser==3.0",
         "PyYAML==6.0.2",
