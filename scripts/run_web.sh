@@ -19,7 +19,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 BIND_HOST="${KSI_CCTV_BIND_HOST:-127.0.0.1}"
 case "$BIND_HOST" in
@@ -55,21 +55,34 @@ export KSI_CCTV_WEB_BIND_HOST="$BIND_HOST"
 export KSI_CCTV_WEB_SESSION_TTL_SEC="${KSI_CCTV_WEB_SESSION_TTL_SEC:-604800}"
 
 generate_secret() {
-  od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+  local secret
+  secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  # 64 hex(32바이트)가 아니면 실패로 본다. 빈 값이 자격증명으로 새어나가면
+  # 인증 없는 서버가 뜬다 — 조용히 넘어가지 않는다.
+  if [ "${#secret}" -ne 64 ]; then
+    echo "[run_web] Failed to generate a credential from /dev/urandom." >&2
+    return 1
+  fi
+  printf '%s' "$secret"
 }
 
+# 선언과 대입을 분리한다(SC2155) — 합치면 generate_secret의 실패 종료코드가
+# export의 성공에 가려져 빈 자격증명으로 기동한다.
 CREDENTIALS_FILE=""
 GENERATED_CREDENTIALS=0
 if [ -z "${KSI_CCTV_API_KEY:-}" ]; then
-  export KSI_CCTV_API_KEY="$(generate_secret)"
+  KSI_CCTV_API_KEY="$(generate_secret)" || exit 1
+  export KSI_CCTV_API_KEY
   GENERATED_CREDENTIALS=1
 fi
 if [ "$DEV_AUTH_BYPASS" = "0" ] && [ -z "${KSI_CCTV_WEB_PASSWORD:-}" ]; then
-  export KSI_CCTV_WEB_PASSWORD="$(generate_secret)"
+  KSI_CCTV_WEB_PASSWORD="$(generate_secret)" || exit 1
+  export KSI_CCTV_WEB_PASSWORD
   GENERATED_CREDENTIALS=1
 fi
 if [ "$DEV_AUTH_BYPASS" = "0" ] && [ -z "${KSI_CCTV_WEB_SECRET:-}" ]; then
-  export KSI_CCTV_WEB_SECRET="$(generate_secret)"
+  KSI_CCTV_WEB_SECRET="$(generate_secret)" || exit 1
+  export KSI_CCTV_WEB_SECRET
   GENERATED_CREDENTIALS=1
 fi
 ENGINE_PORT="${KSI_CCTV_ENGINE_PORT:-8181}"   # KSI-CCTV 전용(데몬 8081과도 분리)
@@ -179,7 +192,7 @@ fi
 # 실제 배포 산출물과 동일하다. (KSI_CCTV_WEB_DEV=1 이면 dev 서버로 빠르게 띄움 — 프론트 수정 중일 때만)
 if [ "${KSI_CCTV_WEB_DEV:-}" = "1" ]; then
   echo "[run_web] 웹 콘솔(Next.js, DEV) 시작 (:$WEB_PORT)..."
-  ( cd frontend
+  ( cd frontend || exit 1
     KSI_CCTV_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
     KSI_CCTV_GATEWAY_URL="http://127.0.0.1:$GW_HLS_PORT" \
     KSI_CCTV_WEB_BIND_HOST="$BIND_HOST" \
@@ -189,7 +202,7 @@ else
   echo "[run_web] 웹 콘솔(Next.js) 빌드 중... (최초/코드변경 시 수십 초)"
   if ( cd frontend && npm run build >/tmp/ksi_web_build.log 2>&1 ); then
     echo "[run_web] 웹 콘솔(Next.js) 시작 (:$WEB_PORT)..."
-    ( cd frontend
+    ( cd frontend || exit 1
       KSI_CCTV_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
       KSI_CCTV_GATEWAY_URL="http://127.0.0.1:$GW_HLS_PORT" \
       npm run start -- -H "$BIND_HOST" -p "$WEB_PORT" ) &

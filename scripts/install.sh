@@ -48,6 +48,8 @@ fi
 
 # pip 업그레이드 및 의존성 설치
 log_info "Python 의존성 설치 중..."
+# 바로 위에서 생성한 venv라 lint 시점엔 없다 — 정적 추적 대상에서 제외.
+# shellcheck source=/dev/null
 source .venv/bin/activate
 pip install --upgrade pip -q
 pip install -r requirements.txt -q
