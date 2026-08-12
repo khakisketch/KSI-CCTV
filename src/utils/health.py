@@ -203,10 +203,12 @@ def check_cameras(
         is_stale = status.get("is_stale")
         if is_stale is None:
             is_stale = elapsed is not None and elapsed > stale_sec
-        if is_stale:
+        if elapsed is None:
+            issues.append("아직 프레임을 수신하지 못함")
+        elif is_stale:
             elapsed_str = f"{elapsed:.1f}초" if elapsed is not None else "알 수 없음"
             issues.append(f"프레임 지연 {elapsed_str}")
-        elif not status.get("connected", True):
+        if not status.get("connected", True):
             issues.append("연결 끊김")
 
         consec = status.get("consecutive_failures", 0)
@@ -308,6 +310,31 @@ def check_vlm(
             "avg_latency_ms": avg_latency,
             "last_latency_ms": last_latency,
         },
+    )
+
+
+def check_ai_runtime(runtime: dict[str, Any]) -> ComponentHealth:
+    """Assess cached AI runtime state without probing model providers."""
+    behavior = runtime.get("behavior", {})
+    vlm = runtime.get("vlm", {})
+    queue = vlm.get("queue", {})
+    errors = behavior.get("runtime_errors", {})
+    issues: list[str] = []
+    if behavior.get("enabled") and not behavior.get("available"):
+        issues.append("behavior_models_unavailable")
+    if behavior.get("enabled") and sum(int(errors.get(name, 0)) for name in ("pose", "action")) >= 3:
+        issues.append("behavior_runtime_errors")
+    if vlm.get("configured_enabled") and (
+        not vlm.get("runtime_qualified") or not vlm.get("provider_available")
+    ):
+        issues.append("vlm_unavailable")
+    if queue.get("saturated"):
+        issues.append("vlm_hard_queue_saturated")
+    return ComponentHealth(
+        name="ai_runtime",
+        healthy=not issues,
+        message="AI runtime ready" if not issues else ", ".join(issues),
+        metadata=runtime,
     )
 
 
@@ -545,6 +572,11 @@ def register_pipeline_health_checks(
             max_consecutive_errors=model_max_consecutive_errors,
         )
 
+    def _check_ai_runtime() -> ComponentHealth:
+        get_runtime = getattr(pipeline, "get_ai_runtime_status", None)
+        runtime = get_runtime() if callable(get_runtime) else pipeline.get_status().get("ai_runtime", {})
+        return check_ai_runtime(runtime if isinstance(runtime, dict) else {})
+
     def _check_gpu_health() -> ComponentHealth:
         return check_gpu(
             vram_threshold_percent=vram_threshold_percent,
@@ -559,11 +591,19 @@ def register_pipeline_health_checks(
             max_capture_gb=max_capture_gb,
         )
 
-    checker.register("cameras", _check_cameras)
-    checker.register("vlm", _check_vlm)
-    checker.register("model_registry", _check_models)
-    checker.register("gpu", _check_gpu_health)
-    checker.register("log_dirs", _check_log_dirs_health)
+    checks = {
+        "cameras": _check_cameras,
+        "vlm": _check_vlm,
+        "model_registry": _check_models,
+        "ai_runtime": _check_ai_runtime,
+        "gpu": _check_gpu_health,
+        "log_dirs": _check_log_dirs_health,
+    }
+    for name, check in checks.items():
+        # Callers may inject a stricter component check (for example, a
+        # deployment-specific VLM diagnostic); do not silently replace it.
+        if name not in checker._checks:
+            checker.register(name, check)
 
     logger.info("파이프라인 헬스체크 등록 완료 (cameras/vlm/model_registry/gpu/log_dirs)")
 

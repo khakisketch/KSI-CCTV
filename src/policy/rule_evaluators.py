@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -21,6 +23,10 @@ ModelDetections = dict[str, list[Detection]]
 # RuleEvaluatorRegistry 인스턴스 수명과 동일하게 관리된다.
 _PoseState = dict[str, Any]
 
+# 템포럴 게이트 상태. 카메라·정책별 최근 hit/miss 타임스탬프를 보관한다.
+# key: (camera_id, policy_name), value: {"hits": deque[ts], "last_hit_ts": float | None, "last_trigger_ts": float | None}
+_TemporalState = dict[str, Any]
+
 
 class RuleEvaluatorRegistry:
     """룰 타입별 평가기 레지스트리."""
@@ -37,6 +43,39 @@ class RuleEvaluatorRegistry:
         }
         # camera_id별 pose_anomaly 이전 상태 (temporal 판단에 사용)
         self._pose_history: dict[str, _PoseState] = {}
+        # 템포럴 게이트 상태(camera_id+policy → 히트 시퀀스)
+        self._temporal_state: dict[tuple[str, str], _TemporalState] = {}
+        self._state_lock = threading.RLock()
+
+    def reset(self, camera_id: str | None = None, policy_name: str | None = None) -> None:
+        """Clear temporal/pose state after camera lifecycle or policy changes."""
+        with self._state_lock:
+            if camera_id is None:
+                self._pose_history.clear()
+                self._temporal_state.clear()
+                return
+            self._pose_history.pop(camera_id, None)
+            for key in list(self._temporal_state):
+                if key[0] == camera_id and (policy_name is None or key[1] == policy_name):
+                    self._temporal_state.pop(key, None)
+
+    def observe_miss(
+        self,
+        rule: dict,
+        camera_id: str,
+        policy_name: str,
+    ) -> RuleResult:
+        """Record a policy miss so frame windows and clear/rearm are accurate."""
+        result: RuleResult = {
+            "triggered": False,
+            "confidence": 0.0,
+            "detections": [],
+            "reason": "trigger_not_matched",
+        }
+        temporal_cfg = rule.get("temporal") if isinstance(rule, dict) else None
+        if isinstance(temporal_cfg, dict) and camera_id and policy_name:
+            return self._apply_temporal_gate(result, temporal_cfg, camera_id, policy_name)
+        return result
 
     def evaluate(
         self,
@@ -45,6 +84,7 @@ class RuleEvaluatorRegistry:
         frame: np.ndarray,
         zones: dict | None = None,
         camera_id: str = "",
+        policy_name: str = "",
     ) -> RuleResult:
         rule_type = rule.get("type", "direct_detection") if isinstance(rule, dict) else "direct_detection"
         evaluator = self._evaluators.get(rule_type)
@@ -61,17 +101,125 @@ class RuleEvaluatorRegistry:
         # pose_anomaly에 한해 camera_id별 이전 상태를 전달한다.
         pose_state: _PoseState | None = None
         if rule_type == "pose_anomaly":
-            pose_state = self._pose_history.get(camera_id)
+            with self._state_lock:
+                pose_state = self._pose_history.get(camera_id)
 
         result = evaluator(rule or {}, detections_by_model, frame, zones or {}, camera_id, pose_state)
 
         # pose_anomaly 평가 후 상태를 업데이트한다.
         if rule_type == "pose_anomaly" and "pose_state_update" in result:
             if camera_id:
-                self._pose_history[camera_id] = result.pop("pose_state_update")
+                with self._state_lock:
+                    self._pose_history[camera_id] = result.pop("pose_state_update")
             else:
                 result.pop("pose_state_update", None)
 
+        # 템포럴 게이트 적용 — 한 번의 evaluator 결과(True)로 사건을 확정하지 않는다.
+        # 규칙 없으면 rule_type 기본 비활성(즉시 확정 = 기존 동작 유지)이나, 정책 YAML이
+        # temporal 섹션을 명시한 경우에는 min_hits/min_duration_sec/window_frames/max_gap_sec를
+        # 만족해야 triggered=True로 반환된다.
+        temporal_cfg = (rule or {}).get("temporal") if isinstance(rule, dict) else None
+        if isinstance(temporal_cfg, dict) and policy_name and camera_id:
+            result = self._apply_temporal_gate(result, temporal_cfg, camera_id, policy_name)
+
+        return result
+
+    def _apply_temporal_gate(
+        self,
+        result: RuleResult,
+        cfg: dict,
+        camera_id: str,
+        policy_name: str,
+    ) -> RuleResult:
+        """policy_name별 최근 hit/miss 시퀀스로 사건 발생을 지속성 기반으로 평가.
+
+        매개변수(YAML temporal):
+            min_duration_sec: 연속 hit 중 최소 누적 지속 시간(초). 생략 시 미적용.
+            min_hits: 총 누적 hit 수 하한. 기본 1(단일 만으로는 발화 안 함 → 보통 2↑).
+            window_frames: 최근 hit을 이 윈도우 내 hit만 카운트. 프레임 단위는 아니고
+                어림 세기 없이 단순 시퀀스라 max_gap_sec가 실질 간격 제어를 담당.
+            max_gap_sec: 이 간격 이상 hit가 비면 시퀀스를 리셋. 기본 1.0.
+            clear_after_sec: triggered 후 이 시간 동안 후보 hit이 없으면 시퀀스를 클리어
+                (중복 사건 폭주 방지). 기본 5.0.
+            emit_once_per_clear: True면 한 클리어 윈도우 안에서 triggered는 한 번만 True.
+                기본 True(중복 발화 방지).
+        """
+        now = time.monotonic()
+        key: tuple[str, str] = (camera_id, policy_name)
+        # Duration-based rules need enough history regardless of camera FPS and
+        # skip_frames. Explicit window_frames is reserved for N-of-M rules.
+        window_frames = max(1, int(cfg.get("window_frames", 4096)))
+        max_gap = max(0.0, float(cfg.get("max_gap_sec", 1.0)))
+        clear_after = max(0.0, float(cfg.get("clear_after_sec", 5.0)))
+        min_hits = max(1, int(cfg.get("min_hits", 1)))
+        min_duration = max(0.0, float(cfg.get("min_duration_sec", 0.0)))
+        emit_once = bool(cfg.get("emit_once_per_clear", True))
+        raw_triggered = bool(result.get("triggered", False))
+        raw_conf = float(result.get("confidence", 0.0))
+
+        with self._state_lock:
+            state = self._temporal_state.get(key)
+            if state is None:
+                state = {
+                    "samples": deque(maxlen=window_frames),
+                    "last_hit_ts": None,
+                    "fired": False,
+                }
+            samples: deque = state["samples"]
+            if samples.maxlen != window_frames:
+                samples = deque(list(samples)[-window_frames:], maxlen=window_frames)
+                state["samples"] = samples
+
+            last_hit_ts = state.get("last_hit_ts")
+            fired = bool(state.get("fired", False))
+            gap = (now - last_hit_ts) if last_hit_ts is not None else None
+
+            # A fired incident rearms only after the signal has actually been clear.
+            if fired and not raw_triggered and gap is not None and gap >= clear_after:
+                samples.clear()
+                fired = False
+                last_hit_ts = None
+            elif not fired and gap is not None and gap > max_gap:
+                samples.clear()
+                last_hit_ts = None
+
+            samples.append((now, raw_triggered, raw_conf))
+            if raw_triggered:
+                last_hit_ts = now
+
+            positive = [sample for sample in samples if sample[1]]
+            hit_count = len(positive)
+            first_hit_ts = positive[0][0] if positive else None
+            duration = (now - first_hit_ts) if first_hit_ts is not None else 0.0
+            gate_count_ok = hit_count >= min_hits
+            gate_duration_ok = min_duration <= 0.0 or duration >= min_duration
+
+            should_emit = (
+                raw_triggered
+                and gate_count_ok
+                and gate_duration_ok
+                and (not emit_once or not fired)
+            )
+            if should_emit:
+                fired = True
+
+            state["last_hit_ts"] = last_hit_ts
+            state["fired"] = fired
+            self._temporal_state[key] = state
+
+        result["triggered"] = should_emit
+        result["temporal"] = {
+            "hits": hit_count,
+            "samples": len(samples),
+            "window_frames": window_frames,
+            "required_hits": min_hits,
+            "required_duration_sec": min_duration,
+            "current_duration_sec": round(duration, 3),
+            "policy_name": policy_name,
+            "armed": not fired,
+        }
+        if not should_emit:
+            result["reason"] = "temporal_gate_pending" if not fired else "temporal_event_active"
         return result
 
     # ------------------------------------------------------------------

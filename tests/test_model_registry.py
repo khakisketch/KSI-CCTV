@@ -12,6 +12,7 @@ try:
     import numpy as np
 
     from src.detection.model_registry import ModelMetrics, MultiModelRegistry
+    from src.detection.pose_models import ActionPrediction, PoseObservation
     from src.detection.yolo_detector import Detection
     from src.utils.config import ConfigLoader
 
@@ -36,6 +37,27 @@ class FakeDetector:
         # 2자리 반올림(ms) 후에도 0이 아닌 측정 가능한 시간을 소비한다.
         time.sleep(0.0015)
         return [Detection(0, f"{self.name_hint}_object", 0.9, (0, 0, 10, 10))]
+
+
+class FakePoseDetector:
+    def __init__(self, model_path, **kwargs):
+        self.error = "missing pose asset" if "missing" in (model_path or "") else None
+        self.available = self.error is None
+        self.kwargs = kwargs
+
+    def detect(self, image, timestamp, bbox):
+        return [PoseObservation([(1, 2, 0.9)], bbox, timestamp, 0.9)]
+
+
+class FakeActionClassifier:
+    def __init__(self, model_path, class_names, **kwargs):
+        self.error = "missing action asset" if "missing" in (model_path or "") else None
+        self.available = self.error is None
+        self.class_names = class_names
+        self.kwargs = kwargs
+
+    def classify(self, sequence):
+        return ActionPrediction(self.class_names[0], 0, 1.0, [1.0])
 
 
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requirements.txt 의존성 설치 후 실행 가능")
@@ -127,6 +149,11 @@ class TestMultiModelRegistry(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             MultiModelRegistry(profiles, detector_cls=FakeDetector, strict=True)
 
+    def test_require_gpu_is_forwarded_to_enabled_yolo_models(self):
+        registry = MultiModelRegistry(self._profiles(), detector_cls=FakeDetector, require_gpu=True)
+
+        self.assertTrue(registry.models["general_yolo"].kwargs["require_gpu"])
+
     def test_from_config_loads_yaml(self):
         with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as f:
             f.write(
@@ -165,6 +192,10 @@ class TestMultiModelRegistry(unittest.TestCase):
 
         self.assertIn("models", data)
         self.assertIn("general_yolo", data["models"])
+        self.assertNotIn("vlm", data["models"])
+        runtime = ConfigLoader.load("./config/default.yaml")["models"]["vlm"]
+        self.assertIn("runtime_qualified", runtime)
+        self.assertIn("queue_hard_limit", runtime)
 
 
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requirements.txt 의존성 설치 후 실행 가능")
@@ -363,6 +394,63 @@ class TestRegistryMetrics(unittest.TestCase):
 
         m = registry.get_model_metrics()["test_model"]
         self.assertEqual(m["error_count"], 1)
+
+
+@unittest.skipUnless(HAS_RUNTIME_DEPS, "requirements.txt 의존성 설치 후 실행 가능")
+class TestBehaviorModelRegistry(unittest.TestCase):
+    def _registry(self, profiles, strict=False):
+        return MultiModelRegistry(
+            {"models": profiles}, detector_cls=FakeDetector,
+            pose_detector_cls=FakePoseDetector, stgcn_classifier_cls=FakeActionClassifier,
+            strict=strict,
+        )
+
+    def test_registers_behavior_models_without_changing_detect_all(self):
+        registry = self._registry({
+            "yolo": {"type": "yolo_onnx", "model_path": "yolo.onnx"},
+            "pose": {
+                "type": "pose_onnx", "model_path": "pose.onnx", "input_size": [320, 240],
+                "keypoint_count": 1, "confidence_threshold": 0.5, "output_layout": "bnc",
+                "device": "cpu",
+            },
+            "action": {
+                "type": "stgcn_onnx", "model_path": "action.onnx", "classes": ["fall"],
+                "keypoint_count": 1, "sequence_length": 2, "device": "cpu",
+            },
+        })
+
+        self.assertEqual(registry.active_model_names, ["yolo", "pose", "action"])
+        self.assertEqual(list(registry.detect_all(np.zeros((10, 10, 3), dtype=np.uint8))), ["yolo"])
+        poses = registry.detect_poses(np.zeros((10, 10, 3), dtype=np.uint8), [(0, 0, 2, 2)], "pose", 1.0)
+        self.assertEqual(len(poses), 1)
+        self.assertEqual(registry.classify_action([poses[0], poses[0]], "action").action, "fall")
+        status = registry.to_status_dict()
+        self.assertIn("inference_count", status["pose"])
+        self.assertIn("action", registry.get_model_metrics())
+
+    def test_disabled_behavior_models_are_not_loaded_or_failed(self):
+        registry = self._registry({
+            "pose": {"enabled": False, "type": "pose_onnx", "model_path": "missing.onnx"},
+            "action": {"enabled": False, "type": "stgcn_onnx", "model_path": "missing.onnx"},
+        })
+
+        self.assertEqual(registry.active_model_names, [])
+        self.assertEqual(registry.failed_models, {})
+        self.assertEqual(registry.to_status_dict()["pose"]["error"], "")
+
+    def test_enabled_missing_behavior_asset_is_load_error(self):
+        registry = self._registry({
+            "pose": {"type": "pose_onnx", "model_path": "missing.onnx"},
+        })
+
+        self.assertIn("pose", registry.failed_models)
+        with self.assertRaises(RuntimeError):
+            self._registry({"pose": {"type": "pose_onnx", "model_path": "missing.onnx"}}, strict=True)
+
+    def test_invalid_enabled_behavior_profile_is_load_error(self):
+        registry = self._registry({"action": {"type": "stgcn_onnx", "model_path": "action.onnx"}})
+
+        self.assertIn("class_names", registry.failed_models["action"])
 
 
 if __name__ == "__main__":

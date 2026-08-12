@@ -194,6 +194,10 @@ class TestPolicyEngineIntegration(unittest.TestCase):
         from src.policy.event_policy_engine import EventPolicyEngine
 
         policies = {
+            "catalog": {
+                "person_detected": {"status": "active", "runtime": "detection"},
+                "crowding": {"status": "active", "runtime": "detection"},
+            },
             "profiles": {
                 "construction": {
                     "policies": {

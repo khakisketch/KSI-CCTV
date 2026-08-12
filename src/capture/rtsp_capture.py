@@ -376,7 +376,12 @@ class RTSPCapture:
             return True
 
         except Exception as e:
-            logger.error(f"[{self.camera_id}] 연결 오류 (시도 #{self.reconnect_attempts}): {e}")
+            logger.error(
+                "[%s] 연결 오류 (시도 #%d): %s",
+                self.camera_id,
+                self.reconnect_attempts,
+                type(e).__name__,
+            )
             return False
 
     # ------------------------------------------------------------------
@@ -414,36 +419,57 @@ class CameraManager:
     def __init__(self):
         self.cameras: dict[str, RTSPCapture] = {}
         self.logger = logging.getLogger(__name__)
+        self._lock = threading.RLock()
 
     def add_camera(self, camera_id: str, stream_url: str, **kwargs) -> RTSPCapture:
         """카메라 추가"""
-        if camera_id in self.cameras:
-            raise ValueError(f"카메라 {camera_id}는 이미 존재합니다")
+        with self._lock:
+            if camera_id in self.cameras:
+                raise ValueError(f"카메라 {camera_id}는 이미 존재합니다")
+            capture = RTSPCapture(
+                camera_id=camera_id,
+                stream_url=stream_url,
+                **kwargs,
+            )
+            self.cameras[camera_id] = capture
+        return capture
 
-        capture = RTSPCapture(
-            camera_id=camera_id,
-            stream_url=stream_url,
-            **kwargs,
-        )
-        self.cameras[camera_id] = capture
+    def remove_camera(self, camera_id: str) -> RTSPCapture | None:
+        """카메라를 원자적으로 등록 해제하고 캡처 스레드를 중지한다."""
+        with self._lock:
+            capture = self.cameras.pop(camera_id, None)
+        if capture is not None:
+            capture.stop()
         return capture
 
     def start_all(self):
         """모든 카메라 시작"""
-        for camera_id, capture in self.cameras.items():
+        with self._lock:
+            cameras = list(self.cameras.items())
+        for camera_id, capture in cameras:
             capture.start()
             self.logger.info(f"[{camera_id}] 시작됨")
 
     def stop_all(self):
         """모든 카메라 중지"""
-        for capture in self.cameras.values():
+        with self._lock:
+            cameras = list(self.cameras.values())
+        for capture in cameras:
             capture.stop()
         self.logger.info("모든 카메라 중지")
 
     def get_camera(self, camera_id: str) -> RTSPCapture | None:
         """카메라 접근"""
-        return self.cameras.get(camera_id)
+        with self._lock:
+            return self.cameras.get(camera_id)
+
+    def snapshot(self) -> list[tuple[str, RTSPCapture]]:
+        """Return a stable camera registry view for lifecycle operations."""
+        with self._lock:
+            return list(self.cameras.items())
 
     def get_status(self) -> dict:
         """모든 카메라 상태 (RTSPCapture.get_status() 위임)"""
-        return {camera_id: cap.get_status() for camera_id, cap in self.cameras.items()}
+        with self._lock:
+            cameras = list(self.cameras.items())
+        return {camera_id: cap.get_status() for camera_id, cap in cameras}

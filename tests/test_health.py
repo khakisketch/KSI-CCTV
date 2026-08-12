@@ -300,6 +300,21 @@ class TestCheckCameras(unittest.TestCase):
         result = check_cameras(status)
         self.assertFalse(result.healthy)
 
+    def test_connected_camera_without_first_frame_is_unhealthy(self):
+        from src.utils.health import check_cameras
+
+        result = check_cameras({
+            "cam1": {
+                "connected": True,
+                "is_stale": False,
+                "consecutive_failures": 0,
+                "seconds_since_last_frame": None,
+            }
+        })
+
+        self.assertFalse(result.healthy)
+        self.assertIn("프레임", result.metadata["cameras"]["cam1"]["issues"][0])
+
     def test_consecutive_failures_threshold(self):
         from src.utils.health import check_cameras
         status = {
@@ -568,6 +583,7 @@ class TestRegisterPipelineHealthChecks(unittest.TestCase):
         self.assertIn("cameras", checker._checks)
         self.assertIn("vlm", checker._checks)
         self.assertIn("model_registry", checker._checks)
+        self.assertIn("ai_runtime", checker._checks)
         self.assertIn("gpu", checker._checks)
         self.assertIn("log_dirs", checker._checks)
 
@@ -619,6 +635,33 @@ class TestRegisterPipelineHealthChecks(unittest.TestCase):
         self.assertIn("model_registry", component_names)
         self.assertIn("gpu", component_names)
         self.assertIn("log_dirs", component_names)
+
+
+class TestAiRuntimeHealth(unittest.TestCase):
+    def test_disabled_runtime_is_healthy(self):
+        from src.utils.health import check_ai_runtime
+        result = check_ai_runtime({"behavior": {"enabled": False}, "vlm": {"configured_enabled": False, "queue": {"saturated": False}}})
+        self.assertTrue(result.healthy)
+
+    def test_enabled_unavailable_and_saturated_runtime_is_unhealthy(self):
+        from src.utils.health import check_ai_runtime
+        result = check_ai_runtime({
+            "behavior": {"enabled": True, "available": False, "runtime_errors": {"pose": 0, "action": 0}},
+            "vlm": {"configured_enabled": True, "runtime_qualified": False, "provider_available": False, "queue": {"saturated": True}, "lifecycle": {"unverified": 99}},
+        })
+        self.assertFalse(result.healthy)
+        self.assertIn("behavior_models_unavailable", result.message)
+        self.assertIn("vlm_unavailable", result.message)
+        self.assertIn("vlm_hard_queue_saturated", result.message)
+
+    def test_repeated_behavior_runtime_errors_are_unhealthy(self):
+        from src.utils.health import check_ai_runtime
+        result = check_ai_runtime({
+            "behavior": {"enabled": True, "available": True, "runtime_errors": {"pose": 2, "action": 1}},
+            "vlm": {"configured_enabled": False, "queue": {"saturated": False}},
+        })
+        self.assertFalse(result.healthy)
+        self.assertIn("behavior_runtime_errors", result.message)
 
 
 class TestHealthHTTPHandler(unittest.TestCase):

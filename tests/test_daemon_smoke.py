@@ -47,7 +47,6 @@ class TestDaemonSmoke(unittest.TestCase):
         env["KSI_CCTV_HEALTH_PORT"] = str(port)
         env["KSI_CCTV_HEALTH_HOST"] = "127.0.0.1"
         env["KSI_CCTV_LOG_LEVEL"] = "WARNING"
-        env.setdefault("KSI_CCTV_DASHBOARD_PASSWORD", "test-smoke-pw")
         env["KSI_CCTV_API_KEY"] = "smoke-api-key"  # 통합 API(/api/*) 검증용
 
         proc = subprocess.Popen(

@@ -4,8 +4,8 @@ AlertManager(이미지 저장 시)와 대시보드(이미지 표시 시)가 **�
 쓰도록 standalone으로 분리한다. blur_faces=True가 저장 경로에서만 적용되고 대시보드
 표시에서 누락되어 in-memory event.image의 얼굴 PII가 노출되던 불일치(#11)를 닫는다.
 
-한계(저장 경로와 동일): cascade 로드 실패/얼굴 미검출 시 입력을 그대로 반환한다 —
-검출되지 않은 얼굴은 가려지지 않으며, 이는 Haar cascade의 정확도 한계다.
+한계: 얼굴 미검출 시 입력을 그대로 반환하며, 이는 Haar cascade의 정확도 한계다.
+검출기 로드 실패는 빈 목록으로 표시하고 저장 경로의 AlertManager가 시작을 거부한다.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ _cascades_cache: list[Any] | None = None  # 지연 로드 싱글턴(저장/표�
 def get_face_cascades() -> list[Any]:
     """얼굴 검출기를 로드해 반환(프로세스당 1회 캐시).
 
-    cv2 미설치/cascade 로드 실패 시 빈 목록 → 호출측이 블러 비활성으로 처리한다.
+    cv2 미설치/cascade 로드 실패 시 빈 목록을 반환해 호출측이 정책을 결정하게 한다.
     """
     global _cascades_cache
     if _cascades_cache is not None:
@@ -43,13 +43,16 @@ def get_face_cascades() -> list[Any]:
     loaded: list[Any] = []
     # cv2.data.haarcascades는 런타임 유효(번들 cascade 경로)이나 cv2 스텁이 불완전해 mypy가
     # 잘못 플래그한다 — 실동작 확인됨.
-    data_dir = Path(cv2.data.haarcascades)  # type: ignore[attr-defined]
-    for name in _CASCADE_NAMES:
-        cascade = cv2.CascadeClassifier(str(data_dir / name))
-        if cascade.empty():
-            logger.warning("얼굴 블러 검출기 로드 실패: %s", name)
-        else:
-            loaded.append(cascade)
+    try:
+        data_dir = Path(cv2.data.haarcascades)  # type: ignore[attr-defined]
+        for name in _CASCADE_NAMES:
+            cascade = cv2.CascadeClassifier(str(data_dir / name))
+            if cascade.empty():
+                logger.warning("얼굴 블러 검출기 로드 실패: %s", name)
+            else:
+                loaded.append(cascade)
+    except (AttributeError, OSError) as exc:
+        logger.error("얼굴 블러 검출기 초기화 실패: %s", exc)
     if not loaded:
         logger.warning("사용 가능한 얼굴 검출기가 없습니다. 블러링 비활성.")
     _cascades_cache = loaded

@@ -27,6 +27,7 @@ except ImportError:
 
 _ROOT = Path(__file__).parent.parent
 _MODEL_PROFILES = _ROOT / "config" / "model_profiles.yaml"
+_DEFAULT_CONFIG = _ROOT / "config" / "default.yaml"
 _EVENT_POLICIES = _ROOT / "config" / "event_policies.yaml"
 _SAMPLE = _ROOT / "data" / "sample.mp4"
 _REQUIRED_MODELS = [
@@ -44,8 +45,10 @@ _ASSETS_REASON = "실 ONNX 모델/샘플 영상 필요 (models/*.onnx, data/samp
 _VLM_OPT_IN = os.environ.get("KSI_CCTV_TEST_VLM", "").strip() == "1"
 
 _VALID_EVENT_TYPES = {
-    "person_detected", "no_helmet", "no_vest", "fire", "smoke", "fall",
-    "restricted_area", "fight", "crowding",
+    "no_helmet", "no_vest", "fire", "smoke", "fall",
+    "restricted_area", "fight", "crowding", "loitering",
+    "camera_disconnect", "tamper", "wrong_way", "line_crossing",
+    "abandoned_object", "object_removal",
 }
 
 
@@ -95,21 +98,35 @@ class TestRealOnnxJourney(unittest.TestCase):
             f"미매핑 클래스명 발견: {sorted(seen)}",
         )
 
-    def test_full_journey_emits_real_events(self):
-        """실 ONNX → 정책 → SafetyPipeline 콜백까지 mock 없이 통과, 실제 이벤트 발생."""
+    def test_full_journey_processes_real_detections_without_person_event(self):
+        """실 ONNX → 정책 → SafetyPipeline 경로와 person/event 분리를 검증한다.
+
+        person 자체는 더 이상 사건이 아니라 '관측값'이므로, construction 프로파일에서
+        활성화 가능한 사건은 no_helmet/no_vest/fire/smoke/fall/restricted_area다.
+        실 영상에 위험 사건이 없어도 최소 한 개의 실제 detection은 생성되어야 하며,
+        일반 person 관측이 person_detected 사건으로 변환되면 안 된다.
+        """
         from src.pipeline.pipeline import SafetyPipeline
 
         pipe = SafetyPipeline(model_registry=self.registry, policy_engine=self.engine)
-        pipe.set_camera_profile("cam", {"domain": "construction"})
-        fired = []
+        # PPE 모델이 직접 탐지하는 두 사건만 켠다(0.3 신뢰도 → 비교적 쉽게 hit).
+        # 단, temporal gate가 적용되면 단일 hit은 사건이 될 수 없으므로 결국 발화
+        # 여부는 영상 콘텐츠와 min_hits 설정의 조합이다. callback 발화 없어도
+        # '경로가 죽지 않는다'는 사실만으로 회귀 게이트는 유효하다.
+        pipe.set_camera_profile("cam", {
+            "domain": "construction",
+            "enabled_events": ["no_helmet", "no_vest", "fire", "smoke"],
+        })
+        fired: list = []
         pipe.add_alert_callback(fired.append)
+        saw_detection = False
 
         for frame in self.frames[:25]:
             pipe._process_frame_with_policy("cam", frame, datetime.now())
-            if fired:
-                break
+            saw_detection = saw_detection or bool(pipe.latest_detections.get("cam"))
 
-        self.assertGreaterEqual(len(fired), 1, "실 종단 경로에서 이벤트가 발생하지 않음")
+        self.assertTrue(saw_detection, "실 ONNX 경로에서 detection이 생성되지 않음")
+        self.assertNotIn("person_detected", {event.event_type for event in fired})
         for event in fired:
             self.assertIn(event.event_type, _VALID_EVENT_TYPES)
             self.assertTrue(event.source_models, "트리거 모델이 기록되지 않음")
@@ -129,13 +146,14 @@ class TestRealVlmJourney(unittest.TestCase):
 
         vlm_cfg = {}
         try:
-            profiles = ConfigLoader.load(str(_MODEL_PROFILES))
-            vlm_cfg = profiles.get("vlm", {}) if isinstance(profiles, dict) else {}
+            config = ConfigLoader.load(str(_DEFAULT_CONFIG))
+            models = config.get("models", {}) if isinstance(config, dict) else {}
+            vlm_cfg = models.get("vlm", {}) if isinstance(models, dict) else {}
         except Exception:
             vlm_cfg = {}
 
         cls.provider = OllamaProvider(
-            base_url=vlm_cfg.get("base_url", "http://localhost:11434"),
+            base_url=vlm_cfg.get("base_url", "http://127.0.0.1:11434"),
             model=vlm_cfg.get("model_name", "qwen3-vl:latest"),
             timeout_sec=float(vlm_cfg.get("timeout_sec", 60)),
             max_retries=1,

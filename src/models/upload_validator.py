@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {".onnx"}
 MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024
+MAX_UPLOADED_MODELS = 20
+MAX_TOTAL_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 UPLOAD_BASE_DIR = Path("./models/uploaded")
 MODEL_PROFILES_PATH = Path("./config/model_profiles.yaml")
 INFERENCE_TIMEOUT_SEC = 30.0
@@ -510,8 +512,9 @@ def _register_disabled_profile(
     return profile_name
 
 
-def upload_model(
-    file_bytes: bytes,
+def _upload_model_from_source(
+    write_source: Callable[[Path], None],
+    source_size: int,
     original_filename: str,
     metadata: dict[str, Any] | None = None,
     *,
@@ -519,14 +522,29 @@ def upload_model(
     upload_base_dir: Path = UPLOAD_BASE_DIR,
     model_profiles_path: Path = MODEL_PROFILES_PATH,
     inference_timeout_sec: float = INFERENCE_TIMEOUT_SEC,
+    max_uploaded_models: int = MAX_UPLOADED_MODELS,
+    max_total_upload_bytes: int = MAX_TOTAL_UPLOAD_BYTES,
 ) -> UploadResult:
-    """Validate, isolate, smoke-test, and register an uploaded ONNX model."""
+    """Stage a bounded source, validate it in the sandbox, and register it disabled."""
 
     safe_original = _safe_original_name(original_filename)
     if not validate_extension(safe_original):
         return UploadResult(success=False, error="허용되지 않은 파일 형식입니다. ONNX(.onnx)만 업로드할 수 있습니다.")
-    if not validate_file_size_bytes(len(file_bytes), max_file_size):
+    if not validate_file_size_bytes(source_size, max_file_size):
         return UploadResult(success=False, error=f"파일 크기가 허용 범위를 벗어났습니다. 최대 {max_file_size // (1024 * 1024)}MB")
+    retained_files = [
+        child / "model.onnx"
+        for child in upload_base_dir.iterdir()
+        if child.is_dir() and child.name != "tmp" and (child / "model.onnx").is_file()
+    ] if upload_base_dir.exists() else []
+    if len(retained_files) >= max_uploaded_models:
+        return UploadResult(success=False, error=f"보존 가능한 업로드 모델은 최대 {max_uploaded_models}개입니다. 기존 모델을 삭제하세요.")
+    retained_bytes = sum(path.stat().st_size for path in retained_files)
+    if retained_bytes + source_size > max_total_upload_bytes:
+        return UploadResult(
+            success=False,
+            error=f"업로드 모델 총 보존 용량은 최대 {max_total_upload_bytes // (1024 * 1024)}MB입니다. 기존 모델을 삭제하세요.",
+        )
 
     try:
         normalized = _validate_metadata(metadata)
@@ -540,9 +558,12 @@ def upload_model(
     target_file = _model_file_for(upload_base_dir, model_id)
 
     try:
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        with open(tmp_file, "wb") as f:
-            f.write(file_bytes)
+        tmp_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(tmp_dir, 0o700)
+        write_source(tmp_file)
+        os.chmod(tmp_file, 0o600)
+        if tmp_file.stat().st_size != source_size:
+            return UploadResult(success=False, error="업로드 파일 크기가 전송 중 변경되었습니다.")
 
         # 보안: 런타임 검증 전체(external-data 차단 → load → shape → smoke 추론)를 단일 자원-제한
         # sandbox 자식에서 수행한다. onnx.load 파싱·세션 생성의 메모리/CPU까지 rlimit에 가둬,
@@ -581,6 +602,66 @@ def upload_model(
     finally:
         if tmp_file.exists():
             tmp_file.unlink(missing_ok=True)
+
+
+def upload_model(
+    file_bytes: bytes,
+    original_filename: str,
+    metadata: dict[str, Any] | None = None,
+    *,
+    max_file_size: int = MAX_FILE_SIZE_BYTES,
+    upload_base_dir: Path = UPLOAD_BASE_DIR,
+    model_profiles_path: Path = MODEL_PROFILES_PATH,
+    inference_timeout_sec: float = INFERENCE_TIMEOUT_SEC,
+    max_uploaded_models: int = MAX_UPLOADED_MODELS,
+    max_total_upload_bytes: int = MAX_TOTAL_UPLOAD_BYTES,
+) -> UploadResult:
+    """Validate, isolate, smoke-test, and register in-memory ONNX bytes."""
+
+    return _upload_model_from_source(
+        lambda destination: destination.write_bytes(file_bytes),
+        len(file_bytes),
+        original_filename,
+        metadata,
+        max_file_size=max_file_size,
+        upload_base_dir=upload_base_dir,
+        model_profiles_path=model_profiles_path,
+        inference_timeout_sec=inference_timeout_sec,
+        max_uploaded_models=max_uploaded_models,
+        max_total_upload_bytes=max_total_upload_bytes,
+    )
+
+
+def upload_model_file(
+    source_path: Path,
+    original_filename: str,
+    metadata: dict[str, Any] | None = None,
+    *,
+    max_file_size: int = MAX_FILE_SIZE_BYTES,
+    upload_base_dir: Path = UPLOAD_BASE_DIR,
+    model_profiles_path: Path = MODEL_PROFILES_PATH,
+    inference_timeout_sec: float = INFERENCE_TIMEOUT_SEC,
+    max_uploaded_models: int = MAX_UPLOADED_MODELS,
+    max_total_upload_bytes: int = MAX_TOTAL_UPLOAD_BYTES,
+) -> UploadResult:
+    """Validate a disk-spooled ONNX upload without loading it into the parent process."""
+
+    try:
+        source_size = source_path.stat().st_size
+    except OSError:
+        return UploadResult(success=False, error="업로드 임시 파일을 읽을 수 없습니다.")
+    return _upload_model_from_source(
+        lambda destination: shutil.copyfile(source_path, destination),
+        source_size,
+        original_filename,
+        metadata,
+        max_file_size=max_file_size,
+        upload_base_dir=upload_base_dir,
+        model_profiles_path=model_profiles_path,
+        inference_timeout_sec=inference_timeout_sec,
+        max_uploaded_models=max_uploaded_models,
+        max_total_upload_bytes=max_total_upload_bytes,
+    )
 
 
 def get_uploaded_models(upload_base_dir: Path = UPLOAD_BASE_DIR) -> list[dict[str, Any]]:

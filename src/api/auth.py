@@ -17,6 +17,18 @@ def _configured_key() -> str:
     return os.environ.get("KSI_CCTV_API_KEY", "").strip()
 
 
+def check_api_key(key: str | None) -> bool:
+    """WS 핸드셰이크용 키 검증(의존성 주입 불가능한 경로용).
+
+    KSI_CCTV_API_KEY 미설정/'change-me'이면 fail-closed(False). 일치하면 True.
+    """
+    configured = _configured_key()
+    if configured in _PLACEHOLDER:
+        return False
+    provided = (key or "").strip()
+    return bool(provided) and hmac.compare_digest(provided, configured)
+
+
 def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
     """보호 엔드포인트 의존성. 키 미설정이면 fail-closed(503), 불일치면 401."""
     configured = _configured_key()

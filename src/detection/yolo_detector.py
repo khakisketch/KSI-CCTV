@@ -120,7 +120,8 @@ class YOLODetector:
         device: str = "cuda",
         fp16: bool = True,
         postprocess_mode: str = "auto",
-        class_profile: str = "coco"
+        class_profile: str = "coco",
+        require_gpu: bool = False,
     ):
         self.model_path = Path(model_path)
         self.input_size = input_size
@@ -130,6 +131,7 @@ class YOLODetector:
         self.device = device
         self.fp16 = fp16
         self.postprocess_mode = postprocess_mode
+        self.require_gpu = require_gpu
 
         self.session: ort.InferenceSession | None = None
         self.input_name: str = ""
@@ -282,7 +284,12 @@ class YOLODetector:
 
             # 크로스플랫폼 EP 선택 — device 선호도 × 설치 가용 provider(CUDA/TensorRT/DirectML/CoreML/QNN/CPU).
             available = ort.get_available_providers()
-            providers = _select_providers(self.device, available)
+            if self.require_gpu:
+                if "CUDAExecutionProvider" not in available:
+                    raise RuntimeError(f"CUDAExecutionProvider is required but unavailable: {available}")
+                providers = ["CUDAExecutionProvider"]
+            else:
+                providers = _select_providers(self.device, available)
             logger.info("ONNX EP 선택: device=%s → %s (가용: %s)", self.device, providers, available)
 
             sess_options = ort.SessionOptions()
@@ -293,6 +300,9 @@ class YOLODetector:
                 sess_options=sess_options,
                 providers=providers
             )
+            session_providers = self.session.get_providers()
+            if self.require_gpu and (not session_providers or session_providers[0] != "CUDAExecutionProvider"):
+                raise RuntimeError(f"CUDA-primary model session was not created: {session_providers}")
 
             input_meta = self.session.get_inputs()[0]
             self.input_name = input_meta.name

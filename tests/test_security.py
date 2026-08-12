@@ -41,6 +41,12 @@ class TestMaskUrl(unittest.TestCase):
         self.assertNotIn("p%40ss", masked)
         self.assertIn("***:***@cam.local:554", masked)
 
+    def test_query_and_fragment_are_masked_without_userinfo(self):
+        masked = mask_url("https://camera.local/live?token=secret#session-key")
+        self.assertNotIn("token=secret", masked)
+        self.assertNotIn("session-key", masked)
+        self.assertEqual(masked, "https://camera.local/live?***#***")
+
 
 class TestMaskText(unittest.TestCase):
     def test_embedded_rtsp_url_masked_in_log_line(self):
@@ -54,6 +60,13 @@ class TestMaskText(unittest.TestCase):
         line = "webhook http://svc:token99@hooks.local/notify 호출"
         masked = mask_text(line)
         self.assertNotIn("token99", masked)
+
+    def test_embedded_url_query_and_fragment_masked(self):
+        line = "카메라 연결 https://camera.local/live?token=secret#session-key 실패"
+        masked = mask_text(line)
+        self.assertNotIn("token=secret", masked)
+        self.assertNotIn("session-key", masked)
+        self.assertIn("https://camera.local/live?***#***", masked)
 
     def test_plain_text_unchanged(self):
         line = "정상 동작 중 — 자격증명 없음"

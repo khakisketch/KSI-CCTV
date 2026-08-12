@@ -51,6 +51,7 @@ class TestOllamaParser(unittest.TestCase):
             "detected_events": ["fire"],
             "recommended_action": "소방대 호출",
             "confidence": 0.98,
+            "verdict": "confirm",
         })
         result = provider._parse_response(content)
         self.assertEqual(result.description, "화재 감지")
@@ -64,6 +65,7 @@ class TestOllamaParser(unittest.TestCase):
             "detected_events": ["smoke"],
             "recommended_action": "대피 유도",
             "confidence": 0.85,
+            "verdict": "confirm",
         })
         content = f"```json\n{raw_json}\n```"
         result = provider._parse_response(content)
@@ -77,6 +79,51 @@ class TestOllamaParser(unittest.TestCase):
         # parse_success=False 시 risk_level은 'low'로 보존 (medium 하드코딩 제거)
         self.assertEqual(result.risk_level, "low")
         self.assertFalse(result.parse_success)
+
+    def test_missing_verdict_is_schema_error(self):
+        provider = self._make_provider()
+        result = provider._parse_response(json.dumps({
+            "description": "화재 감지",
+            "risk_level": "critical",
+            "confidence": 0.9,
+        }))
+        self.assertFalse(result.parse_success)
+        self.assertEqual(result.verdict, "error")
+
+    @patch("src.vlm.ollama_provider.requests.post")
+    def test_zero_retries_still_attempts_once(self, mock_post):
+        mock_post.side_effect = RuntimeError("offline")
+        from src.vlm.ollama_provider import OllamaProvider
+
+        provider = OllamaProvider(max_retries=0)
+        result = provider.analyze(b"image", "prompt")
+
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(result.verdict, "error")
+
+    @patch("src.vlm.ollama_provider.requests.post")
+    def test_analyze_frames_keeps_independent_frame_verdicts(self, mock_post):
+        from src.vlm.ollama_provider import OllamaProvider
+        responses = []
+        for verdict in ("confirm", "reject", "abstain"):
+            response = Mock(status_code=200)
+            response.json.return_value = {"message": {"content": json.dumps({
+                "description": verdict, "risk_level": "low", "confidence": 0.8,
+                "verdict": verdict,
+            })}}
+            responses.append(response)
+        mock_post.side_effect = responses
+
+        results = OllamaProvider(max_retries=1).analyze_frames([b"one", b"two", b"three"], "prompt")
+
+        self.assertEqual([result.verdict for result in results], ["confirm", "reject", "abstain"])
+        self.assertEqual(mock_post.call_count, 3)
+
+    def test_shipped_prompts_require_verdict_and_confidence(self):
+        for path in Path("config/prompts").glob("*.yaml"):
+            content = path.read_text(encoding="utf-8")
+            self.assertIn('"verdict"', content, path.name)
+            self.assertIn('"confidence"', content, path.name)
 
 
 class TestContextBuilder(unittest.TestCase):
@@ -219,6 +266,8 @@ class TestOllamaParserNewFields(unittest.TestCase):
             "description": "test",
             "risk_level": "low",
             "detected_events": [],
+            "confidence": 0.5,
+            "verdict": "abstain",
         })
         result = provider._parse_response(content)
         self.assertTrue(result.parse_success)
@@ -286,6 +335,7 @@ class TestOllamaParserEmbeddedJsonFallback(unittest.TestCase):
                 "detected_events": ["no_helmet"],
                 "recommended_action": "즉시 착용 지도",
                 "confidence": 0.9,
+                "verdict": "confirm",
             }
         )
         content = f"분석 결과:\n{json_obj}"
@@ -304,6 +354,7 @@ class TestOllamaParserEmbeddedJsonFallback(unittest.TestCase):
                 "detected_events": ["fire"],
                 "recommended_action": "소방대 호출",
                 "confidence": 0.99,
+                "verdict": "confirm",
             }
         )
         content = f"JSON: {json_obj}"
@@ -321,6 +372,7 @@ class TestOllamaParserEmbeddedJsonFallback(unittest.TestCase):
                 "detected_events": [],
                 "recommended_action": "계속 모니터링",
                 "confidence": 0.7,
+                "verdict": "reject",
             }
         )
         content = f"{json_obj}\n\n위 결과는 현재 상황 기준입니다."
@@ -468,21 +520,61 @@ class TestCreateVlmProvider(unittest.TestCase):
         from src.vlm.vlm_inference import create_vlm_provider
         self.assertIsNone(create_vlm_provider({"enabled": True, "provider": "foobar"}))
 
+    def test_qualified_provider_rejects_external_host(self):
+        from src.vlm.vlm_inference import create_vlm_provider
+        self.assertIsNone(create_vlm_provider({
+            "enabled": True, "runtime_qualified": True, "model_digest": "a" * 64,
+            "base_url": "https://example.com",
+        }))
+
+    def test_localhost_and_list_only_allowed_hosts(self):
+        from src.vlm.vlm_inference import create_vlm_provider
+        config = {"enabled": True, "runtime_qualified": True, "model_digest": "a" * 64}
+        self.assertIsNotNone(create_vlm_provider(config))
+        self.assertIsNone(create_vlm_provider({**config, "allowed_hosts": "localhost"}))
+
     def test_ollama_provider_created(self):
         from src.vlm.ollama_provider import OllamaProvider
         from src.vlm.vlm_inference import create_vlm_provider
         p = create_vlm_provider({
             "enabled": True, "provider": "ollama",
             "model_name": "qwen3-vl:latest", "base_url": "http://localhost:11434",
+            "runtime_qualified": True, "model_digest": "a" * 64,
+            "allowed_hosts": ["localhost"],
         })
         self.assertIsInstance(p, OllamaProvider)
+        self.assertEqual(p.base_url, "http://127.0.0.1:11434")
 
-    def test_default_provider_is_ollama(self):
-        from src.vlm.ollama_provider import OllamaProvider
+    def test_allowlisted_dns_name_is_rejected_to_prevent_rebinding(self):
         from src.vlm.vlm_inference import create_vlm_provider
-        # provider 키 생략 시 ollama 기본
+        config = {
+            "enabled": True,
+            "runtime_qualified": True,
+            "model_digest": "a" * 64,
+            "base_url": "http://ollama.internal:11434",
+            "allowed_hosts": ["ollama.internal"],
+        }
+        self.assertIsNone(create_vlm_provider(config))
+
+    @patch("src.vlm.ollama_provider.requests.post")
+    @patch("src.vlm.ollama_provider.requests.get")
+    def test_digest_is_rechecked_before_qualified_inference(self, mock_get, mock_post):
+        from src.vlm.ollama_provider import OllamaProvider
+
+        response = Mock(status_code=200)
+        response.json.return_value = {"models": [{"name": "model", "digest": "b" * 64}]}
+        mock_get.return_value = response
+        result = OllamaProvider(model="model", model_digest="a" * 64).analyze(b"image", "prompt")
+
+        self.assertEqual(result.verdict, "error")
+        self.assertFalse(result.parse_success)
+        mock_post.assert_not_called()
+
+    def test_unqualified_enabled_provider_is_disabled(self):
+        from src.vlm.vlm_inference import create_vlm_provider
+        # Explicit qualification is required even when enabled.
         p = create_vlm_provider({"enabled": True})
-        self.assertIsInstance(p, OllamaProvider)
+        self.assertIsNone(p)
 
 
 if __name__ == "__main__":

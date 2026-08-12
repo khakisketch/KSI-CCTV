@@ -1,5 +1,6 @@
 """User model upload validator tests."""
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -73,6 +74,63 @@ class TestUploadValidator(unittest.TestCase):
             self.assertFalse(profile["enabled"])
             self.assertEqual(profile["source"], "uploaded")
             self.assertTrue(profile["model_path"].endswith(f"{result.model_id}/model.onnx"))
+
+    def test_disk_spooled_upload_is_copied_without_consuming_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "request-upload.onnx"
+            source.write_bytes(b"disk-spooled model")
+            base = Path(tmp) / "uploaded"
+            profiles_path = Path(tmp) / "model_profiles.yaml"
+            profiles_path.write_text("models: {}\n", encoding="utf-8")
+
+            with patch.object(uv, "validate_onnx_runtime_sandboxed", return_value=(True, "")):
+                result = uv.upload_model_file(
+                    source,
+                    "model.onnx",
+                    upload_base_dir=base,
+                    model_profiles_path=profiles_path,
+                )
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual((base / result.model_id / "model.onnx").read_bytes(), b"disk-spooled model")
+            self.assertEqual(stat.S_IMODE((base / "tmp").stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((base / result.model_id / "model.onnx").stat().st_mode), 0o600)
+            self.assertTrue(source.exists())
+
+    def test_retained_model_count_and_aggregate_size_are_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "uploaded"
+            profiles_path = Path(tmp) / "model_profiles.yaml"
+            profiles_path.write_text("models: {}\n", encoding="utf-8")
+            with patch.object(uv, "validate_onnx_runtime_sandboxed", return_value=(True, "")):
+                first = uv.upload_model(
+                    b"1234",
+                    "first.onnx",
+                    upload_base_dir=base,
+                    model_profiles_path=profiles_path,
+                    max_uploaded_models=1,
+                    max_total_upload_bytes=8,
+                )
+                count_limited = uv.upload_model(
+                    b"5",
+                    "second.onnx",
+                    upload_base_dir=base,
+                    model_profiles_path=profiles_path,
+                    max_uploaded_models=1,
+                    max_total_upload_bytes=8,
+                )
+                size_limited = uv.upload_model(
+                    b"56789",
+                    "second.onnx",
+                    upload_base_dir=base,
+                    model_profiles_path=profiles_path,
+                    max_uploaded_models=2,
+                    max_total_upload_bytes=8,
+                )
+
+            self.assertTrue(first.success, first.error)
+            self.assertIn("최대 1개", count_limited.error)
+            self.assertIn("총 보존 용량", size_limited.error)
 
     def test_invalid_metadata_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

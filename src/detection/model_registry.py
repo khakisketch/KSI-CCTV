@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,14 +14,14 @@ from typing import Any
 import numpy as np
 
 from src.detection.class_adapter import adapt_detections, get_class_map_for_profile
+from src.detection.model_metrics import ModelMetrics
+from src.detection.pose_detector import PoseOnnxDetector
+from src.detection.pose_models import ActionPrediction, PoseObservation
+from src.detection.stgcn_detector import STGCNOnnxClassifier
 from src.detection.yolo_detector import Detection, YOLODetector
 from src.utils.config import ConfigLoader
 
 logger = logging.getLogger(__name__)
-
-# 최근 latency 샘플 보존 개수 (p50/p95 계산용)
-_LATENCY_WINDOW = 100
-
 
 @dataclass
 class ModelLoadStatus:
@@ -35,86 +34,6 @@ class ModelLoadStatus:
     profile: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class ModelMetrics:
-    """모델별 런타임 추론 metrics.
-
-    - inference_count: 총 추론 시도 횟수 (성공 + 실패)
-    - success_count: 성공 횟수
-    - error_count: 실패(예외) 횟수
-    - consecutive_errors: 현재까지 연속 실패 횟수 (성공 시 0 리셋)
-    - total_latency_ms: 성공 추론 누적 시간 (ms)
-    - last_latency_ms: 마지막 성공 추론 latency (ms), 미추론이면 -1
-    - _latency_window: 최근 latency 샘플 (p50/p95 계산용)
-    """
-
-    name: str
-    inference_count: int = 0
-    success_count: int = 0
-    error_count: int = 0
-    consecutive_errors: int = 0
-    total_latency_ms: float = 0.0
-    last_latency_ms: float = -1.0
-    _latency_window: deque[float] = field(default_factory=lambda: deque(maxlen=_LATENCY_WINDOW))
-
-    def record_success(self, latency_ms: float) -> None:
-        """성공 추론 결과를 기록한다."""
-        self.inference_count += 1
-        self.success_count += 1
-        self.consecutive_errors = 0
-        self.total_latency_ms += latency_ms
-        self.last_latency_ms = latency_ms
-        self._latency_window.append(latency_ms)
-
-    def record_error(self) -> None:
-        """추론 실패를 기록한다."""
-        self.inference_count += 1
-        self.error_count += 1
-        self.consecutive_errors += 1
-
-    @property
-    def avg_latency_ms(self) -> float:
-        """성공 추론 평균 latency (ms). 미추론이면 -1."""
-        if self.success_count == 0:
-            return -1.0
-        return self.total_latency_ms / self.success_count
-
-    @property
-    def p50_latency_ms(self) -> float:
-        """최근 샘플 기준 p50 latency (ms). 샘플 없으면 -1."""
-        samples = list(self._latency_window)
-        if not samples:
-            return -1.0
-        sorted_s = sorted(samples)
-        mid = len(sorted_s) // 2
-        if len(sorted_s) % 2 == 0:
-            return (sorted_s[mid - 1] + sorted_s[mid]) / 2.0
-        return sorted_s[mid]
-
-    @property
-    def p95_latency_ms(self) -> float:
-        """최근 샘플 기준 p95 latency (ms). 샘플 없으면 -1."""
-        samples = list(self._latency_window)
-        if not samples:
-            return -1.0
-        sorted_s = sorted(samples)
-        idx = max(0, int(len(sorted_s) * 0.95) - 1)
-        return sorted_s[idx]
-
-    def to_dict(self) -> dict[str, Any]:
-        """대시보드/파이프라인 노출용 dict."""
-        return {
-            "inference_count": self.inference_count,
-            "success_count": self.success_count,
-            "error_count": self.error_count,
-            "consecutive_errors": self.consecutive_errors,
-            "avg_latency_ms": round(self.avg_latency_ms, 2),
-            "p50_latency_ms": round(self.p50_latency_ms, 2),
-            "p95_latency_ms": round(self.p95_latency_ms, 2),
-            "last_latency_ms": round(self.last_latency_ms, 2),
-        }
-
-
 class MultiModelRegistry:
     """여러 탐지 모델을 관리하고 모델별 추론 결과를 반환한다.
 
@@ -125,7 +44,7 @@ class MultiModelRegistry:
     - 모델별 latency/error metrics는 `get_model_metrics()`로 조회한다.
     """
 
-    SUPPORTED_TYPES = {"yolo_onnx", "open_vocab"}
+    SUPPORTED_TYPES = {"yolo_onnx", "open_vocab", "pose_onnx", "stgcn_onnx"}
     # 연속 실패 이 횟수를 초과하면 runtime_error를 load_status에 반영
     CONSECUTIVE_ERROR_THRESHOLD = 3
 
@@ -134,11 +53,19 @@ class MultiModelRegistry:
         profiles: dict[str, Any],
         detector_cls: type[YOLODetector] = YOLODetector,
         strict: bool = False,
+        require_gpu: bool = False,
+        pose_detector_cls: type[PoseOnnxDetector] = PoseOnnxDetector,
+        stgcn_classifier_cls: type[STGCNOnnxClassifier] = STGCNOnnxClassifier,
     ):
         self.detector_cls = detector_cls
+        self.pose_detector_cls = pose_detector_cls
+        self.stgcn_classifier_cls = stgcn_classifier_cls
         self.strict = strict
+        self.require_gpu = require_gpu
         self.profiles = self._extract_model_profiles(profiles)
         self.models: dict[str, YOLODetector] = {}
+        self.pose_detectors: dict[str, PoseOnnxDetector] = {}
+        self.action_classifiers: dict[str, STGCNOnnxClassifier] = {}
         self.load_status: dict[str, ModelLoadStatus] = {}
         # 모델별 런타임 metrics
         self._model_metrics: dict[str, ModelMetrics] = {}
@@ -151,9 +78,16 @@ class MultiModelRegistry:
         path: str = "./config/model_profiles.yaml",
         detector_cls: type[YOLODetector] = YOLODetector,
         strict: bool = False,
+        require_gpu: bool = False,
+        pose_detector_cls: type[PoseOnnxDetector] = PoseOnnxDetector,
+        stgcn_classifier_cls: type[STGCNOnnxClassifier] = STGCNOnnxClassifier,
     ) -> MultiModelRegistry:
         """YAML 설정 파일에서 레지스트리 생성."""
-        return cls(ConfigLoader.load(path), detector_cls=detector_cls, strict=strict)
+        return cls(
+            ConfigLoader.load(path), detector_cls=detector_cls,
+            pose_detector_cls=pose_detector_cls, stgcn_classifier_cls=stgcn_classifier_cls,
+            strict=strict, require_gpu=require_gpu,
+        )
 
     @staticmethod
     def _extract_model_profiles(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -191,8 +125,16 @@ class MultiModelRegistry:
             try:
                 if model_type == "open_vocab":
                     self.models[name] = self._create_openvocab_detector(profile)
-                else:
+                elif model_type == "yolo_onnx":
                     self.models[name] = self._create_yolo_detector(profile)
+                elif model_type == "pose_onnx":
+                    detector = self._create_pose_detector(profile)
+                    self._register_behavior_model(name, detector)
+                    self.pose_detectors[name] = detector
+                else:
+                    classifier = self._create_stgcn_classifier(profile)
+                    self._register_behavior_model(name, classifier)
+                    self.action_classifiers[name] = classifier
                 status.loaded = True
                 logger.info("모델 로드 완료: %s (type=%s)", name, model_type)
             except Exception as exc:
@@ -200,6 +142,56 @@ class MultiModelRegistry:
                 logger.error("모델 로드 실패 [%s]: %s", name, exc)
                 if self.strict:
                     raise
+
+    def _register_behavior_model(self, name: str, model: Any) -> None:
+        error = getattr(model, "error", None)
+        if not bool(getattr(model, "available", False)):
+            raise RuntimeError(error or "model session is unavailable")
+        model.metrics = self._model_metrics[name]
+
+    @staticmethod
+    def _positive_int(value: Any, field_name: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{field_name} must be a positive integer")
+        return value
+
+    def _create_pose_detector(self, profile: dict[str, Any]) -> PoseOnnxDetector:
+        input_size = profile.get("input_size", [640, 640])
+        if not isinstance(input_size, (list, tuple)) or len(input_size) != 2:
+            raise ValueError("pose_onnx input_size must contain width and height")
+        width = self._positive_int(input_size[0], "pose_onnx input_size width")
+        height = self._positive_int(input_size[1], "pose_onnx input_size height")
+        keypoint_count = self._positive_int(profile.get("keypoint_count", 17), "pose_onnx keypoint_count")
+        confidence = profile.get("confidence_threshold", 0.25)
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+            raise ValueError("pose_onnx confidence_threshold must be within [0, 1]")
+        output_layout = profile.get("output_layout", "bcn")
+        if output_layout not in {"bcn", "bnc"}:
+            raise ValueError("pose_onnx output_layout must be 'bcn' or 'bnc'")
+        device = profile.get("device", "auto")
+        if not isinstance(device, str) or not device:
+            raise ValueError("pose_onnx device must be a non-empty string")
+        return self.pose_detector_cls(
+            profile.get("model_path"), enabled=True, input_size=(width, height),
+            keypoint_count=keypoint_count, confidence_threshold=float(confidence),
+            output_layout=output_layout, device=device,
+        )
+
+    def _create_stgcn_classifier(self, profile: dict[str, Any]) -> STGCNOnnxClassifier:
+        class_names = profile.get("class_names", profile.get("classes"))
+        if not isinstance(class_names, (list, tuple)) or not class_names or any(
+            not isinstance(item, str) or not item.strip() for item in class_names
+        ):
+            raise ValueError("stgcn_onnx class_names or classes must be non-empty strings")
+        keypoint_count = self._positive_int(profile.get("keypoint_count", 17), "stgcn_onnx keypoint_count")
+        sequence_length = self._positive_int(profile.get("sequence_length", 30), "stgcn_onnx sequence_length")
+        device = profile.get("device", "auto")
+        if not isinstance(device, str) or not device:
+            raise ValueError("stgcn_onnx device must be a non-empty string")
+        return self.stgcn_classifier_cls(
+            profile.get("model_path"), class_names, enabled=True,
+            keypoint_count=keypoint_count, sequence_length=sequence_length, device=device,
+        )
 
     def _create_yolo_detector(self, profile: dict[str, Any]) -> YOLODetector:
         input_size = tuple(profile.get("input_size", [640, 640]))
@@ -209,10 +201,11 @@ class MultiModelRegistry:
             conf_threshold=float(profile.get("conf_threshold", 0.25)),
             iou_threshold=float(profile.get("iou_threshold", 0.45)),
             classes=profile.get("classes") or None,
-            device=profile.get("device", "cuda"),
+            device=profile.get("device", "auto"),
             fp16=bool(profile.get("fp16", True)),
             postprocess_mode=profile.get("postprocess_mode", "auto"),
             class_profile=profile.get("class_profile", "coco"),
+            require_gpu=self.require_gpu,
         )
 
     def _create_openvocab_detector(self, profile: dict[str, Any]):
@@ -233,7 +226,7 @@ class MultiModelRegistry:
     @property
     def active_model_names(self) -> list[str]:
         """로드 완료된 모델 이름 목록."""
-        return list(self.models.keys())
+        return [name for name, status in self.load_status.items() if status.loaded]
 
     @property
     def failed_models(self) -> dict[str, str]:
@@ -278,7 +271,8 @@ class MultiModelRegistry:
         각 모델의 wall-clock latency와 실패 횟수를 metrics에 누적하고,
         연속 실패가 임계값을 초과하면 load_status에 runtime_error를 기록한다.
         """
-        selected = list(model_names) if model_names is not None else self.active_model_names
+        # Behavior models are intentionally excluded: this return contract is detection-only.
+        selected = list(model_names) if model_names is not None else list(self.models)
         results: dict[str, list[Detection]] = {}
 
         for name in selected:
@@ -316,6 +310,36 @@ class MultiModelRegistry:
                 results[name] = []
 
         return results
+
+    def detect_poses(
+        self,
+        image: np.ndarray,
+        person_bboxes: Iterable[tuple[float, float, float, float]],
+        model_name: str,
+        timestamp: float,
+    ) -> list[PoseObservation]:
+        """Run one loaded pose model for each person box and combine its observations."""
+        detector = self.pose_detectors.get(model_name)
+        if detector is None:
+            raise KeyError(f"Loaded pose model not found: {model_name}")
+        observations: list[PoseObservation] = []
+        for bbox in person_bboxes:
+            observations.extend(detector.detect(image, timestamp, bbox))
+        self._update_runtime_health(model_name, self._model_metrics[model_name])
+        return observations
+
+    def classify_action(
+        self,
+        sequence: Iterable[PoseObservation],
+        model_name: str,
+    ) -> ActionPrediction | None:
+        """Classify one pose sequence with a loaded ST-GCN model."""
+        classifier = self.action_classifiers.get(model_name)
+        if classifier is None:
+            raise KeyError(f"Loaded action model not found: {model_name}")
+        prediction = classifier.classify(tuple(sequence))
+        self._update_runtime_health(model_name, self._model_metrics[model_name])
+        return prediction
 
     def _update_runtime_health(self, name: str, metrics: ModelMetrics) -> None:
         """연속 실패가 임계값을 초과하면 load_status에 runtime_error를 기록한다."""

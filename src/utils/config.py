@@ -142,8 +142,7 @@ class AppConfig:
 
 
 # Phase 8 M5.3 S3: URL 마스킹 유틸리티
-_RTSP_PATTERN = re.compile(r'rtsps?://[^\s\'"<>)]+', re.IGNORECASE)
-_HTTP_AUTH_PATTERN = re.compile(r'(https?://)([^\s/@:]+):([^\s/@]+)@([^\s/<>"\')\s]+)')
+_URL_PATTERN = re.compile(r'(?:rtsps?|https?)://[^\s\'"<>)]+', re.IGNORECASE)
 
 # PII 마스킹 — VLM 자유서술(description/vlm_raw_response)이 장면 속 연락처·주민번호를
 # 전사할 수 있어, alerts.log 영속화 전에 결정론적·저오탐 패턴만 가린다.
@@ -161,7 +160,7 @@ _RRN_PATTERN = re.compile(r'(?<!\d)\d{6}[-\s]\d{7}(?!\d)')
 
 def mask_url(url: str) -> str:
     """
-    로그에 노출되는 URL에서 계정/비밀번호를 마스킹합니다.
+    로그에 노출되는 URL의 자격증명, 쿼리, fragment를 마스킹합니다.
     - rtsp://user:pw@host → rtsp://***:***@host
     - http://user:pw@host → http://***:***@host
     - 파싱 실패 시 원본 그대로 반환
@@ -170,11 +169,16 @@ def mask_url(url: str) -> str:
         return url
     try:
         parsed = urlsplit(url)
-        if parsed.username or parsed.password:
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
             host = parsed.hostname or ""
+            if ":" in host:
+                host = f"[{host}]"
             if parsed.port:
                 host = f"{host}:{parsed.port}"
-            return urlunsplit((parsed.scheme, f"***:***@{host}", parsed.path, parsed.query, parsed.fragment))
+            netloc = f"***:***@{host}" if parsed.username or parsed.password else parsed.netloc
+            query = "***" if parsed.query else ""
+            fragment = "***" if parsed.fragment else ""
+            return urlunsplit((parsed.scheme, netloc, parsed.path, query, fragment))
     except Exception:
         pass
     return url
@@ -182,27 +186,23 @@ def mask_url(url: str) -> str:
 
 def mask_text(text: str) -> str:
     """
-    텍스트에서 RTSP/HTTP URL 자격증명 + 결정론적 PII(이메일·한국 휴대폰·주민번호)를 마스킹합니다.
+    텍스트에서 RTSP/HTTP URL 자격증명·쿼리·fragment + 결정론적 PII(이메일·한국 휴대폰·주민번호)를 마스킹합니다.
     구조화된 로그(JSON) 전체가 아니라 **자유서술 필드**에 적용하는 것을 권장한다 — 전체에 걸면
     event_id/bbox/timestamp 같은 수치가 오탐 치환될 수 있다(호출측에서 필드 단위 적용).
 
-    커버 범위: 이메일·한국 휴대폰(010/+82 10)·주민등록번호(구분자 있는 6-7) + URL 자격증명.
+    커버 범위: 이메일·한국 휴대폰(010/+82 10)·주민등록번호(구분자 있는 6-7) + URL 자격증명·쿼리·fragment.
     한계: 국제전화·02 유선·**구분자 없는 13자리 RRN**·이름·인상착의 등은 가리지 못한다
     (무구분자 13자리는 컨테이너번호·epoch-ms 오탐을 피하려 의도적 미커버 — #7 trade-off).
     그런 PII의 영속화가 걱정되면 alerts.log 접근통제 또는 VLM 원문 저장 비활성이 정답이다.
-    URL 자격증명 → 주민번호(전화보다 먼저) → 전화 → 이메일 순.
+    URL secrets → 주민번호(전화보다 먼저) → 전화 → 이메일 순.
     """
     if not isinstance(text, str) or not text:
         return text
 
-    def _replace_rtsp(match: re.Match) -> str:
+    def _replace_url(match: re.Match) -> str:
         return mask_url(match.group(0))
 
-    def _replace_http(match: re.Match) -> str:
-        return f"{match.group(1)}***:***@{match.group(4)}"
-
-    text = _RTSP_PATTERN.sub(_replace_rtsp, text)
-    text = _HTTP_AUTH_PATTERN.sub(_replace_http, text)
+    text = _URL_PATTERN.sub(_replace_url, text)
     # RRN(6-7=13자리)을 전화(11자리)보다 먼저 가려, 전화 패턴이 RRN 앞부분만 부분 매칭하는 것을 막는다.
     text = _RRN_PATTERN.sub("***-*******", text)
     text = _PHONE_PATTERN.sub("***-****-****", text)

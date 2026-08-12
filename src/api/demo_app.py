@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.api.app import create_app
+from src.incidents import IncidentStore
 
 
 class _DemoPipeline:
@@ -57,4 +58,7 @@ class _DemoPipeline:
         }
 
 
-app = create_app(pipeline=_DemoPipeline())
+app = create_app(
+    pipeline=_DemoPipeline(),
+    incident_store=IncidentStore("./data/demo-incidents.db"),
+)

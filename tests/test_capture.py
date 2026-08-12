@@ -13,12 +13,17 @@ RTSPCapture 단위 테스트
 import os
 import sys
 import time
+import unittest
 from unittest.mock import MagicMock, patch
 
 # 프로젝트 루트를 path에 추가
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.capture.rtsp_capture import _BACKOFF_MAX, _FPS_WINDOW, CameraManager, RTSPCapture
+try:
+    from src.capture.rtsp_capture import _BACKOFF_MAX, _FPS_WINDOW, CameraManager, RTSPCapture
+    HAS_CV2 = True
+except ModuleNotFoundError:
+    HAS_CV2 = False
 
 # ---------------------------------------------------------------------------
 # 헬퍼
@@ -33,6 +38,7 @@ def _make_cap(camera_id: str = "cam_test", **kwargs) -> RTSPCapture:
 # [P0] 타임아웃 설정 테스트
 # ---------------------------------------------------------------------------
 
+@unittest.skipUnless(HAS_CV2, "cv2 설치 후 실행 가능")
 class TestConnectTimeout:
     """_connect()에서 CAP_PROP 타임아웃이 실제로 set() 호출되는지 검증"""
 
@@ -114,6 +120,18 @@ class TestConnectTimeout:
 
         assert result is False
 
+    def test_connect_exception_never_logs_the_credentialed_url(self, caplog):
+        url = "rtsp://operator:super-secret@192.168.1.20/live"
+        cap = RTSPCapture(camera_id="cam1", stream_url=url)
+
+        with patch("cv2.VideoCapture", side_effect=RuntimeError(f"failed to open {url}")):
+            result = cap._connect()
+
+        assert result is False
+        assert "RuntimeError" in caplog.text
+        assert "operator" not in caplog.text
+        assert "super-secret" not in caplog.text
+
     def test_reconnect_attempts_incremented_on_each_call(self):
         """_connect() 호출마다 reconnect_attempts가 1씩 증가해야 한다"""
         cap = _make_cap()
@@ -160,6 +178,7 @@ class TestConnectTimeout:
 # [P1] get_status() 필드 완전성
 # ---------------------------------------------------------------------------
 
+@unittest.skipUnless(HAS_CV2, "cv2 설치 후 실행 가능")
 class TestGetStatus:
     """get_status()가 반드시 포함해야 하는 필드 검증"""
 
@@ -238,6 +257,7 @@ class TestGetStatus:
 # [P1] FPS 이동평균 테스트
 # ---------------------------------------------------------------------------
 
+@unittest.skipUnless(HAS_CV2, "cv2 설치 후 실행 가능")
 class TestFpsMovingAverage:
     """_on_frame_received()로 fps_actual이 이동평균으로 수렴하는지 검증"""
 
@@ -303,6 +323,7 @@ class TestFpsMovingAverage:
 # [P2] 재연결 카운터·백오프
 # ---------------------------------------------------------------------------
 
+@unittest.skipUnless(HAS_CV2, "cv2 설치 후 실행 가능")
 class TestReconnectBackoff:
     """재연결 실패 시 카운터 증가 및 지수 백오프 계산 검증"""
 
@@ -372,6 +393,7 @@ class TestReconnectBackoff:
 # URL 마스킹
 # ---------------------------------------------------------------------------
 
+@unittest.skipUnless(HAS_CV2, "cv2 설치 후 실행 가능")
 class TestSafeStreamUrl:
     """_safe_stream_url이 자격증명을 마스킹하는지 검증"""
 
@@ -401,6 +423,7 @@ class TestSafeStreamUrl:
 # seconds_since_last_frame / is_stale() 프로퍼티
 # ---------------------------------------------------------------------------
 
+@unittest.skipUnless(HAS_CV2, "cv2 설치 후 실행 가능")
 class TestStaleProperty:
     """seconds_since_last_frame과 is_stale() 프로퍼티 검증"""
 
@@ -448,8 +471,20 @@ class TestStaleProperty:
 # CameraManager
 # ---------------------------------------------------------------------------
 
+@unittest.skipUnless(HAS_CV2, "cv2 설치 후 실행 가능")
 class TestCameraManager:
     """CameraManager 기본 동작 검증"""
+
+    def test_remove_camera_stops_and_unregisters(self):
+        manager = CameraManager()
+        capture = manager.add_camera("cam_remove", "rtsp://192.168.1.10/live")
+        capture.stop = MagicMock()
+
+        removed = manager.remove_camera("cam_remove")
+
+        assert removed is capture
+        capture.stop.assert_called_once()
+        assert manager.get_camera("cam_remove") is None
 
     def test_add_and_get_camera(self):
         """add_camera 후 get_camera로 동일 인스턴스를 반환해야 한다"""

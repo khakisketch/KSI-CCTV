@@ -5,12 +5,22 @@ VLM 추론 추상화 모듈
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+class VerificationVerdict(str):
+    """VLM/분류기 검증 결과 판정"""
+    CONFIRM = "confirm"       # 이벤트 확정
+    REJECT = "reject"         # 오탐(거짓 양성) — 알림 억제
+    ABSTAIN = "abstain"       # 불확실 — 추가 검토 필요
+    ERROR = "error"           # 분석 실패 — 억제하지 않음
 
 
 @dataclass
@@ -20,10 +30,11 @@ class VLMAnalysisResult:
     risk_level: str = "low"  # low | medium | high | critical
     detected_events: list = field(default_factory=list)
     recommended_action: str = ""
-    confidence: float = 0.0
+    confidence: float = 0.0  # 0.0-1.0, 보정된 신뢰도
     inference_time_ms: float = 0.0
     raw_response: str = ""  # 원본 응답 (파싱 실패 시 디버깅용)
     parse_success: bool = True  # JSON 파싱 성공 여부
+    verdict: str = VerificationVerdict.ABSTAIN  # 검증 판정
 
     def to_dict(self):
         return {
@@ -34,6 +45,7 @@ class VLMAnalysisResult:
             "confidence": self.confidence,
             "inference_time_ms": self.inference_time_ms,
             "parse_success": self.parse_success,
+            "verdict": self.verdict,
         }
 
 
@@ -64,6 +76,31 @@ class VLMProvider(ABC):
         _, buffer = cv2.imencode(".jpg", bgr)
         return self.analyze(buffer.tobytes(), prompt)
 
+    def analyze_frames(self, image_bytes: list[bytes], prompt: str) -> list[VLMAnalysisResult]:
+        """Analyze ordered frames. Providers may override with a native batch request."""
+        return [self.analyze(image, prompt) for image in image_bytes]
+
+    def capabilities(self) -> dict[str, Any]:
+        """Return the explicit runtime contract required by the pipeline."""
+        return {"runtime_qualified": False, "model_digest": "", "max_images": 1,
+                "max_total_bytes": 0}
+
+
+def _allowed_vlm_host(host: str, allowed_hosts: list[str]) -> bool:
+    normalized = host.strip().lower()
+    configured = {item.strip().lower() for item in allowed_hosts if item.strip()}
+    if configured and normalized not in configured:
+        return False
+    if normalized == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+        return bool(address.is_loopback or address.is_private)
+    except ValueError:
+        # Do not resolve names here and again in requests: that creates a DNS-rebinding
+        # gap for CCTV frames. Qualified remote runtimes must use a private IP literal.
+        return False
+
 
 def create_vlm_provider(vlm_config: dict[str, Any] | None) -> VLMProvider | None:
     """config(models.vlm)로부터 VLM provider를 생성한다.
@@ -79,25 +116,41 @@ def create_vlm_provider(vlm_config: dict[str, Any] | None) -> VLMProvider | None
     cfg = vlm_config or {}
     if not bool(cfg.get("enabled", False)):
         return None
+    digest = str(cfg.get("model_digest", "")).lower()
+    if not bool(cfg.get("runtime_qualified", False)) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        logger.warning("VLM runtime is not qualified; disabling VLM")
+        return None
     provider_name = str(cfg.get("provider", "ollama")).strip().lower()
     if provider_name in {"ollama", ""}:
+        allowed_hosts = cfg.get("allowed_hosts", [])
+        if not isinstance(allowed_hosts, list) or any(
+            not isinstance(host, str) or not host.strip() for host in allowed_hosts
+        ):
+            logger.warning("VLM allowed_hosts must be a list of nonempty host names; disabling VLM")
+            return None
         base_url = cfg.get("base_url", "http://localhost:11434")
         # base_url 스킴 검증 — CCTV 프레임(PII)을 의도치 않은 스킴/대상으로 전송하지 않도록.
         # (file://·gopher:// 등 SSRF성 스킴 차단. http/https만 허용.)
         from urllib.parse import urlparse
         parsed = urlparse(base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            logger.warning(
-                "VLM base_url 스킴이 유효하지 않습니다(%s) — VLM 비활성. http(s)://host[:port] 형식이어야 합니다.",
-                base_url,
-            )
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or parsed.path not in {"", "/"}
+                or not _allowed_vlm_host(parsed.hostname, allowed_hosts)):
+            logger.warning("VLM endpoint is not an approved local/internal host; disabling VLM")
             return None
+        if parsed.hostname.lower() == "localhost":
+            port = f":{parsed.port}" if parsed.port is not None else ""
+            base_url = parsed._replace(netloc=f"127.0.0.1{port}").geturl().rstrip("/")
         from src.vlm.ollama_provider import OllamaProvider
         return OllamaProvider(
             base_url=base_url,
             model=cfg.get("model_name", "qwen3-vl:latest"),
             timeout_sec=float(cfg.get("timeout_sec", 60)),
             max_retries=int(cfg.get("max_retries", 2)),
+            model_digest=digest,
+            max_images=int(cfg.get("max_frames", 3)),
+            max_total_bytes=int(cfg.get("max_total_bytes", 3 * 1024 * 1024)),
         )
     logger.warning(
         "알 수 없는 VLM provider '%s' — VLM 비활성(2차 분석 건너뜀). 지원: ollama.",

@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 import unittest
+from unittest.mock import patch
 
 try:
     import numpy as np
@@ -242,12 +243,142 @@ class TestRuleEvaluatorRegistry(unittest.TestCase):
         )
         self.assertTrue(result["triggered"], "서로 다른 두 person은 proximity로 탐지되어야 한다")
 
+    def test_temporal_gate_requires_min_hits(self):
+        """한 프레임만 trigger되어도 min_hits 미달이면 사건으로 보고하지 않는다.
+
+        제품 정의: '단일 프레임으로 사건을 만들지 않는다'(화재 등 즉시성 제외).
+        """
+        rule = {
+            "type": "direct_detection",
+            "classes": ["fire"],
+            "min_confidence": 0.4,
+            "temporal": {"min_hits": 3, "max_gap_sec": 2, "clear_after_sec": 5},
+        }
+        detections = {"general_yolo": [Detection(0, "fire", 0.9, (10, 10, 40, 40))]}
+        # 1frame: 후보만 관측, 사건 미발화(아직 hits=1, min_hits=3 미달)
+        r1 = self.rules.evaluate(rule, detections, self.frame, camera_id="cam_tg1", policy_name="fire")
+        self.assertFalse(r1["triggered"], "단일 hit는 사건이 되면 안 된다")
+        self.assertEqual(r1["temporal"]["hits"], 1)
+        # 같은 프레임 다시 호출 — hits=2, 여전히 min_hits=3 미만
+        self.rules.evaluate(rule, detections, self.frame, camera_id="cam_tg1", policy_name="fire")
+        r3 = self.rules.evaluate(rule, detections, self.frame, camera_id="cam_tg1", policy_name="fire")
+        self.assertTrue(r3["triggered"], "3번째 hit에서 사건 발화해야 한다")
+        self.assertEqual(r3["temporal"]["hits"], 3)
+
+    def test_temporal_gate_resets_on_gap(self):
+        """max_gap_sec 이상 후보가 비면 시퀀스를 리셋한다."""
+        rule = {
+            "type": "direct_detection",
+            "classes": ["fire"],
+            "min_confidence": 0.4,
+            "temporal": {"min_hits": 2, "max_gap_sec": 0.05, "clear_after_sec": 1},
+        }
+        dets = {"general_yolo": [Detection(0, "fire", 0.9, (10, 10, 40, 40))]}
+        empty = {"general_yolo": []}
+        self.rules.evaluate(rule, dets, self.frame, camera_id="cam_tg2", policy_name="fire")
+        # 시간 흐름 (monotonic이 0.05초 이상 지나도록 sleep)
+        import time as _t
+        _t.sleep(0.12)
+        self.rules.evaluate(rule, empty, self.frame, camera_id="cam_tg2", policy_name="fire")
+        # 다음 hit는 이전 시퀀스와 무관 (gap 리셋 적용)
+        r2 = self.rules.evaluate(rule, dets, self.frame, camera_id="cam_tg2", policy_name="fire")
+        self.assertFalse(r2["triggered"], "gap 리셋 후 단일 hit로 사건이 되면 안 된다")
+
+    def test_temporal_gate_emit_once_per_clear(self):
+        """한 클리어 윈도우 안에서 같은 사건이 두 번 발화되면 안 된다."""
+        rule = {
+            "type": "direct_detection",
+            "classes": ["fire"],
+            "min_confidence": 0.4,
+            "temporal": {"min_hits": 2, "max_gap_sec": 2, "clear_after_sec": 60},
+        }
+        dets = {"general_yolo": [Detection(0, "fire", 0.9, (10, 10, 40, 40))]}
+        # 2 hit → 발화
+        self.rules.evaluate(rule, dets, self.frame, camera_id="cam_tg3", policy_name="fire")
+        r1 = self.rules.evaluate(rule, dets, self.frame, camera_id="cam_tg3", policy_name="fire")
+        self.assertTrue(r1["triggered"])
+        # 추가 hit가 와도 같은 clear 윈도우 안이면 다시 발화되면 안 됨
+        r2 = self.rules.evaluate(rule, dets, self.frame, camera_id="cam_tg3", policy_name="fire")
+        self.assertFalse(r2["triggered"], "이미 발화한 사건은 clear 윈도우 안에서 중복 발화하면 안 된다")
+
+    def test_temporal_gate_counts_hits_inside_frame_window(self):
+        rule = {
+            "type": "direct_detection",
+            "classes": ["fire"],
+            "temporal": {
+                "min_hits": 3,
+                "window_frames": 5,
+                "max_gap_sec": 10,
+                "clear_after_sec": 10,
+            },
+        }
+        dets = {"g": [Detection(0, "fire", 0.9, (0, 0, 10, 10))]}
+        with patch("src.policy.rule_evaluators.time.monotonic", side_effect=[0, 1, 2, 3, 4]):
+            self.rules.evaluate(rule, dets, self.frame, camera_id="cam_window", policy_name="fire")
+            self.rules.observe_miss(rule, "cam_window", "fire")
+            self.rules.evaluate(rule, dets, self.frame, camera_id="cam_window", policy_name="fire")
+            self.rules.observe_miss(rule, "cam_window", "fire")
+            result = self.rules.evaluate(rule, dets, self.frame, camera_id="cam_window", policy_name="fire")
+        self.assertTrue(result["triggered"])
+        self.assertEqual(result["temporal"]["hits"], 3)
+        self.assertEqual(result["temporal"]["samples"], 5)
+
+    def test_temporal_gate_does_not_refire_while_signal_remains_active(self):
+        rule = {
+            "type": "direct_detection",
+            "classes": ["fire"],
+            "temporal": {
+                "min_hits": 2,
+                "window_frames": 5,
+                "max_gap_sec": 2,
+                "clear_after_sec": 2,
+            },
+        }
+        dets = {"g": [Detection(0, "fire", 0.9, (0, 0, 10, 10))]}
+        with patch("src.policy.rule_evaluators.time.monotonic", side_effect=[0, 1, 5, 10]):
+            self.rules.evaluate(rule, dets, self.frame, camera_id="cam_active", policy_name="fire")
+            fired = self.rules.evaluate(rule, dets, self.frame, camera_id="cam_active", policy_name="fire")
+            still_active = self.rules.evaluate(rule, dets, self.frame, camera_id="cam_active", policy_name="fire")
+            much_later = self.rules.evaluate(rule, dets, self.frame, camera_id="cam_active", policy_name="fire")
+        self.assertTrue(fired["triggered"])
+        self.assertFalse(still_active["triggered"])
+        self.assertFalse(much_later["triggered"])
+
+    def test_reset_clears_camera_temporal_state(self):
+        rule = {
+            "type": "direct_detection",
+            "classes": ["fire"],
+            "temporal": {"min_hits": 2, "window_frames": 2, "max_gap_sec": 5},
+        }
+        dets = {"g": [Detection(0, "fire", 0.9, (0, 0, 10, 10))]}
+        self.rules.evaluate(rule, dets, self.frame, camera_id="cam_reset", policy_name="fire")
+        self.rules.reset("cam_reset")
+        result = self.rules.evaluate(rule, dets, self.frame, camera_id="cam_reset", policy_name="fire")
+        self.assertFalse(result["triggered"])
+        self.assertEqual(result["temporal"]["hits"], 1)
+
+    def test_temporal_gate_without_policy_name_is_no_op(self):
+        """policy_name이 없으면 temporal gate는 적용되지 않는다(이전 호환성)."""
+        rule = {
+            "type": "direct_detection",
+            "classes": ["fire"],
+            "min_confidence": 0.4,
+            "temporal": {"min_hits": 5, "max_gap_sec": 1, "clear_after_sec": 5},
+        }
+        dets = {"general_yolo": [Detection(0, "fire", 0.9, (10, 10, 40, 40))]}
+        r = self.rules.evaluate(rule, dets, self.frame)  # no policy_name
+        self.assertTrue(r["triggered"], "policy_name 부재 시 gate는 비활성")
+
 
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requirements.txt 의존성 설치 후 실행 가능")
 class TestEventPolicyEngine(unittest.TestCase):
     def setUp(self):
         self.frame = np.zeros((200, 200, 3), dtype=np.uint8)
         self.policies = {
+            "catalog": {
+                "fire": {"status": "active", "runtime": "detection"},
+                "crowding": {"status": "active", "runtime": "detection"},
+            },
             "profiles": {
                 "construction": {
                     "policies": {
@@ -272,6 +403,160 @@ class TestEventPolicyEngine(unittest.TestCase):
                 }
             }
         }
+
+    def test_all_enabled_life_safety_policies_are_provisional(self):
+        engine = EventPolicyEngine.from_config("config/event_policies.yaml")
+        life_safety = {"fire", "smoke", "fall", "fight"}
+        missing = []
+        for profile_name, profile in engine.policies.get("profiles", {}).items():
+            for event_name, policy in profile.get("policies", {}).items():
+                if (
+                    event_name in life_safety
+                    and policy.get("enabled", True)
+                    and not policy.get("provisional_alert", False)
+                ):
+                    missing.append(f"{profile_name}.{event_name}")
+        self.assertEqual(missing, [])
+
+    def test_required_models_respects_enabled_events(self):
+        engine = EventPolicyEngine(self.policies)
+        self.assertEqual(
+            engine.required_models("construction", ["fire"]),
+            ["fire_smoke_yolo"],
+        )
+        self.assertEqual(engine.required_models("construction", []), [])
+
+    def test_required_models_are_derived_only_from_selected_event_triggers(self):
+        engine = EventPolicyEngine.from_config("config/event_policies.yaml")
+        self.assertEqual(
+            engine.required_models("construction", ["no_helmet", "fire"]),
+            ["fire_smoke_yolo", "ppe_yolo"],
+        )
+
+    def test_unqualified_tracking_event_has_no_executable_contract(self):
+        engine = EventPolicyEngine.from_config("config/event_policies.yaml")
+
+        trigger = engine.trigger_for_event(
+            "general", "line_crossing", ["line_crossing"], "tracking"
+        )
+
+        self.assertIsNone(trigger)
+        self.assertIsNone(
+            engine.trigger_for_event("general", "line_crossing", [], "tracking")
+        )
+
+    def test_unqualified_tracking_events_have_no_runtime_contract(self):
+        engine = EventPolicyEngine.from_config("config/event_policies.yaml")
+
+        line = engine.effective_tracking_policy(
+            "general", "line_crossing", ["line_crossing"]
+        )
+        loitering = engine.effective_tracking_policy(
+            "general", "loitering", ["loitering"]
+        )
+
+        self.assertIsNone(line)
+        self.assertIsNone(loitering)
+        self.assertEqual(engine.tracking_events_for_profile("general", ["line_crossing", "loitering"]), [])
+
+    def test_loitering_is_not_evaluated_by_detection_runtime(self):
+        engine = EventPolicyEngine.from_config("config/event_policies.yaml")
+
+        decisions = engine.evaluate(
+            "general",
+            {"general_yolo": [Detection(0, "person", 0.9, (0, 0, 10, 20))]},
+            self.frame,
+            "cam_loitering",
+            enabled_events=["loitering"],
+        )
+
+        self.assertEqual(decisions, [])
+        self.assertEqual(engine.required_models("general", ["loitering"]), [])
+
+    def test_cross_domain_explicit_event_uses_canonical_policy(self):
+        policies = {
+            "catalog": {
+                "no_helmet": {
+                    "status": "active",
+                    "runtime": "detection",
+                    "canonical_profile": "construction",
+                }
+            },
+            "profiles": {
+                "general": {"policies": {}},
+                "construction": {
+                    "policies": {
+                        "no_helmet": {
+                            "enabled": True,
+                            "trigger": {"models": ["general_yolo"], "classes": ["person"]},
+                            "rule": {"type": "direct_detection"},
+                            "vlm": "never",
+                        }
+                    }
+                },
+            },
+        }
+        engine = EventPolicyEngine(policies)
+        self.assertEqual(engine.required_models("general", ["no_helmet"]), ["general_yolo"])
+        decisions = engine.evaluate(
+            "general",
+            {"general_yolo": [Detection(0, "person", 0.9, (0, 0, 10, 20))]},
+            self.frame,
+            "cam_cross",
+            enabled_events=["no_helmet"],
+        )
+        self.assertEqual([item.event.event_type for item in decisions], ["no_helmet"])
+
+    def test_mutable_catalog_cannot_relabel_experimental_event_as_active(self):
+        policies = {
+            "catalog": {"fall": {"status": "active", "runtime": "detection"}},
+            "profiles": {"general": {"policies": {"fall": {
+                "trigger": {"models": ["general_yolo"], "classes": ["person"]},
+                "rule": {"type": "direct_detection"},
+            }}}},
+        }
+        engine = EventPolicyEngine(policies)
+        self.assertEqual(engine.required_models("general", ["fall"]), [])
+        self.assertEqual(engine.behavior_plans("general", ["fall"]), [])
+        self.assertEqual(engine.evaluate(
+            "general",
+            {"general_yolo": [Detection(0, "person", 0.9, (0, 0, 10, 20))]},
+            self.frame,
+            "cam_fall",
+            enabled_events=["fall"],
+        ), [])
+
+    def test_planned_health_event_is_not_evaluated_as_detection(self):
+        engine = EventPolicyEngine.from_config("config/event_policies.yaml")
+        self.assertEqual(engine.required_models("general", ["camera_disconnect"]), [])
+        decisions = engine.evaluate(
+            "general",
+            {"general_yolo": [Detection(0, "person", 0.9, (0, 0, 10, 20))]},
+            self.frame,
+            "cam_health",
+            enabled_events=["camera_disconnect"],
+        )
+        self.assertEqual(decisions, [])
+
+    def test_project_fire_temporal_policy_is_reachable_at_sampled_cadence(self):
+        engine = EventPolicyEngine.from_config("config/event_policies.yaml")
+        detections = {
+            "fire_smoke_yolo": [Detection(0, "fire", 0.9, (0, 0, 20, 20))]
+        }
+        decisions = []
+        with patch(
+            "src.policy.rule_evaluators.time.monotonic",
+            side_effect=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        ):
+            for _ in range(6):
+                decisions = engine.evaluate(
+                    "general",
+                    detections,
+                    self.frame,
+                    "cam_fire_cadence",
+                    enabled_events=["fire"],
+                )
+        self.assertEqual([item.event.event_type for item in decisions], ["fire"])
 
     def test_policy_engine_creates_event_with_metadata(self):
         engine = EventPolicyEngine(self.policies)
