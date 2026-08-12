@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
+@import "./shadcn-utilities.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -27,6 +27,9 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -64,6 +67,9 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
+  --success: oklch(0.48 0.14 155);
+  --warning: oklch(0.52 0.14 75);
+  --info: oklch(0.5 0.14 250);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -99,6 +105,9 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --success: oklch(0.75 0.15 155);
+  --warning: oklch(0.8 0.15 85);
+  --info: oklch(0.75 0.13 250);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
@@ -126,5 +135,26 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+/* 관제 모드(/live 전체화면 진입): LiveWall이 body[data-wall-fullscreen=true]를 설정하면
+   app-shell의 사이드바/헤더/모바일 탭을 숨기고 main의 padding을 0으로 만들어 영상 면적 극대화.
+   [data-wall-shell-hide]가 표시된 셸 요소와 main의 부모 컨테이너를 축소한다. */
+body[data-wall-fullscreen="true"] [data-wall-hide],
+body[data-wall-fullscreen="true"] [data-wall-shell-hide] {
+  display: none !important;
+}
+body[data-wall-fullscreen="true"] [data-wall-shell] main {
+  padding: 0 !important;
+}
+body[data-wall-fullscreen="true"] [data-wall-shell] {
+  height: 100dvh;
+}
+
+@media (min-width: 768px) {
+  main:has([data-workspace]) {
+    padding: 0 !important;
+    overflow: hidden !important;
   }
 }

@@ -1,4 +1,3 @@
-import { EngineStatus } from "@/components/engine-status";
 import { ModelActions } from "@/components/model-actions";
 import { ModelUpload } from "@/components/model-upload";
 import { PromptManager } from "@/components/prompt-manager";
@@ -14,16 +13,7 @@ export default async function ModelsPage() {
   const models = res?.models ?? [];
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">모델 · 프롬프트</h1>
-        <EngineStatus connected={connected} />
-      </div>
-      <p className="text-sm text-muted-foreground" style={{ wordBreak: "keep-all" }}>
-        등록된 탐지 모델 목록입니다. <code>open_vocab</code> 모델은 학습 없이 텍스트 프롬프트로
-        객체를 탐지하며, 사용자 ONNX 모델을 업로드해 추가할 수 있습니다.
-      </p>
-
+    <div className="space-y-4">
       {connected && (
         <Card>
           <CardHeader className="pb-2">
@@ -47,9 +37,12 @@ export default async function ModelsPage() {
             <Card key={m.name}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-base">{m.name}</CardTitle>
-                <Badge variant={m.enabled ? "default" : "outline"}>
-                  {m.enabled ? "활성" : "비활성"}
-                </Badge>
+                <div className="flex gap-1">
+                  <Badge variant={m.enabled ? "default" : "outline"}>{m.enabled ? "설정 활성" : "설정 비활성"}</Badge>
+                  <Badge variant={m.runtime?.loaded ? "default" : m.runtime?.error ? "destructive" : "outline"}>
+                    {!m.runtime?.available ? "런타임 미확인" : m.runtime.error ? "실행 오류" : m.runtime.loaded ? "실행 중" : "로드 안 됨"}
+                  </Badge>
+                </div>
               </CardHeader>
               <CardContent className="space-y-2">
                 <div className="flex flex-wrap gap-1.5">
@@ -57,28 +50,28 @@ export default async function ModelsPage() {
                   {m.source && <Badge variant="outline">{m.source}</Badge>}
                 </div>
                 {m.description && (
-                  <p
-                    className="text-xs text-muted-foreground"
-                    style={{ wordBreak: "keep-all" }}
-                  >
+                  <p className="text-xs text-muted-foreground" style={{ wordBreak: "keep-all" }}>
                     {m.description}
                   </p>
                 )}
+                {m.runtime?.available && (
+                  <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
+                    {m.runtime.error ? (
+                      <p>실행 오류: {m.runtime.error}</p>
+                    ) : m.runtime.loaded ? (
+                      <p>추론 {m.runtime.inference_count ?? 0}회 · 오류 {m.runtime.error_count ?? 0}회{typeof m.runtime.last_latency_ms === "number" ? ` · 최근 ${m.runtime.last_latency_ms.toFixed(1)}ms` : ""}</p>
+                    ) : (
+                      <p>설정은 저장됐지만 현재 분석 Pipeline에 로드되지 않았습니다.</p>
+                    )}
+                  </div>
+                )}
                 {m.type === "open_vocab" ? (
                   <div className="border-t pt-3">
-                    <p className="mb-2 text-xs font-medium">탐지 프롬프트 (학습 불필요)</p>
-                    <PromptManager
-                      name={m.name}
-                      current={m.classes ?? []}
-                      enabled={m.enabled}
-                    />
+                    <p className="mb-2 text-xs font-medium">탐지 프롬프트</p>
+                    <PromptManager name={m.name} current={m.classes ?? []} enabled={m.enabled} />
                   </div>
                 ) : (
-                  <ModelActions
-                    name={m.name}
-                    enabled={m.enabled}
-                    deletable={m.source === "uploaded"}
-                  />
+                  <ModelActions name={m.name} enabled={m.enabled} deletable={m.source === "uploaded"} />
                 )}
               </CardContent>
             </Card>

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { engineFetch } from "@/lib/engine";
+
 // HLS same-origin 프록시. 브라우저(hls.js) → 이 라우트(서버) → 게이트웨이(MediaMTX).
 // MediaMTX는 HLS에 cookieCheck(Secure 쿠키) CSRF 보호를 걸어, 평문 HTTP·교차출처에서는
 // 브라우저가 쿠키를 못 보내 하위 재생목록/세그먼트가 401이 된다. 서버는 이 핸드셰이크를
@@ -12,16 +14,32 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 const GW = (process.env.KSI_CCTV_GATEWAY_URL ?? "").replace(/\/+$/, "");
-const jars = new Map<string, Map<string, string>>(); // 카메라 id → {쿠키명→값}
+const MAX_JARS = 32;
+const JAR_TTL_MS = 5 * 60 * 1000;
+type CookieJar = { cookies: Map<string, string>; expiresAt: number; usedAt: number };
+const jars = new Map<string, CookieJar>(); // 카메라 id → gateway cookie jar
 const SAFE = /^[A-Za-z0-9._-]+$/;
 
+function safeSegment(value: string): boolean {
+  return SAFE.test(value) && value !== "." && value !== "..";
+}
+
 function jarFor(id: string): Map<string, string> {
-  let j = jars.get(id);
-  if (!j) {
-    j = new Map();
-    jars.set(id, j);
+  const now = Date.now();
+  for (const [key, jar] of jars) {
+    if (jar.expiresAt <= now) jars.delete(key);
   }
-  return j;
+  let jar = jars.get(id);
+  if (!jar) {
+    if (jars.size >= MAX_JARS) {
+      const oldest = [...jars.entries()].sort(([, a], [, b]) => a.usedAt - b.usedAt)[0];
+      if (oldest) jars.delete(oldest[0]);
+    }
+    jar = { cookies: new Map(), expiresAt: now + JAR_TTL_MS, usedAt: now };
+    jars.set(id, jar);
+  }
+  jar.usedAt = now;
+  return jar.cookies;
 }
 
 function setCookieList(res: Response): string[] {
@@ -38,11 +56,13 @@ function absorb(id: string, res: Response): void {
     const i = nv.indexOf("=");
     if (i > 0) j.set(nv.slice(0, i).trim(), nv.slice(i + 1).trim());
   }
+  const jar = jars.get(id);
+  if (jar) jar.expiresAt = Date.now() + JAR_TTL_MS;
 }
 
 function cookieHeader(id: string): string | null {
-  const j = jars.get(id);
-  if (!j || j.size === 0) return null;
+  const j = jarFor(id);
+  if (j.size === 0) return null;
   return [...j].map(([k, v]) => `${k}=${v}`).join("; ");
 }
 
@@ -54,12 +74,19 @@ function get(url: string, cookie: string | null): Promise<Response> {
 
 // 302 cookieCheck 체인을 따라가며 모든 응답(최종 200 포함)의 Set-Cookie를 수집한다.
 async function follow(url: string, id: string): Promise<Response> {
-  let res = await get(url, cookieHeader(id));
+  const allowedOrigin = new URL(GW).origin;
+  let currentUrl = url;
+  let res = await get(currentUrl, cookieHeader(id));
   absorb(id, res);
   for (let hops = 0; hops < 4 && res.status >= 300 && res.status < 400; hops++) {
     const loc = res.headers.get("location");
     if (!loc) break;
-    res = await get(new URL(loc, url).toString(), cookieHeader(id));
+    const nextUrl = new URL(loc, currentUrl);
+    if (nextUrl.origin !== allowedOrigin) {
+      return new Response(null, { status: 502 });
+    }
+    currentUrl = nextUrl.toString();
+    res = await get(currentUrl, cookieHeader(id));
     absorb(id, res);
   }
   return res;
@@ -71,8 +98,20 @@ export async function GET(
 ) {
   const { id, seg } = await ctx.params;
   if (!GW) return NextResponse.json({ detail: "게이트웨이 미설정" }, { status: 503 });
-  if (!SAFE.test(id) || seg.length === 0 || seg.some((s) => !SAFE.test(s))) {
+  if (!safeSegment(id) || seg.length === 0 || seg.some((s) => !safeSegment(s))) {
     return NextResponse.json({ detail: "잘못된 경로" }, { status: 400 });
+  }
+  const cameraResponse = await engineFetch(`/api/cameras/${encodeURIComponent(id)}`);
+  if (!cameraResponse?.ok) {
+    jars.delete(id);
+    return NextResponse.json({ detail: "등록된 카메라를 찾을 수 없습니다." }, { status: 404 });
+  }
+  const camera = (await cameraResponse.json().catch(() => ({}))) as {
+    camera?: { enabled?: boolean };
+  };
+  if (!camera.camera?.enabled) {
+    jars.delete(id);
+    return NextResponse.json({ detail: "비활성 카메라는 재생할 수 없습니다." }, { status: 409 });
   }
 
   const path = seg.join("/");

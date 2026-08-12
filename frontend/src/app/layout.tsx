@@ -4,6 +4,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
+import { developmentAuthBypassState } from "@/lib/auth-mode";
+import { getAuthStatus } from "@/lib/auth";
 
 import "./globals.css";
 
@@ -15,7 +17,9 @@ export const metadata: Metadata = {
   description: "설치형 AI CCTV 안전 관제 — 학습 없이 텍스트로 즉시 탐지",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const devAuthBypass = developmentAuthBypassState().status === "active";
+  const { mode: authMode } = await getAuthStatus();
   return (
     <html
       lang="ko"
@@ -24,7 +28,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     >
       <body className="min-h-full">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-          <AppShell>{children}</AppShell>
+          <AppShell authMode={authMode} devAuthBypass={devAuthBypass}>{children}</AppShell>
           <Toaster />
         </ThemeProvider>
       </body>

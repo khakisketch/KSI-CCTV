@@ -28,7 +28,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ path: stri
     status: 200,
     headers: {
       "content-type": upstream.headers.get("content-type") ?? "image/jpeg",
-      "cache-control": "private, max-age=60",
+      "cache-control": "no-store",
     },
   });
 }

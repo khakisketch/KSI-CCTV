@@ -1,135 +1,74 @@
-import { Activity, Bell, Camera, Cpu } from "lucide-react";
+import { Suspense } from "react";
 
-import { EngineStatus } from "@/components/engine-status";
-import { PipelineControl } from "@/components/pipeline-control";
-import { SystemStatus } from "@/components/system-status";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SignalWorkspace } from "@/components/signal-workspace";
+import type { SignalWorkspaceItem } from "@/components/signal-workspace";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { getCameras, getEvents, getModels } from "@/lib/engine";
-import { formatTs } from "@/lib/utils";
+  getCameraTelemetry,
+  getCameras,
+  getCommissioning,
+  getControlStatus,
+  getEvents,
+  getIncidents,
+  isCameraReceiving,
+} from "@/lib/engine";
 
-export const dynamic = "force-dynamic"; // 요청 시 엔진에서 실데이터 페치(빌드타임 정적생성 회피)
+export const dynamic = "force-dynamic";
 
-function within24h(ts?: string): boolean {
-  if (!ts) return false;
-  const t = Date.parse(ts);
-  return Number.isFinite(t) && Date.now() - t < 24 * 3600 * 1000;
-}
+export default async function SignalPage() {
+  const [eventsRes, cameras, telemetryRes, control, commissioning, incidentsRes] = await Promise.all([
+    getEvents(100),
+    getCameras(),
+    getCameraTelemetry(),
+    getControlStatus(),
+    getCommissioning(),
+    getIncidents({ unresolved: true, limit: 100 }),
+  ]);
 
-export default async function DashboardPage() {
-  const [models, eventsRes, cameras] = await Promise.all([getModels(), getEvents(50), getCameras()]);
-  const connected = models !== null || eventsRes !== null || cameras !== null;
+  const connected = eventsRes !== null && cameras !== null;
+  const allCameras = cameras?.cameras ?? [];
+  const managedCameras = allCameras.filter((camera) => camera.managed && camera.enabled && camera.id);
+  const telemetry = telemetryRes?.cameras ?? {};
+  const healthyCameras = managedCameras.filter((camera) => isCameraReceiving(telemetry[camera.id!])).length;
+  const eventsById = new Map(
+    (eventsRes?.events ?? [])
+      .filter((event) => event.event_id)
+      .map((event) => [event.event_id!, event]),
+  );
+  const cameraById = new Map(
+    allCameras.filter((camera) => camera.id).map((camera) => [camera.id!, camera]),
+  );
 
-  const camerasOn = (cameras?.cameras ?? []).filter((c) => c.enabled).length;
-  const activeModels = (models?.models ?? []).filter((m) => m.enabled).length;
-  const events = eventsRes?.events ?? [];
-  const todayCount = events.filter((e) => within24h(e.timestamp)).length;
+  const signalItems: SignalWorkspaceItem[] = (incidentsRes?.incidents ?? []).map((incident) => {
+    const camera = incident.camera_id ? cameraById.get(incident.camera_id) ?? null : null;
+    return {
+      incident,
+      event: eventsById.get(incident.event_id) ?? null,
+      camera,
+      cameraName: camera?.name ?? incident.camera_id ?? "카메라 확인 필요",
+      telemetry: incident.camera_id ? telemetry[incident.camera_id] : undefined,
+    };
+  });
 
-  const metrics = [
-    { label: "카메라", value: connected ? String(camerasOn) : "—", sub: "활성", icon: Camera },
-    { label: "오늘 이벤트", value: connected ? String(todayCount) : "—", sub: "최근 24시간", icon: Bell },
-    { label: "활성 모델", value: connected ? String(activeModels) : "—", sub: "탐지 모델", icon: Cpu },
-    {
-      label: "엔진 상태",
-      value: connected ? "정상" : "대기",
-      sub: connected ? "API 응답" : "API 미연결",
-      icon: Activity,
-    },
-  ];
+  const metrics = {
+    cameraHealth: connected ? `카메라 ${healthyCameras}/${managedCameras.length}` : "카메라 —",
+    pipeline: !control?.connected ? "파이프라인 확인 필요" : control.running ? "파이프라인 가동" : "파이프라인 중지",
+    installProgress: commissioning ? `설치 ${commissioning.progress.percent}%` : connected ? "설치 확인 필요" : "설치 —",
+    siteName: commissioning?.site.name || "현장 미설정",
+  };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">관제 대시보드</h1>
-          <p className="text-sm text-muted-foreground" style={{ wordBreak: "keep-all" }}>
-            실시간 안전 이벤트 현황. 학습 없이 텍스트 프롬프트로 객체를 탐지합니다.
-          </p>
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center">
+          <p className="text-sm text-muted-foreground">신호 데이터를 불러오는 중…</p>
         </div>
-        <EngineStatus connected={connected} />
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {metrics.map(({ label, value, sub, icon: Icon }) => (
-          <Card key={label}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-              <Icon className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold tracking-tight">{value}</div>
-              <p className="mt-1 text-xs text-muted-foreground" style={{ wordBreak: "keep-all" }}>
-                {sub}
-              </p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-base">파이프라인 제어</CardTitle>
-          <PipelineControl />
-        </CardHeader>
-      </Card>
-
-      <SystemStatus />
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">최근 이벤트</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>시각</TableHead>
-                <TableHead>카메라</TableHead>
-                <TableHead>유형</TableHead>
-                <TableHead className="text-right">신뢰도</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {events.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={4}
-                    className="h-28 text-center text-sm text-muted-foreground"
-                    style={{ wordBreak: "keep-all" }}
-                  >
-                    {connected
-                      ? "아직 이벤트가 없습니다."
-                      : "엔진을 연결하면 실시간 이벤트가 여기에 표시됩니다."}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                events.slice(0, 20).map((e, i) => (
-                  <TableRow key={e.event_id ?? i}>
-                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                      {formatTs(e.timestamp)}
-                    </TableCell>
-                    <TableCell>{e.camera_id ?? "—"}</TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{e.event_type ?? "—"}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {typeof e.confidence === "number" ? e.confidence.toFixed(2) : "—"}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-    </div>
+      }
+    >
+      <SignalWorkspace
+        initialItems={signalItems}
+        available={incidentsRes?.available === true}
+        metrics={metrics}
+      />
+    </Suspense>
   );
 }

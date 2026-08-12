@@ -51,6 +51,8 @@ export function AlertSettings({
       } else {
         toast.error(d.detail ?? "저장 실패");
       }
+    } catch {
+      toast.error("저장 요청을 보낼 수 없습니다. 네트워크 연결을 확인한 뒤 다시 저장하세요.");
     } finally {
       setBusy(false);
     }

@@ -11,9 +11,16 @@ const KEY = process.env.KSI_CCTV_API_KEY ?? "";
 
 export async function GET(req: NextRequest) {
   let upstream: Response;
+  const lastEventId = req.headers.get("last-event-id");
   try {
     upstream = await fetch(`${ENGINE}/api/events/stream`, {
-      headers: { "X-API-Key": KEY, Accept: "text/event-stream" },
+      // Browser EventSource의 자동 재연결은 Last-Event-ID를 붙인다. 프록시가 그대로
+      // 전달해야 엔진이 cursor 이후 이벤트를 replay할 수 있다.
+      headers: {
+        "X-API-Key": KEY,
+        Accept: "text/event-stream",
+        ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}),
+      },
       signal: req.signal, // 브라우저가 끊으면 엔진 연결도 함께 종료
       cache: "no-store",
     });

@@ -7,5 +7,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const data = await engineGet("/api/cameras/telemetry");
-  return NextResponse.json(data ?? { connected: false, cameras: {} });
+  // 엔진 미응답도 UI가 source-level unavailable로 구분할 수 있는 동일 계약을 반환한다.
+  return NextResponse.json(data ?? {
+    connected: false,
+    telemetry_status: "unavailable",
+    generated_at: new Date().toISOString(),
+    cameras: {},
+  });
 }

@@ -13,7 +13,7 @@ export function LogoutButton() {
     router.refresh();
   }
   return (
-    <Button variant="ghost" size="icon" aria-label="로그아웃" onClick={logout}>
+    <Button className="max-md:size-11" variant="ghost" size="icon" aria-label="로그아웃" onClick={logout}>
       <LogOut className="h-5 w-5" />
     </Button>
   );

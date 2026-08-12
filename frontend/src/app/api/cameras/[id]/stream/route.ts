@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { engineFetch } from "@/lib/engine";
+
 // 카메라 라이브 스트림 URL 발급. 브라우저는 RTSP를 직접 재생 못 하므로, 영상 게이트웨이
 // (MediaMTX)가 재발행하는 HLS를 same-origin 프록시(/api/cameras/{id}/hls/...)를 통해 받는다.
 // 게이트웨이 주소·RTSP 자격증명은 서버에만 있고 브라우저로 노출되지 않는다(architecture-target §2).
@@ -18,6 +20,16 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       { detail: "영상 게이트웨이가 설정되지 않았습니다(KSI_CCTV_GATEWAY_URL)." },
       { status: 503 },
     );
+  }
+  const cameraResponse = await engineFetch(`/api/cameras/${encodeURIComponent(id)}`);
+  if (!cameraResponse?.ok) {
+    return NextResponse.json({ detail: "등록된 카메라를 찾을 수 없습니다." }, { status: 404 });
+  }
+  const camera = (await cameraResponse.json().catch(() => ({}))) as {
+    camera?: { enabled?: boolean };
+  };
+  if (!camera.camera?.enabled) {
+    return NextResponse.json({ detail: "비활성 카메라는 재생할 수 없습니다." }, { status: 409 });
   }
   // 브라우저에는 same-origin 프록시 경로만 내려준다(게이트웨이 주소 미노출).
   return NextResponse.json({ id, hls: `/api/cameras/${encodeURIComponent(id)}/hls/index.m3u8` });

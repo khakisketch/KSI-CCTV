@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { AiRuntimeStatus } from "@/components/ai-runtime-status";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SystemInfo } from "@/lib/engine";
 
@@ -31,9 +32,21 @@ export function SystemStatus() {
   }, []);
 
   useEffect(() => {
-    refresh();
+    let active = true;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/system", { cache: "no-store" });
+        if (active) setInfo((await r.json()) as SystemInfo);
+      } catch {
+        /* keep last */
+      }
+    };
+    load();
     const t = setInterval(refresh, 10000);
-    return () => clearInterval(t);
+    return () => {
+      active = false;
+      clearInterval(t);
+    };
   }, [refresh]);
 
   if (!info) return null;
@@ -96,6 +109,7 @@ export function SystemStatus() {
             ))}
           </div>
         )}
+        <AiRuntimeStatus runtime={info.ai_runtime} />
       </CardContent>
     </Card>
   );

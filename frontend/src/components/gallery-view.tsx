@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { CaptureDate } from "@/lib/engine";
+import type { CaptureCamera, CaptureDate } from "@/lib/engine";
+
+const VISIBLE_STEP = 12;
 
 function fmtDate(d: string): string {
   return d.length === 8 ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : d;
@@ -38,8 +40,58 @@ function CaptureThumb({ src, name, encrypted }: { src: string; name: string; enc
   );
 }
 
+// 카메라 그룹별 독립적인 무한스크롤. 각 그룹이 자체 visibleCount + IntersectionObserver sentinel 관리.
+function CameraGroup({ date, cam }: { date: string; cam: CaptureCamera }) {
+  const [visibleCount, setVisibleCount] = useState(VISIBLE_STEP);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) {
+        setVisibleCount((c) => c + VISIBLE_STEP);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [visibleCount]);
+
+  const visibleImages = cam.images.slice(0, visibleCount);
+
+  return (
+    <Card>
+      <CardContent className="space-y-3 pt-6">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium" style={{ wordBreak: "keep-all" }}>
+            {cam.camera_id}
+          </span>
+          <Badge variant="secondary">{cam.count}장</Badge>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {visibleImages.map((img) => (
+            <CaptureThumb
+              key={img.name}
+              src={`/api/captures/${date}/${encodeURIComponent(cam.camera_id)}/${encodeURIComponent(img.name)}`}
+              name={img.name}
+              encrypted={img.encrypted}
+            />
+          ))}
+        </div>
+        {cam.images.length > visibleCount && (
+          <div ref={sentinelRef} className="h-10" data-testid={`gallery-sentinel-${cam.camera_id}`} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function GalleryView({ dates }: { dates: CaptureDate[] }) {
   const [active, setActive] = useState(dates[0]?.date ?? "");
+
+  const handleSetActive = useCallback((date: string) => {
+    setActive(date);
+  }, []);
 
   if (dates.length === 0) {
     return (
@@ -61,7 +113,7 @@ export function GalleryView({ dates }: { dates: CaptureDate[] }) {
             key={d.date}
             size="sm"
             variant={d.date === day.date ? "default" : "outline"}
-            onClick={() => setActive(d.date)}
+            onClick={() => handleSetActive(d.date)}
           >
             {fmtDate(d.date)}
           </Button>
@@ -69,26 +121,8 @@ export function GalleryView({ dates }: { dates: CaptureDate[] }) {
       </div>
 
       {day.cameras.map((cam) => (
-        <Card key={cam.camera_id}>
-          <CardContent className="space-y-3 pt-6">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium" style={{ wordBreak: "keep-all" }}>
-                {cam.camera_id}
-              </span>
-              <Badge variant="secondary">{cam.count}장</Badge>
-            </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              {cam.images.map((img) => (
-                <CaptureThumb
-                  key={img.name}
-                  src={`/api/captures/${day.date}/${encodeURIComponent(cam.camera_id)}/${encodeURIComponent(img.name)}`}
-                  name={img.name}
-                  encrypted={img.encrypted}
-                />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        // 날짜 변경 시 동일 camera_id라도 강제 리마운트되어 visibleCount 초기화.
+        <CameraGroup key={`${day.date}-${cam.camera_id}`} date={day.date} cam={cam} />
       ))}
     </div>
   );

@@ -11,11 +11,16 @@ const KEY = process.env.KSI_CCTV_API_KEY ?? "";
 
 export async function POST(req: NextRequest) {
   const contentType = req.headers.get("content-type") ?? "";
+  const contentLength = req.headers.get("content-length");
   let upstream: Response;
   try {
     upstream = await fetch(`${ENGINE}/api/models/upload`, {
       method: "POST",
-      headers: { "X-API-Key": KEY, "content-type": contentType },
+      headers: {
+        "X-API-Key": KEY,
+        "content-type": contentType,
+        ...(contentLength ? { "content-length": contentLength } : {}),
+      },
       body: req.body, // 멀티파트 스트림 그대로 전달(파일 버퍼링 없음)
       duplex: "half", // 스트림 요청 본문 전송 시 필수(undici)
       cache: "no-store",
