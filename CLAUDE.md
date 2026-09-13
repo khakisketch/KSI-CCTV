@@ -65,6 +65,15 @@ docker compose --profile web up --build   # 엔진+게이트웨이+웹 콘솔 �
 - COCO pretrained 모델(`class_profile: coco`)에서는 safety gear violation 이벤트를 자동 생성하지 않는다(false alarm 방지). 안전모/조끼/화재/연기는 커스텀 ONNX 모델과 `safety_custom` 프로파일 필요.
 - 모델 파일(`.onnx`)은 `models/`에 위치. 새 모델 등록은 `config/model_profiles.yaml` + `MultiModelRegistry` 경로를 따른다 — `yolo_detector.py` 직접 수정 금지.
 
+## Superpowers 운용 (필수 — 매 턴 첫 행동 전 점검)
+
+- 관련 가능성 1%라도 있으면 `skill` 도구로 해당 스킬을 먼저 로드한다. 작업 전 점검을 건너뛰고 탐색·질문·구현부터 하지 않는다.
+- 창의적 작업 전 `brainstorming`, 버그/실패 분석 전 `systematic-debugging`, 다단계 구현 전 `writing-plans`, 구현 시 `test-driven-development`(실패 테스트→구현→통과→커밋), 완료 주장 전 `verification-before-completion`, 코드 리뷰 전후 `requesting-code-review`/`receiving-code-review`를 사용한다.
+- 공식 Superpowers는 변경 없이 사용한다. 커스터마이징용 복사·편집·포크 금지.
+- 위임 매핑: 발견·조사=explore, 구현=developer(복잡·결합 시 developer-complex), 테스트 실행=test-runner, 리뷰=reviewer, 중요 계획 비판=plan-reviewer. 서브에이전트로 받은 단일 작업 실행 중에는 이 점검을 반복하지 않는다.
+- 한 공유 워크트리당 작성자는 1명. 병렬 구현은 분리 워크트리 + 비중첩 소유일 때만 허용한다. 작성자는 독립 테스트/리뷰 전에 손을 멈추고 실제 diff를 인계한다.
+- 커밋·푸시·PR·배포·자격증명 변경·비가역 정리·외부 효과는 명시적 승인 후에만 수행한다.
+
 ## 언어
 
 한국어로 답한다. 기술 용어는 원어 유지. 코드/주석은 repo 관습(한국어 주석).

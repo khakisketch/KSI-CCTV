@@ -40,7 +40,7 @@ _ALERT_LEVELS = ("low", "medium", "high", "critical")
 _CAMERA_PROFILES = _ROOT / "config" / "camera_profiles.yaml"
 _DATE_RE = re.compile(r"^\d{8}$")  # YYYYMMDD
 _SAFE_SEG = re.compile(r"^[A-Za-z0-9._-]+$")  # 카메라/파일명(슬래시·.. 불허)
-# 감사 로그(JSONL) — Streamlit 대시보드와 동일 파일을 공유해 단일 감사 트레일을 만든다.
+# 감사 로그(JSONL) — Next.js 웹 콘솔과 동일 파일을 공유해 단일 감사 트레일을 만든다.
 _AUDIT_LOG = _ROOT / "logs" / "dashboard_audit.jsonl"
 _AUDIT_MAX_BYTES = 5 * 1024 * 1024
 _AUDIT_MAX_SEGMENTS = 8
@@ -844,7 +844,15 @@ def validate_event_selection(
     if unknown:
         raise ValueError(f"알 수 없는 이벤트가 포함되어 있습니다: {unknown}")
     if unavailable:
-        raise ValueError(f"아직 사용할 수 없는 이벤트가 포함되어 있습니다: {unavailable}")
+        reasons = {
+            item["name"]: item.get("blocked_reason")
+            for item in catalog
+            if isinstance(item, dict) and item.get("name") in unavailable
+        }
+        details = "; ".join(
+            f"{name}({reasons.get(name) or '사유 미기재'})" for name in unavailable
+        )
+        raise ValueError(f"아직 사용할 수 없는 이벤트가 포함되어 있습니다: {details}")
     return requested
 
 

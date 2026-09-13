@@ -263,6 +263,9 @@ def _register_cameras(
         for camera in config.load_cameras()
         if camera.get("id")
     }
+    # Managed 저장소 출처 ID. 이 카메라는 위 managed 루프가 게이트웨이 sync를
+    # 전담하므로 최종 등록 루프에서 중복 sync하지 않는다.
+    managed_ids: set[str] = set()
     if camera_repository is not None:
         _, managed = camera_repository.list()
         probe = rtsp_probe or RtspProbe(
@@ -328,6 +331,7 @@ def _register_cameras(
                     logger.error("[%s] MediaMTX path sync failed: %s", camera.id, type(exc).__name__)
                 except Exception as exc:
                     logger.error("[%s] MediaMTX path sync failed: %s", camera.id, type(exc).__name__)
+            managed_ids.add(camera.id)
     cameras = sorted(
         (camera for camera in cameras_by_id.values() if camera.get("enabled")),
         key=lambda camera: str(camera.get("id", "")),
@@ -361,6 +365,20 @@ def _register_cameras(
             resize=cam.get("resolution"),
             stale_threshold=stale_threshold,
         )
+        # Legacy(cameras.json) 카메라도 managed와 동일하게 게이트웨이에 sync한다.
+        # Managed 출처는 위 managed 루프가 전담하므로 제외한다. 로컬 파일 입력은
+        # 파이프라인 내부 소스라 게이트웨이 대상에서 제외한다.
+        if (
+            mediamtx is not None
+            and cam_id not in managed_ids
+            and stream_url.lower().startswith(("rtsp://", "rtsps://"))
+        ):
+            try:
+                mediamtx.sync(cam_id, stream_url)
+            except MediaMTXError as exc:
+                logger.error("[%s] MediaMTX path sync failed: %s", cam_id, type(exc).__name__)
+            except Exception as exc:
+                logger.error("[%s] MediaMTX path sync failed: %s", cam_id, type(exc).__name__)
         registered += 1
     return registered
 

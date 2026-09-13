@@ -29,7 +29,12 @@ _TemporalState = dict[str, Any]
 
 
 class RuleEvaluatorRegistry:
-    """룰 타입별 평가기 레지스트리."""
+    """룰 타입별 평가기 레지스트리.
+
+    프레임-로컬 detection 룰만 다룬다. track_line_crossing/track_loitering 같은
+    tracking-runtime 룰은 트랙 상태를 across-frames로 유지해야 해서 파이프라인의
+    전용 tracking 경로(`SafetyPipeline._process_tracking_locked`)가 처리한다.
+    """
 
     def __init__(self) -> None:
         self._evaluators: dict[str, Callable[[dict, ModelDetections, np.ndarray, dict | None, str, _PoseState | None], RuleResult]] = {

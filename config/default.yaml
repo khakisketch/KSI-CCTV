@@ -10,7 +10,8 @@ app:
   timezone: "Asia/Seoul"
 
 # CCTV 채널 설정
-# 실제 운영에서는 config/cameras.yaml에서 관리
+# 카메라 인벤토리: config/cameras.json(legacy, 읽기전용 import) → managed 정본은
+# config/cameras/ + CameraRepository로 이관 중(U2). 여기 값은 타이밍 임계값만 둔다.
 cameras:
   default_fps: 30
   max_channels: 16
@@ -26,6 +27,8 @@ cameras:
   tamper_recovery_sec: 3
 
 # 모델 설정
+# 런타임 SSOT는 config/model_profiles.yaml이다(MultiModelRegistry가 로드).
+# 아래 models.yolo 값은 단일-detector fallback 참조용이며 실행 시에는 profile 값이 우선한다.
 models:
   yolo:
     model_path: "./models/yolo26.onnx"
@@ -64,6 +67,8 @@ models:
     prompt_template: "./config/prompts/construction.yaml"
 
 # 감지 설정
+# target_classes / vlm_trigger_classes는 legacy 경로 전용이다.
+# policy-mode에서는 config/event_policies.yaml의 trigger.models/classes가 SSOT다.
 detection:
   # YOLO 필터링 프레임 간격 (1 = 모든 프레임, 5 = 5프레임마다)
   skip_frames: 5

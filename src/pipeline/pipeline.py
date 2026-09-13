@@ -215,6 +215,9 @@ class SafetyPipeline:
         self.model_registry = model_registry
         self.policy_engine = policy_engine
         self.use_policy_mode = (model_registry is not None and policy_engine is not None)
+        # Legacy 단일-detector 경로는 하위 호환용으로만 유지한다. 향후 명시적
+        # opt-in(KSI_CCTV_LEGACY_FALLBACK=1)으로 전환 예정 — 신규 코드는 policy-mode를 사용하라.
+        self._legacy_warned = False
 
         # Camera profile for policy evaluation (set via set_camera_profile)
         self._camera_profiles: dict[str, dict] = {}
@@ -427,7 +430,24 @@ class SafetyPipeline:
                 self._vlm_frame_buffers.pop(camera_id, None)
 
     def set_camera_profile(self, camera_id: str, profile: dict):
-        """카메라별 정책 프로필 설정 (Phase 4)"""
+        """카메라별 정책 프로필 설정 (Phase 4).
+
+        정식형 {domain, enabled_events, zones, detection_type}으로 정규화해
+        저장한다. 구 별칭(events→enabled_events, detection_type/profile→domain)도
+        받아들인다. enabled_events=[] (전부 비활성)와 None (필터 없음)은 구분해
+        보존한다.
+        """
+        normalized = dict(profile or {})
+        normalized["domain"] = (
+            normalized.get("domain")
+            or normalized.get("detection_type")
+            or normalized.get("profile")
+            or "construction"
+        )
+        if "enabled_events" not in normalized:
+            normalized["enabled_events"] = normalized.get("events")
+        normalized["detection_type"] = normalized.get("detection_type") or normalized["domain"]
+        profile = normalized
         with self._camera_runtime_lock:
             if self._camera_profiles.get(camera_id) != profile:
                 self._camera_generations[camera_id] = (
@@ -2041,7 +2061,16 @@ class SafetyPipeline:
             return self._camera_generations.get(camera_id, 0) == generation
 
     def _process_frame_legacy(self, camera_id: str, image: np.ndarray, timestamp: datetime):
-        """기존 단일 detector 모드 (하위 호환)"""
+        """기존 단일 detector 모드 (하위 호환, deprecated).
+
+        운영 데몬은 policy-mode를 사용한다. 이 경로는 테스트·호환용으로만 유지되며
+        향후 명시적 opt-in으로 전환될 예정이다.
+        """
+        if not self._legacy_warned:
+            self._legacy_warned = True
+            logger.warning(
+                "legacy 단일-detector 경로 사용 중 — policy-mode 이관을 권장한다."
+            )
         if self.detector is None:
             return
 

@@ -171,14 +171,15 @@ echo "KSI_CCTV_WEB_PASSWORD is set: $([ -n "$KSI_CCTV_WEB_PASSWORD" ] && echo ye
 
 30분 무활동 시 세션이 만료됩니다. 대시보드를 자주 사용한다면 사이드바의 "자동 새로고침" 기능을 활성화하면 세션이 유지됩니다.
 
-### 증상: 대시보드 포트 충돌 / 접속 불가
+### 증상: 웹 콘솔 포트 충돌 / 접속 불가
 
 ```bash
-# 포트 사용 여부 확인
-sudo ss -tlnp | grep 8080
+# 포트 사용 여부 확인 (웹 3100 · 엔진 8181)
+sudo ss -tlnp | grep -E '3100|8181'
 ```
 
-`config/default.yaml`의 `ui.dashboard_port`를 다른 포트로 변경하거나 기존 프로세스를 종료합니다.
+`KSI_CCTV_WEB_PORT`·`KSI_CCTV_ENGINE_PORT`로 포트를 변경하거나 기존 프로세스를 종료합니다.
+(`ui.*` 포트 키는 폐기된 Streamlit 설정이며 사용하지 않습니다.)
 
 ---
 

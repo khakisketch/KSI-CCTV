@@ -851,17 +851,19 @@ class AlertManager:
         The rotating alert log remains a fallback and SSE source. SQLite persistence is
         intentionally best-effort at this boundary: a full/corrupt DB must not suppress
         life-safety email delivery, but the failure is logged loudly for operations.
+
+        Incident projection is independent of durable event persistence: it runs
+        whenever an incident_store is present, even without an event_repository.
         """
-        if self.event_repository is None:
-            return
-        try:
-            self.event_repository.record(log_data)
-            if self.durable_store_status is not None:
-                self.durable_store_status.record_success(operation="write")
-        except Exception as exc:
-            if self.durable_store_status is not None:
-                self.durable_store_status.record_failure(exc, operation="write")
-            logger.error("Durable event persistence failed: %s", type(exc).__name__)
+        if self.event_repository is not None:
+            try:
+                self.event_repository.record(log_data)
+                if self.durable_store_status is not None:
+                    self.durable_store_status.record_success(operation="write")
+            except Exception as exc:
+                if self.durable_store_status is not None:
+                    self.durable_store_status.record_failure(exc, operation="write")
+                logger.error("Durable event persistence failed: %s", type(exc).__name__)
         event_id = log_data.get("event_id")
         event_type = str(log_data.get("event_type") or "")
         camera_id = str(log_data.get("camera_id") or "")
@@ -964,7 +966,7 @@ class AlertManager:
     # ------------------------------------------------------------------
 
     def get_event_log(self, limit: int = 100) -> list[dict]:
-        """Fetch recent event log"""
+        """Fetch recent event log (rotating-file fallback; SQLite is primary)."""
         events = []
         try:
             with open(self.config.log_file, encoding='utf-8') as f:

@@ -122,6 +122,8 @@ fi
 } > "$ARTIFACT_DIR/runner-metadata.txt"
 
 printf '%s\n' '[1/9] Python lint and test suite'
+# 커버리지 하한은 fast gate(scripts/test.sh, pytest-cov 설치 시 50%)에서만 집행한다.
+# 이 release gate는 무실패 + skip accounting을 주장하고 커버리지는 측정하지 않는다.
 "$PYTHON" -m ruff check src tests scripts installer
 "$PYTHON" -B -m pytest tests -q -p no:cacheprovider -ra \
     --junitxml "$ARTIFACT_DIR/pytest.xml"

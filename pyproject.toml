@@ -5,7 +5,7 @@
 [tool.mypy]
 python_version = "3.10"
 files = ["src"]
-# 서드파티 라이브러리(cv2/onnxruntime/ultralytics/streamlit/psutil/cryptography 등)는
+# 서드파티 라이브러리(cv2/onnxruntime/ultralytics/psutil/cryptography 등)는
 # 타입 스텁이 없으므로 import 누락 오류를 무시한다.
 ignore_missing_imports = true
 warn_redundant_casts = true

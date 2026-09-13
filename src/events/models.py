@@ -3,6 +3,11 @@
 
 SafetyEvent(파이프라인 내부용)와 분리된 영속적 이벤트 모델.
 검증 상태, 알림 결정, 전송 시도를 별도 생명주기로 관리한다.
+
+런타임 매핑: 데몬 경로는 SafetyEvent.to_dict()를 AlertManager가
+SQLiteEventRepository(event_records)에 영속화하고, high/critical·카메라헬스
+이벤트를 IncidentStore에 projection한다. 아래 CandidateEvent/AlertDecision은
+VLM 검증(U6) 등 명시적 lifecycle이 필요할 때 사용하는 개념 모델이다.
 """
 from __future__ import annotations
 

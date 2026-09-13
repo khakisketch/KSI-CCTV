@@ -1,6 +1,6 @@
 """Non-interactive E2E smoke validation for KSI-CCTV.
 
-This script validates the core local path without starting Streamlit:
+This script validates the core local path without starting the web console:
 camera/video source -> frame read -> YOLO ONNX inference -> postprocess -> optional VLM.
 It intentionally does not print raw RTSP URLs to avoid leaking credentials.
 

@@ -188,6 +188,10 @@ def create_app(
 
     checker_factory: 헬스 HealthChecker를 만드는 호출가능(데몬이 ollama·configured stale_sec 포함한
     풍부한 체커를 주입). 미지정 시 disk/memory(+pipeline) 기본 체커.
+
+    저장소 미주입 standalone 모드(event/alert/incident 없음)는 degraded로 명시된다
+    (`app.state.standalone_degraded`). 이 모드에서는 이벤트 조회가 alerts.log
+    폴백으로 동작하고 incident 저장이 없다. 운영 데몬은 반드시 저장소를 주입한다.
     """
     app = FastAPI(
         title="KSI-CCTV Engine API",
@@ -228,6 +232,9 @@ def create_app(
         alert_manager.durable_store_status = app.state.durable_event_store_status
     app.state.incident_store = incident_store
     app.state.model_upload_lock = asyncio.Lock()
+    app.state.standalone_degraded = (
+        event_repository is None and alert_manager is None and incident_store is None
+    )
 
     auth = [Depends(require_api_key)]
     onvif_discovery_lock = threading.RLock()
@@ -2301,4 +2308,6 @@ def create_app(
     return app
 
 
+# 모듈 직접 실행/임포트용 standalone 앱. 저장소 미주입 degraded 모드이며
+# 운영 데몬(run.py)은 저장소를 주입한 create_app()을 사용한다.
 app = create_app()
