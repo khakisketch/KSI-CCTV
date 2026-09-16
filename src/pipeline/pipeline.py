@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import re
 import threading
 import time
@@ -215,9 +216,13 @@ class SafetyPipeline:
         self.model_registry = model_registry
         self.policy_engine = policy_engine
         self.use_policy_mode = (model_registry is not None and policy_engine is not None)
-        # Legacy 단일-detector 경로는 하위 호환용으로만 유지한다. 향후 명시적
-        # opt-in(KSI_CCTV_LEGACY_FALLBACK=1)으로 전환 예정 — 신규 코드는 policy-mode를 사용하라.
+        # Legacy 단일-detector 경로는 명시적 opt-in(KSI_CCTV_LEGACY_FALLBACK)으로만
+        # 실행된다. 신규 코드는 policy-mode를 사용하라.
         self._legacy_warned = False
+        self.legacy_fallback_enabled = os.environ.get(
+            "KSI_CCTV_LEGACY_FALLBACK", ""
+        ).lower() in ("1", "true", "yes")
+        self._legacy_blocked_warned = False
 
         # Camera profile for policy evaluation (set via set_camera_profile)
         self._camera_profiles: dict[str, dict] = {}
@@ -1282,18 +1287,34 @@ class SafetyPipeline:
             image = frame_obj.image
             timestamp = frame_obj.timestamp
 
-            if self.use_policy_mode:
-                self._process_frame_with_policy(
-                    camera_id=camera_id,
-                    image=image,
-                    timestamp=timestamp,
-                )
-            else:
-                self._process_frame_legacy(
-                    camera_id=camera_id,
-                    image=image,
-                    timestamp=timestamp,
-                )
+            self._dispatch_frame(camera_id, image, timestamp)
+
+    def _dispatch_frame(self, camera_id: str, image: np.ndarray, timestamp: datetime) -> None:
+        """policy/legacy 프레임 디스패치.
+
+        detector-only 모드에서는 env `KSI_CCTV_LEGACY_FALLBACK` 명시
+        opt-in 없이는 legacy 실행을 스킵한다.
+        """
+        if self.use_policy_mode:
+            self._process_frame_with_policy(
+                camera_id=camera_id,
+                image=image,
+                timestamp=timestamp,
+            )
+            return
+        if self.legacy_fallback_enabled:
+            self._process_frame_legacy(
+                camera_id=camera_id,
+                image=image,
+                timestamp=timestamp,
+            )
+            return
+        if not self._legacy_blocked_warned:
+            self._legacy_blocked_warned = True
+            logger.error(
+                "legacy 단일-detector 경로가 차단됨 — "
+                "실행하려면 KSI_CCTV_LEGACY_FALLBACK=1 명시 opt-in이 필요하다."
+            )
 
     def _camera_event_enabled(self, camera_id: str, event_type: str) -> bool:
         release_qualified, _reason = release_qualification(event_type, "active")
