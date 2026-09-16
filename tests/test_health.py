@@ -664,33 +664,5 @@ class TestAiRuntimeHealth(unittest.TestCase):
         self.assertIn("behavior_runtime_errors", result.message)
 
 
-class TestHealthHTTPHandler(unittest.TestCase):
-    """HealthHTTPHandler 테스트"""
-
-    def test_health_endpoint(self):
-        from src.utils.health import ComponentHealth, HealthChecker, HealthHTTPHandler
-
-        checker = HealthChecker()
-        checker.register("test", lambda: ComponentHealth("test", True, "OK"))
-        HealthHTTPHandler.health_checker = checker
-
-        # 직접 핸들러 인스턴스 생성 (소켓 없이)
-        # HTTP handler 테스트는 통합 테스트로 대체
-        self.assertIsNotNone(HealthHTTPHandler.health_checker)
-
-
-class TestStartHealthServer(unittest.TestCase):
-    """start_health_server 테스트"""
-
-    def test_start_health_server_creates_server(self):
-        from src.utils.health import HealthChecker, start_health_server
-
-        checker = HealthChecker()
-        # 비어있는 체커로도 서버 시작 가능
-        server = start_health_server(host="127.0.0.1", port=0, checker=checker)  # port=0으로 자동 할당
-        self.assertIsNotNone(server)
-        server.shutdown()
-
-
 if __name__ == "__main__":
     unittest.main()

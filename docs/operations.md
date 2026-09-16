@@ -80,11 +80,14 @@ Appliance systemd unit은 signed release의 Compose stack을 관리하며, 부�
 ./.venv/bin/python scripts/healthcheck.py --create-dirs
 ```
 
-### HTTP 헬스 서버
+### HTTP 헬스체크 (엔진 FastAPI compat)
+
+프로덕션 헬스 transport는 엔진 FastAPI compat 라우트이다(엔진 :8081, 비인증).
 
 ```bash
-# 헬스 서버 시작 (포트 8081)
-./.venv/bin/python -m src.utils.health --serve
+# Liveness / Readiness 확인 예시
+curl -sf http://127.0.0.1:8081/health/live
+curl -sf http://127.0.0.1:8081/health/ready
 ```
 
 | 엔드포인트 | 설명 |

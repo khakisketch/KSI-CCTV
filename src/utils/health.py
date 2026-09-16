@@ -1,7 +1,7 @@
 """
 헬스체크 모듈
 
-시스템 상태 점검 및 HTTP 엔드포인트 제공.
+시스템 상태 점검.
 
 신규(Phase 4):
 - check_cameras: CameraManager.get_status() 기반 카메라별 staleness/연결 상태 점검
@@ -10,7 +10,7 @@
 - check_gpu: GPU VRAM·온도 임계값 점검
 - check_log_dirs: 로그/캡처 디렉터리 크기 임계값 점검
 - register_pipeline_health_checks: SafetyPipeline에서 위 체크를 일괄 등록하는 헬퍼
-- CLI 진입점: python -m src.utils.health [--once | --serve]
+- CLI 진입점: python -m src.utils.health [--once]
 """
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any
 
 from src.utils.system_metrics import SystemMetrics, collect_metrics, get_dir_size, get_gpu_info
@@ -608,84 +607,6 @@ def register_pipeline_health_checks(
     logger.info("파이프라인 헬스체크 등록 완료 (cameras/vlm/model_registry/gpu/log_dirs)")
 
 
-# ─── HTTP 서버 ────────────────────────────────────────────────────────────────
-
-class HealthHTTPHandler(BaseHTTPRequestHandler):
-    """헬스체크 HTTP 핸들러"""
-
-    health_checker: HealthChecker = None  # type: ignore
-
-    def do_GET(self):
-        if self.path == "/health" or self.path == "/healthz":
-            self._send_health()
-        elif self.path == "/health/live":
-            self._send_liveness()
-        elif self.path == "/health/ready":
-            self._send_readiness()
-        else:
-            self.send_error(404, "Not Found")
-
-    def _send_health(self):
-        report = self.health_checker.run_checks() if self.health_checker else None
-        if report is None:
-            self._send_json(503, {"status": "no_checker"})
-            return
-        status_code = 200 if report.overall_healthy else 503
-        self._send_json(status_code, report.to_dict())
-
-    def _send_liveness(self):
-        """Liveness: 프로세스가 살아있는지"""
-        self._send_json(200, {"status": "alive"})
-
-    def _send_readiness(self):
-        """Readiness: 의존성이 준비되었는지"""
-        report = self.health_checker.run_checks() if self.health_checker else None
-        if report is None:
-            self._send_json(503, {"status": "no_checker"})
-            return
-        # 핵심 컴포넌트만 체크
-        critical_components = ["disk_space", "memory_usage"]
-        all_critical_ok = all(
-            c.healthy for c in report.components if c.name in critical_components
-        )
-        status_code = 200 if all_critical_ok else 503
-        self._send_json(status_code, {"status": "ready" if all_critical_ok else "not_ready"})
-
-    def _send_json(self, code: int, data: dict):
-        body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body))        )
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format, *args):
-        """기본 로그 출력 비활성화"""
-        pass
-
-
-def start_health_server(
-    host: str = "127.0.0.1",  # 기본 loopback — /health 운영상태 정보의 외부노출 방지. 외부 모니터링은 0.0.0.0 opt-in.
-    port: int = 8081,
-    checker: HealthChecker | None = None,
-) -> HTTPServer:
-    """헬스체크 HTTP 서버 시작"""
-    if checker is None:
-        checker = HealthChecker()
-        # 기본 체크 등록
-        checker.register("disk_space", check_disk_space)
-        checker.register("memory_usage", check_memory_usage)
-        checker.register("ollama", check_ollama_available)
-
-    HealthHTTPHandler.health_checker = checker
-
-    server = HTTPServer((host, port), HealthHTTPHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    logger.info(f"헬스체크 서버 시작: http://{host}:{port}/health")
-    return server
-
-
 # ─── CLI 진입점 ───────────────────────────────────────────────────────────────
 
 def _build_default_checker() -> HealthChecker:
@@ -703,47 +624,27 @@ def _build_default_checker() -> HealthChecker:
 
 
 def _main():
-    """CLI 진입점: python -m src.utils.health [--once | --serve]"""
+    """CLI 진입점: python -m src.utils.health [--once]"""
     parser = argparse.ArgumentParser(
         prog="python -m src.utils.health",
         description="KSI-CCTV 헬스체크 CLI",
     )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
+    parser.add_argument(
         "--once",
         action="store_true",
         default=True,
         help="헬스체크 1회 실행 후 JSON 출력 (기본)",
     )
-    group.add_argument(
-        "--serve",
-        action="store_true",
-        help="HTTP 헬스체크 서버 기동 (포트 8081)",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8081,
-        help="--serve 모드 포트 (기본 8081)",
-    )
-    args = parser.parse_args()
+    parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
     checker = _build_default_checker()
 
-    if args.serve:
-        server = start_health_server(port=args.port, checker=checker)
-        print(f"헬스체크 서버 기동: http://0.0.0.0:{args.port}/health")
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            server.shutdown()
-    else:
-        # --once (기본)
-        report = checker.run_checks()
-        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2, default=str))
-        import sys
-        sys.exit(0 if report.overall_healthy else 1)
+    # --once (기본, 유일한 모드)
+    report = checker.run_checks()
+    print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2, default=str))
+    import sys
+    sys.exit(0 if report.overall_healthy else 1)
 
 
 if __name__ == "__main__":

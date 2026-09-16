@@ -293,7 +293,7 @@ VLM 도메인별 프롬프트 파일입니다. `detection_type`에 따라 자동
 
 ## 헬스체크 HTTP 엔드포인트
 
-`python -m src.utils.health --serve`로 헬스서버를 시작합니다(포트 8081).
+프로덕션 헬스 transport는 엔진 FastAPI compat 라우트이다(엔진 :8081, 비인증).
 
 | 경로 | 설명 |
 |---|---|

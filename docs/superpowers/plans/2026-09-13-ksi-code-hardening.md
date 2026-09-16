@@ -197,3 +197,39 @@ Forbidden shared files: tests/test_observations.py; tests/test_sqlite_events.py;
 Acceptance criteria: 5개 대상 테스트가 수정 전 실패 재현·수정 후 전부 통과(보고에 오류 텍스트 포함); 신규 회귀 테스트가 수정 전 FAIL → 수정 후 PASS이며 deferral + eventual sweep 두 의미 고정; `bash scripts/test.sh` 0 failed + coverage 하한 통과; diff가 Allowed 3경로 한정
 Targeted verification: 5개 테스트 단독(0 failed) → `tests/test_storage_prune_deferral.py tests/test_observations.py tests/test_sqlite_events.py tests/test_api.py tests/test_storage_truth.py`(0 failed) → `bash scripts/test.sh` → `ruff check src/storage tests/test_storage_prune_deferral.py` → `git diff --check` (실행은 `./.venv/bin/python -B -m pytest ... -p no:cacheprovider`)
 Escalate if: 수정 후에도 실패가 남거나 새 실패 발생 시 추가 수정 없이 원인 diff·재현 명령·출력과 함께 중단 보고; 기존 테스트 픽스처·기대값 수정이 필요하다고 판단되면 수정 없이 보고; 두 스토어 외 제품 코드 변경 필요 시 보고 후 대기
+
+---
+
+## 구조 작업 트랙 (U9–U12, 사용자 선택 2026-09-16)
+
+### Task U9: 구 http.server 헬스 잔재 제거
+
+**Files:** Modify `src/utils/health.py`(`from http.server` import :24, `HealthHTTPHandler` :613, `start_health_server` :667, CLI `--serve`, docstring :13), `tests/test_health.py`(`TestHealthHTTPHandler` :667-679, `TestStartHealthServer` :682-692 삭제), `docs/configuration.md:296`, `docs/operations.md:87`
+**근거:** 프로덕션은 FastAPI compat `/health*`(app.py :763-786)·compose healthcheck(:8081)로 대체됨. http.server 경로는 테스트만 참조.
+**Scope:** http.server transport(import/클래스/함수/`--serve` CLI) 제거, `--once` CLI와 check 함수·HealthChecker는 유지. 문서 2곳을 엔진 FastAPI compat 안내로 갱신.
+**Verify:** `./.venv/bin/python -B -m src.utils.health --once` 동작, `pytest tests/test_health.py tests/test_api.py -q -p no:cacheprovider`, `bash scripts/test.sh` 0 failed, ruff clean.
+**Forbidden:** check 함수·HealthChecker·`--once` 제거 금지(추가 참조 없음 확인됨), 문서 2곳 외 파일 수정 금지.
+
+### Task U10: legacy 단일-detector 경로 명시 opt-in (`KSI_CCTV_LEGACY_FALLBACK`)
+
+**Files:** Modify `src/pipeline/pipeline.py`(`_process_camera` 디스패치 :1285-1296, `__init__`), Create `tests/test_legacy_optin.py`
+**근거:** dispatch(:1285-1296)는 registry/engine 없는 파이프라인에서 무조건 legacy 실행; 프로덕션(run.py·profile_pipeline)은 항상 policy 모드. 테스트는 `_process_frame_legacy` 직접 호출(:test_pipeline_singlepath:55, test_observations:60)이라 메서드 유지 필요.
+**Scope:** `__init__`에서 env `KSI_CCTV_LEGACY_FALLBACK`(1/true/yes)을 `legacy_fallback_enabled`로 읽음. 디스패치 분기를 `_dispatch_frame(...)` 헬퍼로 추출 후: fallback 비활성(기본) → 오류 로그 1회 + 스킵; 활성 → 기존 legacy 실행(기존 deprecation 경고 유지). `_process_frame_legacy` 직접 호출은 env와 무관하게 동작.
+**Verify:** 신규 `tests/test_legacy_optin.py`(기본 스킵·env=1 실행·직접 호출 무영향), `pytest tests/test_pipeline.py tests/test_observations.py tests/test_pipeline_singlepath.py -q -p no:cacheprovider`, `bash scripts/test.sh` 0 failed.
+**Forbidden:** `_process_frame_legacy` 제거·동작 변경 금지, 기존 테스트 수정 금지, env 외 설정 파일 추가 금지.
+
+### Task U11: VLM 프롬프트의 canonical domain 사용
+
+**Files:** Modify `src/pipeline/pipeline.py`(:555-558 프롬프트 도메인 선택 + 헬퍼 추가), Create `tests/test_prompt_domain.py`
+**근거:** 프롬프트 선택이 `detection_type`만 읽어 policy의 `domain`과 다를 수 있음(run.py `_camera_policy_profile`은 둘을 별도 산출). 내부 소비자는 canonical `domain`을 우선해야 함.
+**Scope:** `_prompt_domain_for_camera(camera_id)` 헬퍼 추가(`domain` → `detection_type` → "default" 순), `_analyze_with_vlm`이 헬퍼 사용. `detection_type`은 외부 호환 필드로 유지(public_dict·API·프론트 fallback 무변경).
+**Verify:** 신규 테스트 4케이스(domain만/detection_type만/둘 다(domain 우선)/없음), `pytest tests/test_vlm.py tests/test_pipeline.py -q -p no:cacheprovider`, `bash scripts/test.sh` 0 failed.
+**Forbidden:** `detection_type` 필드·API 응답·프론트 계약 변경 금지, 기존 테스트 수정 금지.
+
+### Task U12: `src/api/app.py` 라우터 분할 (단계별, 각 단계 커밋·검증)
+
+**Files:** Create `src/api/routes/__init__.py` + 그룹 모듈; Modify `src/api/app.py`(해당 핸들러 이동만)
+**전략:** 각 그룹을 `src/api/routes/<group>.py`의 `register(app, auth, ...)` 팩토리(기존 클로저 스타일 유지, 동작 변경 없음)로 이동하고 `create_app`에서 호출. 테스트는 `create_app()` 계약만 사용하므로 무변경 원칙.
+**단계:** (a) models/policies/settings/captures/audit/config/system (b) events/incidents/observations/SSE/WS (c) cameras/onvif/camera-profiles(`_serialized_camera_mutation` 포함) (d) commissioning/support-bundle/health
+**각 단계 Verify:** `pytest tests/test_api.py tests/test_api_contract.py tests/test_cameras.py tests/test_commissioning.py -q -p no:cacheprovider`, `bash scripts/test.sh` 0 failed, `git diff --check`. OpenAPI 경로/태그 불변 확인(`/api/*` 목록 diff 없음).
+**Forbidden:** 경로·상태코드·태그·의존성(auth) 변경, service.py 동작 변경, 테스트 수정.
