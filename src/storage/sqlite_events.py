@@ -120,7 +120,7 @@ class SQLiteEventRepository:
         self.event_timezone = event_timezone or _site_timezone()
         self._connection: sqlite3.Connection | None = None
         self._lock = threading.RLock()
-        self._last_prune = 0.0
+        self._last_prune = time.monotonic()
 
     def record(self, event: dict[str, Any]) -> int:
         """Store one masked event revision and return its monotonic stream id."""

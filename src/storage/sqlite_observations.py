@@ -56,7 +56,7 @@ class SQLiteObservationStore(ObservationStore):
         self._db_lock = threading.RLock()
         self._connection: sqlite3.Connection | None = None
         self._loaded_cameras: set[str] = set()
-        self._last_prune = 0.0
+        self._last_prune = time.monotonic()
 
     def record(
         self,

@@ -171,3 +171,29 @@ Expected: PASS
 - [ ] **Step 3: Minimal implementation** — 게이트 단일화 둘 중 하나 선택, `dashboard_audit`→`console_audit`改名(호환 별칭), streamlit 잔존 주석 정리
 - [ ] **Step 4: Run full gate** — `bash scripts/test.sh` + 가능 범위 `verify_release_candidate.sh`
 - [ ] **Step 5: Static check** — `git diff --check`
+
+### Task U8: retention sweep 첫-record 즉시 발동 수정 (기존 실패 5건, 실측 확정)
+
+**Files:**
+- Modify: `src/storage/sqlite_observations.py:59`, `src/storage/sqlite_events.py:123`
+- Create: `tests/test_storage_prune_deferral.py`
+- 대상 테스트: `tests/test_observations.py::test_sqlite_observations_survive_restart_and_merge_current_bucket`, `tests/test_observations.py::test_sqlite_write_failure_rolls_back_in_memory_bucket`, `tests/test_sqlite_events.py::TestSQLiteEventRepository::test_filters_pagination_and_all_lifecycle_revisions`, `tests/test_sqlite_events.py::TestSQLiteEventRepository::test_migrates_pre_normalization_timestamp_rows`, `tests/test_api.py::TestServiceMaskingAndEvents::test_events_endpoint_uses_durable_repository_when_supplied`
+
+**Root cause (실측 2026-09-16):** 두 스토어의 `_last_prune = 0.0` + `_prune_if_due()`(`time.monotonic() - _last_prune >= prune_interval_sec`, 기본 21600) 조합. 호스트 monotonic ≈ 952210s(11일)이라 첫 `record()`가 즉시 sweep → 2026-07 픽스처(오늘 기준 30일 초과) 삭제. 직접 증거: `rows_after_1 []`, `last_prune_after 952210.565`. 기존 테스트 3곳이 deferral 의도를 방증: `tests/test_sqlite_events.py:129-130`("자동 prune을 잠시 미뤄"), `tests/test_observations.py:103,121`(prune_interval=1e12).
+
+**Fix (최소):** 두 스토어 `__init__`의 `self._last_prune = 0.0` → `self._last_prune = time.monotonic()`. 그 외 로직 변경 금지.
+
+**Regression test:** 두 스토어 각각 `time.monotonic`을 prune_interval 초과 값으로 고정해 생성 → retention 초과 timestamp record → 보존 assert(수정 전 FAIL); 이어서 +21601로 record → 오래된 행만 sweep assert(eventual sweep 유지).
+
+**Verification:** (a) 5개 테스트 0 failed (b) `tests/test_storage_prune_deferral.py tests/test_observations.py tests/test_sqlite_events.py tests/test_api.py tests/test_storage_truth.py` 0 failed (c) `bash scripts/test.sh` 0 failed + coverage (d) ruff clean (e) `git diff --check`.
+
+**Forbidden:** 기존 테스트 3파일 수정(완화·skip·기대값 변경 금지), Allowed 외 경로 전부. **커밋 금지(검증 전 정지).**
+
+**Developer 위임 계약(복사용 — 라벨은 각 줄 시작):**
+
+Objective: 두 스토어의 첫 record()에서 자동 retention sweep이 즉시 발동하는 근본 원인을 최소 수정하고 결정적 회귀 테스트를 추가한다.
+Allowed write paths: src/storage/sqlite_observations.py; src/storage/sqlite_events.py; tests/test_storage_prune_deferral.py (신규)
+Forbidden shared files: tests/test_observations.py; tests/test_sqlite_events.py; tests/test_api.py (기존 테스트 완화 금지); src/·config/·scripts/·frontend/·docs/·installer/·.gitignore 중 Allowed 외 전부; 커밋 금지
+Acceptance criteria: 5개 대상 테스트가 수정 전 실패 재현·수정 후 전부 통과(보고에 오류 텍스트 포함); 신규 회귀 테스트가 수정 전 FAIL → 수정 후 PASS이며 deferral + eventual sweep 두 의미 고정; `bash scripts/test.sh` 0 failed + coverage 하한 통과; diff가 Allowed 3경로 한정
+Targeted verification: 5개 테스트 단독(0 failed) → `tests/test_storage_prune_deferral.py tests/test_observations.py tests/test_sqlite_events.py tests/test_api.py tests/test_storage_truth.py`(0 failed) → `bash scripts/test.sh` → `ruff check src/storage tests/test_storage_prune_deferral.py` → `git diff --check` (실행은 `./.venv/bin/python -B -m pytest ... -p no:cacheprovider`)
+Escalate if: 수정 후에도 실패가 남거나 새 실패 발생 시 추가 수정 없이 원인 diff·재현 명령·출력과 함께 중단 보고; 기존 테스트 픽스처·기대값 수정이 필요하다고 판단되면 수정 없이 보고; 두 스토어 외 제품 코드 변경 필요 시 보고 후 대기
