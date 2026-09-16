@@ -233,3 +233,5 @@ Escalate if: 수정 후에도 실패가 남거나 새 실패 발생 시 추가 �
 **단계:** (a) models/policies/settings/captures/audit/config/system (b) events/incidents/observations/SSE/WS (c) cameras/onvif/camera-profiles(`_serialized_camera_mutation` 포함) (d) commissioning/support-bundle/health
 **각 단계 Verify:** `pytest tests/test_api.py tests/test_api_contract.py tests/test_cameras.py tests/test_commissioning.py -q -p no:cacheprovider`, `bash scripts/test.sh` 0 failed, `git diff --check`. OpenAPI 경로/태그 불변 확인(`/api/*` 목록 diff 없음).
 **Forbidden:** 경로·상태코드·태그·의존성(auth) 변경, service.py 동작 변경, 테스트 수정.
+
+**완료(2026-09-16):** U12a–e 5단계 실행 완료 — `app.py` 2,313→263줄(핸들러 0, 미들웨어·헬퍼·조립만), `routes/` 5모듈 총 66 라우트(단계별 OpenAPI diff empty). 커밋: fa46554(a system)·c270b8c(b events)·1a75c1e(c cameras)·a0bbb92(d commissioning)·7b02978(e ops). 각 단계 Test Runner 독립 검증(데코레이터 총계 66 불변), 최종 전체 스위트 1033 passed / 0 failed / 5 skipped.
