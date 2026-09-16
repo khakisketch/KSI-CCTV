@@ -526,6 +526,17 @@ class SafetyPipeline:
             )
         return unreachable
 
+    def _prompt_domain_for_camera(self, camera_id: str) -> str:
+        """VLM 프롬프트 선택용 canonical 도메인을 반환한다.
+
+        프로필 dict에서 `domain` → `detection_type` → `"default"` 순으로
+        해석한다. 비-dict/미존재 시 `"default"`를 반환한다.
+        """
+        profile = self._camera_profiles.get(camera_id, {})
+        if not isinstance(profile, dict):
+            return "default"
+        return profile.get("domain") or profile.get("detection_type") or "default"
+
     def _analyze_with_vlm(
         self,
         event: SafetyEvent,
@@ -558,9 +569,8 @@ class SafetyPipeline:
                 return
 
             try:
-                # 카메라의 detection_type에 따라 프롬프트 자동 선택
-                camera_config = self._camera_profiles.get(event.camera_id, {})
-                detection_type = camera_config.get("detection_type", "default") if isinstance(camera_config, dict) else "default"
+                # 프롬프트는 canonical domain 기준, detection_type은 하위호환
+                detection_type = self._prompt_domain_for_camera(event.camera_id)
 
                 # 컨텍스트 구성
                 det_summary = ContextBuilder.format_detections(event.detections)
