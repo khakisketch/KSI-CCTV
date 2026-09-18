@@ -6,7 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { POST as login } from "@/app/api/auth/login/route";
 import { revokeSession, SESSION_COOKIE, sessionPrincipal } from "@/lib/auth";
+import { passwordHash } from "@/lib/auth-primitives";
 import { createUser, findUserByUsername, updateUser } from "@/lib/users";
+
+vi.mock("@/lib/auth-primitives", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth-primitives")>();
+  return { ...actual, passwordHash: vi.fn(actual.passwordHash) };
+});
+
+const passwordHashMock = vi.mocked(passwordHash);
 
 describe("login cookie transport", () => {
   beforeEach(() => {
@@ -138,6 +146,100 @@ describe("login with username (RBAC R2)", () => {
     try {
       expect(response.status).toBe(200);
       expect(await sessionPrincipal(token!)).toEqual({ role: "admin" });
+    } finally {
+      await revokeSession(token);
+    }
+  });
+});
+
+describe("login username timing mitigation", () => {
+  const USER_PASSWORD = "operator-pass-123";
+  let authDir = "";
+
+  function timingRequest(ip: string, body: unknown) {
+    return new NextRequest("http://appliance.local/api/auth/login", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-for": ip,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  beforeEach(async () => {
+    authDir = await mkdtemp(path.join(os.tmpdir(), "ksi-login-timing-"));
+    vi.stubEnv("KSI_CCTV_WEB_AUTH_DIR", authDir);
+    vi.stubEnv("KSI_CCTV_WEB_PASSWORD", "test-password");
+    vi.stubEnv("KSI_CCTV_WEB_SECRET", "s".repeat(32));
+    vi.stubEnv("KSI_CCTV_WEB_SESSION_TTL_SEC", "604800");
+    vi.stubEnv("KSI_CCTV_TRUST_PROXY", "true");
+    passwordHashMock.mockClear();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(authDir, { recursive: true, force: true });
+  });
+
+  it("runs one dummy scrypt check for an unknown username", async () => {
+    expect(await createUser("op1", "operator", USER_PASSWORD)).toBe("created");
+    passwordHashMock.mockClear();
+
+    const response = await login(timingRequest("10.20.0.1", { username: "nobody", password: USER_PASSWORD }));
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ detail: "사용자명 또는 비밀번호가 올바르지 않습니다." });
+    expect(passwordHashMock).toHaveBeenCalledTimes(1);
+    expect(passwordHashMock.mock.calls[0]?.[0]).toBe(USER_PASSWORD);
+    expect((passwordHashMock.mock.calls[0]?.[1] as Buffer).length).toBe(16);
+  });
+
+  it("runs one dummy scrypt check for a disabled user", async () => {
+    expect(await createUser("op1", "operator", USER_PASSWORD)).toBe("created");
+    const found = await findUserByUsername("op1");
+    if (!found || found === "error") throw new Error("user not found");
+    expect(await updateUser(found.id, { enabled: false })).toBe("updated");
+    passwordHashMock.mockClear();
+
+    const response = await login(timingRequest("10.20.0.2", { username: "op1", password: USER_PASSWORD }));
+    expect(response.status).toBe(401);
+    expect(passwordHashMock).toHaveBeenCalledTimes(1);
+    expect((passwordHashMock.mock.calls[0]?.[1] as Buffer).length).toBe(16);
+  });
+
+  it("runs one dummy scrypt check when the user store is corrupted", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(path.join(authDir, "users.json"), "{corrupted", "utf8");
+    passwordHashMock.mockClear();
+
+    const response = await login(timingRequest("10.20.0.3", { username: "op1", password: USER_PASSWORD }));
+    expect(response.status).toBe(401);
+    expect(passwordHashMock).toHaveBeenCalledTimes(1);
+    expect((passwordHashMock.mock.calls[0]?.[1] as Buffer).length).toBe(16);
+  });
+
+  it("does not add a dummy scrypt check for a valid user login", async () => {
+    expect(await createUser("op1", "operator", USER_PASSWORD)).toBe("created");
+    passwordHashMock.mockClear();
+
+    const response = await login(timingRequest("10.20.0.4", { username: "op1", password: USER_PASSWORD }));
+    const token = response.cookies.get(SESSION_COOKIE)?.value;
+    try {
+      expect(response.status).toBe(200);
+      expect(passwordHashMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await revokeSession(token);
+    }
+  });
+
+  it("does not run scrypt on the admin path without username", async () => {
+    passwordHashMock.mockClear();
+
+    const response = await login(timingRequest("10.20.0.5", { password: "test-password" }));
+    const token = response.cookies.get(SESSION_COOKIE)?.value;
+    try {
+      expect(response.status).toBe(200);
+      expect(passwordHashMock).not.toHaveBeenCalled();
     } finally {
       await revokeSession(token);
     }

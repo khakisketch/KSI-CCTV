@@ -7,8 +7,13 @@ import {
   sessionTtlSeconds,
   verifyPassword,
 } from "@/lib/auth";
+import { passwordHash } from "@/lib/auth-primitives";
 import { loginRateLimiter, loginSource } from "@/lib/login-rate-limit";
 import { findUserByUsername, verifyUserPassword } from "@/lib/users";
+
+// Timing-channel mitigation: fixed 16-byte salt so missing/disabled/corrupted
+// usernames still pay one scrypt verification before the identical 401.
+const DUMMY_SALT = Buffer.from("0123456789abcdef", "utf8");
 
 export async function POST(req: NextRequest) {
   const trustProxy = process.env.KSI_CCTV_TRUST_PROXY?.toLowerCase() === "true";
@@ -35,7 +40,12 @@ export async function POST(req: NextRequest) {
   if (username) {
     const candidate = await findUserByUsername(username);
     const user = candidate && candidate !== "error" && candidate.enabled ? candidate : undefined;
-    if (!user || !(await verifyUserPassword(user, pw))) {
+    if (!user) {
+      await passwordHash(pw, DUMMY_SALT);
+      loginRateLimiter.consume(source);
+      return NextResponse.json({ detail: "사용자명 또는 비밀번호가 올바르지 않습니다." }, { status: 401 });
+    }
+    if (!(await verifyUserPassword(user, pw))) {
       loginRateLimiter.consume(source);
       return NextResponse.json({ detail: "사용자명 또는 비밀번호가 올바르지 않습니다." }, { status: 401 });
     }
