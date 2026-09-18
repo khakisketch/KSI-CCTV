@@ -79,12 +79,43 @@ KSI_CCTV_WEB_DEV=1 KSI_CCTV_DEV_AUTH_BYPASS=1 bash scripts/run_web.sh
 | 파일 | 용도 |
 |---|---|
 | `config/default.yaml` | 앱 전역 기본값 (포트·VLM·탐지·알람·RTSP) |
-| `config/cameras.json` | 카메라 채널 목록 및 활성화 여부 |
+| `config/cameras.json` | 카메라 채널 목록 및 활성화 여부 — **deprecated**(신규 등록은 managed `config/cameras/` 사용, 아래 마이그레이션 참고) |
+| `config/cameras/` | managed 카메라 저장소(`cameras.json` 0600 + 자격증명 분리 보관) |
 | `config/model_profiles.yaml` | 모델 등록·경로·클래스·임계값 |
 | `config/event_policies.yaml` | 이벤트별 trigger/rule/VLM/alert 정책 |
 | `config/camera_profiles.yaml` | 카메라별 도메인·활성 이벤트·zone 설정 |
 | `config/alert_preferences.yaml` | 이메일 알람 임계값·이벤트별 on/off |
 | `config/prompts/*.yaml` | VLM 도메인 프롬프트 (general/construction/school/factory/warehouse/parking) |
+
+---
+
+## 레거시 cameras.json 마이그레이션 (deprecated → managed)
+
+레거시 `config/cameras.json`(평면 리스트)은 deprecated이며, 신규 카메라 등록은 managed
+`config/cameras/`(`CameraRepository`, `cameras.json` 0600, 자격증명 분리 보관)를 사용합니다.
+1회성 이관은 `scripts/migrate_legacy_cameras.py`로 수행합니다. 기본은 dry-run이며
+`--apply`에서만 기록합니다.
+
+```bash
+# 1) 계획 확인 (기록 없음)
+./.venv/bin/python -B scripts/migrate_legacy_cameras.py --source config/cameras.json --dest config/cameras
+
+# 2) 실제 기록
+./.venv/bin/python -B scripts/migrate_legacy_cameras.py --source config/cameras.json --dest config/cameras --apply
+```
+
+주의사항:
+
+- 목적지 managed 저장소에 카메라가 1대라도 있으면 치명 오류(exit 2,
+  "관리 저장소가 비어있지 않음 — 수동 병합 필요")로 중단합니다. 병합은 수동으로 수행합니다.
+- `stream_url`에 `${...}`가 남은(env 미주입) 항목과 id/필수 필드 검증 실패 항목은
+  skip+경고로 보고하고 계속합니다(종료코드 0).
+- URL의 `user:pass@` 자격증명은 `CredentialStore`로 분리 저장하고(`camera:<id>` 참조,
+  target_scope 포함) 저장된 `rtsp_url`에서 제거합니다. 출력 URL은 마스킹됩니다.
+- `name`/`location`/`enabled`/`fps`/`resolution`/`detection_type`→`profile`/
+  `enabled_events`/`zones`는 있으면 보존하고 없으면 기본값을 사용합니다.
+- 이관 후 레거시 파일은 삭제하지 않고 남겨 둡니다(롤백 대비). managed 이관 완료를
+  확인한 뒤 현장 판단으로 제거합니다.
 
 ---
 
