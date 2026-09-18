@@ -1,7 +1,9 @@
 """시스템/플랫폼 그룹 라우트 (U12a 분할). 경로·동작 무변경 이동."""
 from __future__ import annotations
 
+import json
 import os
+import re
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -30,6 +32,29 @@ class AlertPrefsBody(BaseModel):
 
     email_alert_level_threshold: str = Field(..., description="low/medium/high/critical")
     per_event_email_enabled: dict[str, bool] = Field(default_factory=dict)
+
+
+class AuditEntryBody(BaseModel):
+    """콘솔 감사 기록 요청. actor는 ContextVar만 사용 — body actor 키는 무시된다."""
+
+    event: Any = Field(default=None, description="감사 이벤트명(^[a-z0-9_]{1,64}$)")
+    fields: Any = Field(default=None, description="감사 필드(문자열 키 객체, 직렬화 ≤4096B)")
+
+    model_config = {"extra": "ignore"}
+
+
+_AUDIT_EVENT_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+_AUDIT_FORBIDDEN_KEYS = frozenset({"password", "passwordhash", "salt", "token", "secret"})
+# write_audit(event, **fields) 호출과 충돌하는 예약 키(경로 주입·TypeError 방지).
+_AUDIT_RESERVED_KEYS = frozenset({"audit_log", "event"})
+# 스푸핑 방지: ContextVar actor만 기록하므로 body의 actor 관련 키는 버린다(무시 선택).
+_AUDIT_ACTOR_KEYS = frozenset({"actor", "actortype"})
+_AUDIT_MAX_FIELDS_BYTES = 4096
+
+
+def _audit_normalize_key(key: str) -> str:
+    """금지/actor 키 비교용 정규화(대소문자·`_`·`-` 무시)."""
+    return key.lower().replace("_", "").replace("-", "")
 
 
 def register(
@@ -134,6 +159,41 @@ def register(
     def audit_list(limit: int = Query(200, ge=1, le=1000)) -> dict[str, Any]:
         items = service.list_audit(limit=limit)
         return {"count": len(items), "entries": items}
+
+    # ── 감사 기록(콘솔 사용자 관리 추적 — 인증, 콘솔 서버사이드 내부용) ───────
+    @app.post("/api/audit/entry", tags=["audit"], dependencies=auth)
+    def audit_entry(body: AuditEntryBody) -> dict[str, Any]:
+        if not isinstance(body.event, str) or _AUDIT_EVENT_RE.match(body.event) is None:
+            raise HTTPException(status_code=400, detail="event는 ^[a-z0-9_]{1,64}$ 형식이어야 합니다.")
+        fields = body.fields if body.fields is not None else {}
+        if not isinstance(fields, dict):
+            raise HTTPException(status_code=400, detail="fields는 객체여야 합니다.")
+        for key in fields:
+            if not isinstance(key, str):
+                raise HTTPException(status_code=400, detail="fields 키는 문자열이어야 합니다.")
+        for key, value in fields.items():
+            if _audit_normalize_key(key) in _AUDIT_FORBIDDEN_KEYS:
+                raise HTTPException(status_code=400, detail=f"fields에 금지된 키가 있습니다: {key}")
+            if isinstance(value, dict):
+                for nested in value:
+                    if isinstance(nested, str) and _audit_normalize_key(nested) in _AUDIT_FORBIDDEN_KEYS:
+                        raise HTTPException(
+                            status_code=400, detail=f"fields에 금지된 키가 있습니다: {key}.{nested}"
+                        )
+        try:
+            raw = json.dumps(fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail="fields는 JSON 직렬화 가능해야 합니다.") from e
+        if len(raw.encode("utf-8")) > _AUDIT_MAX_FIELDS_BYTES:
+            raise HTTPException(status_code=400, detail="fields 크기가 4096B를 초과합니다.")
+        safe = {
+            key: value
+            for key, value in fields.items()
+            if key not in _AUDIT_RESERVED_KEYS and _audit_normalize_key(key) not in _AUDIT_ACTOR_KEYS
+        }
+        if not service.write_audit(body.event, **safe):
+            raise HTTPException(status_code=503, detail="감사 기록에 실패했습니다.")
+        return {"ok": True}
 
     # ── 쓰기: open-vocab 프롬프트 설정(학습 없이 탐지 대상 변경) ──────────
     @app.post("/api/models/{name}/prompts", tags=["models"], dependencies=auth)
