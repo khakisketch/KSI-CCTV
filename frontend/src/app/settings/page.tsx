@@ -1,9 +1,14 @@
+import { cookies } from "next/headers";
+
 import { AlertSettings } from "@/components/alert-settings";
 import { AccessProtectionSettings } from "@/components/access-protection-settings";
+import { UserManagement } from "@/components/user-management";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { toPublicUser } from "@/app/api/users/route";
 import { getAlertDeliveryStatus, getAlertPreferences, getConfig, getPolicies } from "@/lib/engine";
-import { getAuthStatus } from "@/lib/auth";
+import { getAuthStatus, SESSION_COOKIE, sessionPrincipal } from "@/lib/auth";
+import { listUsers } from "@/lib/users";
 
 export const dynamic = "force-dynamic";
 
@@ -54,10 +59,15 @@ export default async function SettingsPage() {
   ]);
   const connected = cfg !== null;
   const events = deriveEvents(policies);
+  const principal = await sessionPrincipal((await cookies()).get(SESSION_COOKIE)?.value);
+  const isAdmin = principal?.role === "admin";
+  const managedUsers = isAdmin ? (await listUsers()).map(toPublicUser) : [];
 
   return (
     <div className="space-y-4">
       <AccessProtectionSettings initialMode={authStatus.mode} />
+
+      {isAdmin && <UserManagement initialUsers={managedUsers} />}
 
       {connected && prefs && (
         <Card>
