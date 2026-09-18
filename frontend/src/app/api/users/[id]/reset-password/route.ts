@@ -1,9 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireRole } from "@/lib/require-role";
-import { resetUserPassword } from "@/lib/users";
+import { engineWrite } from "@/lib/engine";
+import { requestActor, requireRole } from "@/lib/require-role";
+import { findUserById, resetUserPassword } from "@/lib/users";
 
 const NO_STORE = { "Cache-Control": "no-store" };
+
+// 사용자 관리 감사 — best-effort: 실패해도 사용자 작업을 막지 않는다.
+async function auditUserEvent(
+  event: string,
+  fields: Record<string, unknown>,
+  actor: string,
+): Promise<void> {
+  try {
+    await engineWrite("/api/audit/entry", { event, fields }, "POST", 8000, actor);
+  } catch {
+    // 감사 실패 무시 — 기존 응답 유지
+  }
+}
 
 // 관리자 전용 비밀번호 재설정. body {password}.
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -14,6 +28,11 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
   const password = typeof body?.password === "string" ? body.password : "";
   const result = await resetUserPassword(id, password);
   if (result === "updated") {
+    const found = await findUserById(id);
+    if (found && found !== "error") {
+      const actor = await requestActor(req);
+      await auditUserEvent("user_password_reset", { username: found.username }, actor);
+    }
     return NextResponse.json({ detail: "비밀번호를 재설정했습니다." }, { headers: NO_STORE });
   }
   if (result === "missing") {

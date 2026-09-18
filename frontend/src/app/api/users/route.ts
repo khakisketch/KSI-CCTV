@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireRole } from "@/lib/require-role";
+import { engineWrite } from "@/lib/engine";
+import { requestActor, requireRole } from "@/lib/require-role";
 import { createUser, findUserByUsername, listUsers, type User } from "@/lib/users";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -23,6 +24,19 @@ export function toPublicUser(user: User): PublicUser {
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
+}
+
+// 사용자 관리 감사 — best-effort: 실패해도 사용자 작업을 막지 않는다.
+async function auditUserEvent(
+  event: string,
+  fields: Record<string, unknown>,
+  actor: string,
+): Promise<void> {
+  try {
+    await engineWrite("/api/audit/entry", { event, fields }, "POST", 8000, actor);
+  } catch {
+    // 감사 실패 무시 — 기존 응답 유지
+  }
 }
 
 // 관리자 전용 사용자 목록. 비밀번호 해시·솔트는 절대 응답에 포함하지 않는다.
@@ -50,6 +64,8 @@ export async function POST(req: NextRequest) {
         { status: 409, headers: NO_STORE },
       );
     }
+    const actor = await requestActor(req);
+    await auditUserEvent("user_created", { username: found.username, role: found.role }, actor);
     return NextResponse.json({ user: toPublicUser(found) }, { status: 201, headers: NO_STORE });
   }
   if (result === "exists") {

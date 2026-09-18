@@ -268,4 +268,158 @@ describe("users routes (RBAC R6)", () => {
     expect(remove.status).toBe(403);
     expect(reset.status).toBe(403);
   });
+
+  it("audits user_created with username and role without password material", async () => {
+    const engine = await import("@/lib/engine");
+    const spy = vi.spyOn(engine, "engineWrite").mockResolvedValue({ ok: true, status: 200, data: null });
+    try {
+      const password = "audit-create-pass-123";
+      const response = await createUserRoute(requestWith("http://localhost:3000/api/users", adminToken, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: "audit-op", role: "operator", password }),
+      }));
+
+      expect(response.status).toBe(201);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [path, body, method, timeoutMs, actor] = spy.mock.calls[0] as unknown as [
+        string, Record<string, unknown>, string, number, string,
+      ];
+      expect(path).toBe("/api/audit/entry");
+      expect(method).toBe("POST");
+      expect(timeoutMs).toBe(8000);
+      expect(actor).toBe("admin");
+      expect(body).toMatchObject({ event: "user_created", fields: { username: "audit-op", role: "operator" } });
+      expect(JSON.stringify(spy.mock.calls)).not.toContain(password);
+      expect(JSON.stringify(body)).not.toContain("password");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("audits user_updated with only the requested change keys", async () => {
+    const engine = await import("@/lib/engine");
+    const spy = vi.spyOn(engine, "engineWrite").mockResolvedValue({ ok: true, status: 200, data: null });
+    try {
+      const id = await userId("route-op");
+      const response = await patchUserRoute(
+        requestWith(`http://localhost:3000/api/users/${id}`, adminToken, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: "viewer" }),
+        }),
+        params(id),
+      );
+
+      expect(response.status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [path, body, method, , actor] = spy.mock.calls[0] as unknown as [
+        string, Record<string, unknown>, string, number, string,
+      ];
+      expect(path).toBe("/api/audit/entry");
+      expect(method).toBe("POST");
+      expect(actor).toBe("admin");
+      expect(body).toMatchObject({
+        event: "user_updated",
+        fields: { username: "route-op", changes: { role: "viewer" } },
+      });
+      expect((body.fields as { changes: Record<string, unknown> }).changes).not.toHaveProperty("enabled");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("audits user_deleted with username", async () => {
+    const engine = await import("@/lib/engine");
+    const spy = vi.spyOn(engine, "engineWrite").mockResolvedValue({ ok: true, status: 200, data: null });
+    try {
+      expect(await createUser("audit-gone", "viewer", VALID_PASSWORD)).toBe("created");
+      const id = await userId("audit-gone");
+      const response = await deleteUserRoute(
+        requestWith(`http://localhost:3000/api/users/${id}`, adminToken, { method: "DELETE" }),
+        params(id),
+      );
+
+      expect(response.status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [path, body, method, , actor] = spy.mock.calls[0] as unknown as [
+        string, Record<string, unknown>, string, number, string,
+      ];
+      expect(path).toBe("/api/audit/entry");
+      expect(method).toBe("POST");
+      expect(actor).toBe("admin");
+      expect(body).toMatchObject({ event: "user_deleted", fields: { username: "audit-gone" } });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("audits user_password_reset without password material", async () => {
+    const engine = await import("@/lib/engine");
+    const spy = vi.spyOn(engine, "engineWrite").mockResolvedValue({ ok: true, status: 200, data: null });
+    try {
+      const id = await userId("route-op");
+      const password = "audit-reset-pass-456";
+      const response = await resetPasswordRoute(
+        requestWith(`http://localhost:3000/api/users/${id}/reset-password`, adminToken, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password }),
+        }),
+        params(id),
+      );
+
+      expect(response.status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [path, body, method, , actor] = spy.mock.calls[0] as unknown as [
+        string, Record<string, unknown>, string, number, string,
+      ];
+      expect(path).toBe("/api/audit/entry");
+      expect(method).toBe("POST");
+      expect(actor).toBe("admin");
+      expect(body).toMatchObject({ event: "user_password_reset", fields: { username: "route-op" } });
+      expect(JSON.stringify(spy.mock.calls)).not.toContain(password);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps 201 when the audit call fails", async () => {
+    const engine = await import("@/lib/engine");
+    const spy = vi.spyOn(engine, "engineWrite").mockRejectedValue(new Error("engine down"));
+    try {
+      const response = await createUserRoute(requestWith("http://localhost:3000/api/users", adminToken, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: "audit-resilient", role: "viewer", password: VALID_PASSWORD }),
+      }));
+
+      expect(response.status).toBe(201);
+      const body = await response.json() as { user: Record<string, unknown> };
+      expect(body.user).toMatchObject({ username: "audit-resilient" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps 200 on password reset when the audit call reports failure", async () => {
+    const engine = await import("@/lib/engine");
+    const spy = vi.spyOn(engine, "engineWrite").mockResolvedValue({ ok: false, status: 0, data: null });
+    try {
+      const id = await userId("route-op");
+      const response = await resetPasswordRoute(
+        requestWith(`http://localhost:3000/api/users/${id}/reset-password`, adminToken, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: "audit-keep-pass-789" }),
+        }),
+        params(id),
+      );
+
+      expect(response.status).toBe(200);
+      expect((await response.json()).detail).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

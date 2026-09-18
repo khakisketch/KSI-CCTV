@@ -1,9 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireRole } from "@/lib/require-role";
+import { engineWrite } from "@/lib/engine";
+import { requestActor, requireRole } from "@/lib/require-role";
 import { deleteUser, findUserById, updateUser, type User } from "@/lib/users";
 
 const NO_STORE = { "Cache-Control": "no-store" };
+
+// 사용자 관리 감사 — best-effort: 실패해도 사용자 작업을 막지 않는다.
+async function auditUserEvent(
+  event: string,
+  fields: Record<string, unknown>,
+  actor: string,
+): Promise<void> {
+  try {
+    await engineWrite("/api/audit/entry", { event, fields }, "POST", 8000, actor);
+  } catch {
+    // 감사 실패 무시 — 기존 응답 유지
+  }
+}
 
 function toPublicUser(user: User) {
   return {
@@ -34,6 +48,11 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
         { status: 409, headers: NO_STORE },
       );
     }
+    const changes: { role?: string; enabled?: boolean } = {};
+    if (body?.role !== undefined) changes.role = found.role;
+    if (body?.enabled !== undefined) changes.enabled = found.enabled;
+    const actor = await requestActor(req);
+    await auditUserEvent("user_updated", { username: found.username, changes }, actor);
     return NextResponse.json({ user: toPublicUser(found) }, { headers: NO_STORE });
   }
   if (result === "missing") {
@@ -56,8 +75,14 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   const denied = await requireRole(req, "admin");
   if (denied) return denied;
   const { id } = await context.params;
+  const existing = await findUserById(id);
+  const existingUsername = existing && existing !== "error" ? existing.username : undefined;
   const result = await deleteUser(id);
   if (result === "deleted") {
+    if (existingUsername) {
+      const actor = await requestActor(req);
+      await auditUserEvent("user_deleted", { username: existingUsername }, actor);
+    }
     return NextResponse.json({ detail: "사용자를 삭제했습니다." }, { headers: NO_STORE });
   }
   if (result === "missing") {
