@@ -66,6 +66,39 @@ def test_audit_summary_blocks_high_and_critical_only() -> None:
     ]
 
 
+def _via(package: str, vector_string: object) -> dict[str, object]:
+    return {
+        "source": 1,
+        "name": package,
+        "dependency": package,
+        "title": "test advisory",
+        "url": "https://example.invalid/advisory",
+        "severity": "high",
+        "range": "*",
+        "cvss": {"score": 0, "vectorString": vector_string},
+    }
+
+
+def test_audit_summary_accepts_null_cvss_vector_string() -> None:
+    entry = _entry("high-package", "high")
+    entry["via"] = [_via("high-package", None)]
+
+    result = check_npm_audit.audit_summary(
+        _audit({"high-package": entry}),
+        "high",
+    )
+
+    assert result["blocked"] == [{"package": "high-package", "severity": "high"}]
+
+
+def test_audit_summary_rejects_non_string_cvss_vector_string() -> None:
+    entry = _entry("high-package", "high")
+    entry["via"] = [_via("high-package", 123)]
+
+    with pytest.raises(ValueError, match="via entry is malformed"):
+        check_npm_audit.audit_summary(_audit({"high-package": entry}), "high")
+
+
 def test_audit_summary_rejects_an_audit_error_response() -> None:
     with pytest.raises(ValueError, match="report version"):
         check_npm_audit.audit_summary({"message": "Invalid package tree"}, "high")

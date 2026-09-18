@@ -99,7 +99,10 @@ def audit_summary(payload: dict[str, Any], maximum: str) -> dict[str, Any]:
                     or set(source["cvss"]) != {"score", "vectorString"}
                     or not isinstance(source["cvss"]["score"], (int, float))
                     or isinstance(source["cvss"]["score"], bool)
-                    or not isinstance(source["cvss"]["vectorString"], str)
+                    or (
+                        source["cvss"]["vectorString"] is not None
+                        and not isinstance(source["cvss"]["vectorString"], str)
+                    )
                 )
             ):
                 raise ValueError(f"npm audit vulnerability via entry is malformed: {package}")
