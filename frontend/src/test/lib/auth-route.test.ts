@@ -245,3 +245,77 @@ describe("login username timing mitigation", () => {
     }
   });
 });
+
+describe("login password length cap (F1-H3a)", () => {
+  const USER_PASSWORD = "operator-pass-123";
+  let authDir = "";
+
+  function longRequest(ip: string, body: unknown) {
+    return new NextRequest("http://appliance.local/api/auth/login", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-for": ip,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  beforeEach(async () => {
+    authDir = await mkdtemp(path.join(os.tmpdir(), "ksi-login-cap-"));
+    vi.stubEnv("KSI_CCTV_WEB_AUTH_DIR", authDir);
+    vi.stubEnv("KSI_CCTV_WEB_PASSWORD", "test-password");
+    vi.stubEnv("KSI_CCTV_WEB_SECRET", "s".repeat(32));
+    vi.stubEnv("KSI_CCTV_WEB_SESSION_TTL_SEC", "604800");
+    vi.stubEnv("KSI_CCTV_TRUST_PROXY", "true");
+    passwordHashMock.mockClear();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(authDir, { recursive: true, force: true });
+  });
+
+  it("rejects an overlong password on the named-user path without scrypt", async () => {
+    expect(await createUser("op1", "operator", USER_PASSWORD)).toBe("created");
+    passwordHashMock.mockClear();
+
+    const response = await login(longRequest("10.30.0.1", { username: "op1", password: "x".repeat(1025) }));
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ detail: "사용자명 또는 비밀번호가 올바르지 않습니다." });
+    expect(passwordHashMock).not.toHaveBeenCalled();
+    expect(response.cookies.get(SESSION_COOKIE)?.value).toBeFalsy();
+  });
+
+  it("rejects an overlong password on the admin path without scrypt", async () => {
+    passwordHashMock.mockClear();
+
+    const response = await login(longRequest("10.30.0.2", { password: "x".repeat(1025) }));
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ detail: "비밀번호가 올바르지 않습니다." });
+    expect(passwordHashMock).not.toHaveBeenCalled();
+    expect(response.cookies.get(SESSION_COOKIE)?.value).toBeFalsy();
+  });
+
+  it("still counts overlong attempts against the failed-attempt limit", async () => {
+    expect(await createUser("op1", "operator", USER_PASSWORD)).toBe("created");
+    passwordHashMock.mockClear();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await login(longRequest("10.30.0.3", { username: "op1", password: "x".repeat(1025) }));
+      expect(response.status).toBe(401);
+    }
+    const blocked = await login(longRequest("10.30.0.3", { username: "op1", password: "x".repeat(1025) }));
+    expect(blocked.status).toBe(429);
+    expect(passwordHashMock).not.toHaveBeenCalled();
+  });
+
+  it("still runs scrypt for a 1024-character password (boundary)", async () => {
+    expect(await createUser("op1", "operator", USER_PASSWORD)).toBe("created");
+    passwordHashMock.mockClear();
+
+    const response = await login(longRequest("10.30.0.4", { username: "op1", password: "x".repeat(1024) }));
+    expect(response.status).toBe(401);
+    expect(passwordHashMock).toHaveBeenCalledTimes(1);
+  });
+});

@@ -23,6 +23,9 @@ export type User = {
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
+  // 개인 세션 회수용 세대 번호. 비밀번호 재설정·비활성 전환 시 증가한다.
+  // 기존 users.json에 필드가 없으면 1로 간주한다(하위호환).
+  sessionVersion: number;
 };
 
 type UsersFile = {
@@ -33,6 +36,20 @@ type UsersFile = {
 const USERS_FILE = "users.json";
 const USERS_LOCK_FILE = `${USERS_FILE}.lock`;
 const USERNAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+
+// 감사 actor 폴백("admin"/"system")과 충돌하는 예약 계정명. 소문자화 +
+// 구분자(`-`, `_`, `.`) 제거 후 비교하므로 `API-Key`, `api.key` 같은
+// 변형도 차단된다. 기존 users.json에 이미 존재하는 예약명은 읽기만
+// 허용한다(마이그레이션 없음) — 차단은 createUser에서만 수행.
+const RESERVED_USERNAMES = new Set(["admin", "system", "apikey", "unknown", "anonymous"]);
+
+function normalizeReservedUsername(username: string): string {
+  return username.toLowerCase().replace(/[-_.]/g, "");
+}
+
+function isReservedUsername(username: string): boolean {
+  return RESERVED_USERNAMES.has(normalizeReservedUsername(username));
+}
 
 function usersDirectory(): string {
   return process.env.KSI_CCTV_WEB_AUTH_DIR?.trim() || path.join(process.cwd(), "data");
@@ -59,6 +76,10 @@ function validUsername(username: unknown): username is string {
   return typeof username === "string" && USERNAME_PATTERN.test(username);
 }
 
+function validSessionVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
 function validUser(record: unknown): record is User {
   if (!record || typeof record !== "object" || Array.isArray(record)) return false;
   const candidate = record as Record<string, unknown>;
@@ -69,7 +90,9 @@ function validUser(record: unknown): record is User {
     && validBase64(candidate.salt, 16)
     && typeof candidate.enabled === "boolean"
     && typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
-    && typeof candidate.updatedAt === "number" && Number.isFinite(candidate.updatedAt);
+    && typeof candidate.updatedAt === "number" && Number.isFinite(candidate.updatedAt)
+    // sessionVersion 누락은 기존 파일 하위호환으로 허용(1로 간주).
+    && (candidate.sessionVersion === undefined || validSessionVersion(candidate.sessionVersion));
 }
 
 function parseUsersFile(value: string): UsersFile | undefined {
@@ -83,7 +106,9 @@ function parseUsersFile(value: string): UsersFile | undefined {
   const record = parsed as Record<string, unknown>;
   if (record.version !== 1 || !Array.isArray(record.users)) return undefined;
   if (!(record.users as unknown[]).every(validUser)) return undefined;
-  return record as UsersFile;
+  // sessionVersion 누락 레코드는 1로 정규화한다(하위호환).
+  const users = (record.users as User[]).map((user) => ({ ...user, sessionVersion: user.sessionVersion ?? 1 }));
+  return { version: 1, users };
 }
 
 async function readUsersFile(): Promise<UsersFile | undefined | "error"> {
@@ -120,7 +145,7 @@ export async function createUser(
   role: string,
   password: string,
 ): Promise<"created" | "exists" | "invalid" | "conflict"> {
-  if (!validUsername(username) || !validRole(role) || passwordValidationError(password)) return "invalid";
+  if (!validUsername(username) || isReservedUsername(username) || !validRole(role) || passwordValidationError(password)) return "invalid";
   return withFileLockMutation(usersDirectory(), usersLockPath(), async () => {
     const state = await readUsersFile();
     if (state === "error") return "conflict";
@@ -137,6 +162,7 @@ export async function createUser(
       enabled: true,
       createdAt: now,
       updatedAt: now,
+      sessionVersion: 1,
     });
     await persistUsers(users);
     return "created";
@@ -159,7 +185,14 @@ export async function updateUser(
     const target = users.find((user) => user.id === id);
     if (!target) return "missing";
     if (role !== undefined) target.role = role;
-    if (enabled !== undefined) target.enabled = enabled;
+    // 활성→비활성 전환 시 세션 세대를 증가시켜, 재활성화 후에도 이전
+    // 세션이 부활하지 않도록 한다(세션 회수).
+    if (enabled !== undefined) {
+      if (enabled === false && target.enabled !== false) {
+        target.sessionVersion = (target.sessionVersion ?? 1) + 1;
+      }
+      target.enabled = enabled;
+    }
     target.updatedAt = Date.now();
     await persistUsers(users);
     return "updated";
@@ -180,6 +213,8 @@ export async function resetUserPassword(
     const salt = randomBytes(16);
     target.passwordHash = (await passwordHash(password, salt)).toString("base64");
     target.salt = salt.toString("base64");
+    // 비밀번호 재설정 시 기존 세션을 무효화한다(세션 회수).
+    target.sessionVersion = (target.sessionVersion ?? 1) + 1;
     target.updatedAt = Date.now();
     await persistUsers(users);
     return "updated";

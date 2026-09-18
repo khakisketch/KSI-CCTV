@@ -197,3 +197,83 @@ describe("findUserById (RBAC R5b)", () => {
     expect(await findUserById("whatever")).toBe("error");
   });
 });
+
+describe("reserved usernames (F1-H1)", () => {
+  it("rejects each reserved username as invalid", async () => {
+    for (const username of ["admin", "system", "api-key", "api_key", "apikey", "unknown", "anonymous"]) {
+      expect(await createUser(username, "viewer", PASSWORD)).toBe("invalid");
+    }
+    expect(await listUsers()).toHaveLength(0);
+  });
+
+  it("compares case-insensitively with separator normalization", async () => {
+    for (const username of ["Admin", "ADMIN", "System", "SYSTEM", "API-KEY", "Api_Key", "APIKEY", "Unknown", "UNKNOWN", "Anonymous", "ANONYMOUS", "api.key", "a-d-m-i-n", "a_dmin"]) {
+      expect(await createUser(username, "viewer", PASSWORD)).toBe("invalid");
+    }
+    expect(await listUsers()).toHaveLength(0);
+  });
+
+  it("allows ordinary names that merely contain reserved words", async () => {
+    for (const username of ["adminuser", "administrator", "ops-admin-2", "myanonymous", "unknown2", "apikeys"]) {
+      expect(await createUser(username, "viewer", PASSWORD)).toBe("created");
+    }
+    expect(await listUsers()).toHaveLength(6);
+  });
+});
+
+describe("sessionVersion (F1-H2)", () => {
+  async function userId(username: string): Promise<string> {
+    const found = await findUserByUsername(username);
+    if (!found || found === "error") throw new Error(`user not found: ${username}`);
+    return found.id;
+  }
+
+  it("starts new users at sessionVersion 1", async () => {
+    expect(await createUser("op1", "operator", PASSWORD)).toBe("created");
+    const found = await findUserByUsername("op1");
+    if (!found || found === "error") throw new Error("user not found");
+    expect(found.sessionVersion).toBe(1);
+  });
+
+  it("bumps sessionVersion on password reset", async () => {
+    expect(await createUser("op1", "operator", PASSWORD)).toBe("created");
+    const id = await userId("op1");
+    expect(await resetUserPassword(id, OTHER_PASSWORD)).toBe("updated");
+    const refreshed = await findUserByUsername("op1");
+    if (!refreshed || refreshed === "error") throw new Error("user not found");
+    expect(refreshed.sessionVersion).toBe(2);
+    expect(await verifyUserPassword(refreshed, OTHER_PASSWORD)).toBe(true);
+  });
+
+  it("bumps sessionVersion only on the transition to disabled", async () => {
+    expect(await createUser("op1", "operator", PASSWORD)).toBe("created");
+    const id = await userId("op1");
+    expect(await updateUser(id, { enabled: false })).toBe("updated");
+    const disabled = await findUserByUsername("op1");
+    if (!disabled || disabled === "error") throw new Error("user not found");
+    expect(disabled.sessionVersion).toBe(2);
+    // Repeating disabled is not a transition — no further bump.
+    expect(await updateUser(id, { enabled: false })).toBe("updated");
+    const stillDisabled = await findUserByUsername("op1");
+    if (!stillDisabled || stillDisabled === "error") throw new Error("user not found");
+    expect(stillDisabled.sessionVersion).toBe(2);
+    // Re-enabling does not bump either; the disable already revoked old sessions.
+    expect(await updateUser(id, { enabled: true })).toBe("updated");
+    const reenabled = await findUserByUsername("op1");
+    if (!reenabled || reenabled === "error") throw new Error("user not found");
+    expect(reenabled.sessionVersion).toBe(2);
+  });
+
+  it("treats a missing sessionVersion as 1 for backward compatibility", async () => {
+    expect(await createUser("op1", "operator", PASSWORD)).toBe("created");
+    const raw = JSON.parse(await readFile(path.join(authDir, "users.json"), "utf8")) as {
+      version: number;
+      users: Record<string, unknown>[];
+    };
+    for (const user of raw.users) delete user.sessionVersion;
+    await writeFile(path.join(authDir, "users.json"), JSON.stringify(raw), "utf8");
+    const found = await findUserByUsername("op1");
+    if (!found || found === "error") throw new Error("user not found");
+    expect(found.sessionVersion ?? 1).toBe(1);
+  });
+});

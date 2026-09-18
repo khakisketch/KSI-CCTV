@@ -79,6 +79,36 @@ describe("users routes (RBAC R6)", () => {
     expect(entry).not.toHaveProperty("salt");
   });
 
+  it("never exposes sessionVersion in user DTOs (F1-H2)", async () => {
+    const list = await listUsersRoute(requestWith("http://localhost:3000/api/users", adminToken));
+    expect(list.status).toBe(200);
+    const listBody = await list.json() as { users: Record<string, unknown>[] };
+    expect(listBody.users.length).toBeGreaterThan(0);
+    for (const user of listBody.users) {
+      expect(user).not.toHaveProperty("sessionVersion");
+    }
+
+    const created = await createUserRoute(requestWith("http://localhost:3000/api/users", adminToken, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "dto-op", role: "viewer", password: VALID_PASSWORD }),
+    }));
+    expect(created.status).toBe(201);
+    expect((await created.json() as { user: Record<string, unknown> }).user).not.toHaveProperty("sessionVersion");
+
+    const id = await userId("route-op");
+    const patched = await patchUserRoute(
+      requestWith(`http://localhost:3000/api/users/${id}`, adminToken, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      }),
+      params(id),
+    );
+    expect(patched.status).toBe(200);
+    expect((await patched.json() as { user: Record<string, unknown> }).user).not.toHaveProperty("sessionVersion");
+  });
+
   it("creates a user and returns 201 without credential material", async () => {
     const response = await createUserRoute(requestWith("http://localhost:3000/api/users", adminToken, {
       method: "POST",

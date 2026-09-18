@@ -14,6 +14,9 @@ import { findUserByUsername, verifyUserPassword } from "@/lib/users";
 // Timing-channel mitigation: fixed 16-byte salt so missing/disabled/corrupted
 // usernames still pay one scrypt verification before the identical 401.
 const DUMMY_SALT = Buffer.from("0123456789abcdef", "utf8");
+// CPU 고갈 방지: scrypt에 투입하기 전 비밀번호 길이를 제한한다. 초과 시에도
+// 경로별 동일 401과 rate-limit 소비는 유지한다.
+const MAX_LOGIN_PASSWORD_LENGTH = 1024;
 
 export async function POST(req: NextRequest) {
   const trustProxy = process.env.KSI_CCTV_TRUST_PROXY?.toLowerCase() === "true";
@@ -36,6 +39,13 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const username = typeof body?.username === "string" ? body.username.trim() : "";
   const pw = typeof body?.password === "string" ? body.password : "";
+  if (pw.length > MAX_LOGIN_PASSWORD_LENGTH) {
+    loginRateLimiter.consume(source);
+    return NextResponse.json(
+      { detail: username ? "사용자명 또는 비밀번호가 올바르지 않습니다." : "비밀번호가 올바르지 않습니다." },
+      { status: 401 },
+    );
+  }
   let userId: string | undefined;
   if (username) {
     const candidate = await findUserByUsername(username);

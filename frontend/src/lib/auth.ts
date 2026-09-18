@@ -10,7 +10,7 @@ import {
   timingSafeCompare,
   withFileLockMutation,
 } from "./auth-primitives";
-import { roleForUserId } from "./users";
+import { findUserById } from "./users";
 
 export { passwordValidationError };
 
@@ -139,6 +139,9 @@ async function sessionPath(token: string): Promise<string> {
 type SessionRecord = {
   exp: number;
   userId?: string;
+  // 생성 시점의 사용자 sessionVersion. 토큰 서명 대상이 아니라 세션 파일에만
+  // 기록된다(토큰 형식 불변). 누락 시 1로 간주한다(하위호환).
+  sv?: number;
 };
 
 /**
@@ -159,9 +162,13 @@ function parseSessionRecord(raw: string): SessionRecord | undefined {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
   if (typeof record.exp !== "number" || !Number.isSafeInteger(record.exp)) return undefined;
+  if (record.sv !== undefined
+    && (typeof record.sv !== "number" || !Number.isSafeInteger(record.sv) || record.sv < 1)) return undefined;
   if (record.userId === undefined) return { exp: record.exp };
   if (typeof record.userId !== "string" || record.userId.length === 0) return undefined;
-  return { exp: record.exp, userId: record.userId };
+  return record.sv === undefined
+    ? { exp: record.exp, userId: record.userId }
+    : { exp: record.exp, userId: record.userId, sv: record.sv };
 }
 
 async function pruneExpiredSessions(now: number): Promise<void> {
@@ -293,7 +300,14 @@ export async function createSession(ttlSec: number = sessionTtlSeconds(), userId
   const credential = await currentCredential();
   if (!credential) throw new Error("authentication is not configured");
   const exp = Math.floor(Date.now() / 1000) + ttlSec;
-  const body = JSON.stringify(userId === undefined ? { exp } : { exp, userId });
+  // 개인 세션은 생성 시점의 sessionVersion을 파일에 함께 기록한다.
+  // 조회 실패·누락 시 1(하위호환 기본값)로 기록한다.
+  let sv: number | undefined;
+  if (userId !== undefined) {
+    const user = await findUserById(userId);
+    sv = user && user !== "error" ? (user.sessionVersion ?? 1) : 1;
+  }
+  const body = userId === undefined ? JSON.stringify({ exp }) : JSON.stringify({ exp, userId, sv });
   await pruneExpiredSessions(Math.floor(Date.now() / 1000));
   for (let attempt = 0; attempt < 3; attempt++) {
     const id = randomHex(32);
@@ -336,15 +350,19 @@ export async function verifySession(token: string | undefined): Promise<boolean>
 
 /**
  * 세션의 행위 주체를 해석한다. userId가 없으면(신규 admin JSON·레거시 평문
- * epoch) `{role:"admin"}`. 개인 세션은 users.json에서 역할·활성 상태를 매번
- * 재조회하므로 비활성·삭제·손상 시 null(세션 즉시 무효).
+ * epoch) `{role:"admin"}`. 개인 세션은 users.json에서 역할·활성 상태·세션
+ * 세대를 매번 재조회하므로 비활성·삭제·손상·세대 불일치 시 null(세션 즉시
+ * 무효). 비밀번호 재설정·비활성 전환은 sessionVersion을 증가시켜 이전
+ * 세션을 회수한다.
  */
 export async function sessionPrincipal(token: string | undefined): Promise<SessionPrincipal | null> {
   const record = await readValidSessionRecord(token);
   if (!record) return null;
   if (record.userId === undefined) return { role: "admin" };
-  const role = await roleForUserId(record.userId);
-  return role === undefined ? null : { role, userId: record.userId };
+  const user = await findUserById(record.userId);
+  if (!user || user === "error" || !user.enabled) return null;
+  if ((user.sessionVersion ?? 1) !== (record.sv ?? 1)) return null;
+  return { role: user.role, userId: record.userId };
 }
 
 export async function revokeSession(token: string | undefined): Promise<void> {

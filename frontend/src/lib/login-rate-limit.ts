@@ -93,6 +93,11 @@ export const loginRateLimiter = new LoginRateLimiter();
 
 export function loginSource(headers: Headers, trustProxy = false): string {
   if (!trustProxy) return "direct";
-  const forwarded = headers.get("x-real-ip") ?? headers.get("x-forwarded-for")?.split(",")[0];
+  // 단일 신뢰 프록시가 XFF에 append하는 관행(Caddy 배포와 일치): 클라이언트가
+  // 위조한 앞부분을 무시하고 프록시가 추가한 마지막 유효 IP를 사용한다.
+  const forwardedFor = headers.get("x-forwarded-for");
+  const hops = (forwardedFor ?? "").split(",").map((hop) => hop.trim()).filter((hop) => hop.length > 0);
+  const lastHop = hops.length > 0 ? hops[hops.length - 1] : undefined;
+  const forwarded = headers.get("x-real-ip") ?? lastHop;
   return (forwarded?.trim().slice(0, 128) || "proxy-unknown").replace(/[^A-Za-z0-9:._-]/g, "_");
 }

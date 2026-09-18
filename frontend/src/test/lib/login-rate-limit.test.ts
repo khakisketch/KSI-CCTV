@@ -36,7 +36,18 @@ describe("LoginRateLimiter", () => {
   it("normalizes forwarded source headers", () => {
     const headers = new Headers({ "x-forwarded-for": "192.168.1.20, 10.0.0.2" });
     expect(loginSource(headers)).toBe("direct");
-    expect(loginSource(headers, true)).toBe("192.168.1.20");
+    // 단일 신뢰 프록시가 append하는 관행에 따라 마지막 홉을 사용한다(F1-H3b).
+    expect(loginSource(headers, true)).toBe("10.0.0.2");
+  });
+
+  it("ignores a spoofed first X-Forwarded-For entry when trusting a proxy", () => {
+    expect(loginSource(new Headers({ "x-forwarded-for": "9.9.9.9, 10.0.0.5" }), true)).toBe("10.0.0.5");
+    expect(loginSource(new Headers({ "x-forwarded-for": "spoofed-client, 192.0.2.1" }), true)).toBe("192.0.2.1");
+  });
+
+  it("skips empty X-Forwarded-For entries", () => {
+    expect(loginSource(new Headers({ "x-forwarded-for": "  1.1.1.1 , , 2.2.2.2  " }), true)).toBe("2.2.2.2");
+    expect(loginSource(new Headers({ "x-forwarded-for": "9.9.9.9, 10.0.0.5" }))).toBe("direct");
   });
 
   it("evicts expired sources and caps rotating source identities", () => {
