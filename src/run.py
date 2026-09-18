@@ -25,6 +25,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.alerts.alert_manager import AlertConfig, AlertManager
 from src.cameras import CameraRepository, CredentialStore, MediaMTXClient, MediaMTXError, RtspProbe
 from src.detection.model_registry import MultiModelRegistry
+from src.events.verification_reconcile import reconcile_pending_verifications
 from src.incidents import IncidentStore
 from src.pipeline.pipeline import SafetyEvent, SafetyPipeline
 from src.policy.event_policy_engine import EventPolicyEngine
@@ -149,6 +150,12 @@ def build_pipeline(config: AppConfig) -> tuple[SafetyPipeline, AlertManager, Mul
         event_path,
         retention_days=int(storage_cfg.get("event_retention_days", 30)),
     )
+    # 하드 크래시 잔여분: durable 저장소에 pending으로 남은 VLM 검증을
+    # 시작 시 unverified(RESTART_LOST)로 확정한다(fail-open 보존, 억제 금지).
+    # graceful stop 잔여분은 파이프라인이 이미 FORCED_SHUTDOWN으로 확정한다.
+    reconciled = reconcile_pending_verifications(event_repository)
+    if reconciled > 0:
+        logger.info("미확정 VLM 검증 %d건을 unverified(RESTART_LOST)로 확정.", reconciled)
     incident_store = IncidentStore(event_path)
     incident_store.validate_schema()
     tracking_cfg = config.get("tracking", default={}) or {}
