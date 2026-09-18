@@ -43,11 +43,14 @@ const ADMIN_NAV = [
   { href: "/audit", label: "감사 로그", icon: ScrollText },
   { href: "/settings", label: "설정", icon: Settings },
 ];
-const NAV = [...INSTALLER_NAV, ...ADMIN_NAV];
 // Four direct links plus More keeps the mobile navigation at five touch targets.
 // The incident queue, rather than investigation history, is the time-sensitive operator flow.
-const PRIMARY_NAV = [INSTALLER_NAV[0], INSTALLER_NAV[1], INSTALLER_NAV[2], INSTALLER_NAV[3]];
-const SECONDARY_NAV = [INSTALLER_NAV[4], INSTALLER_NAV[5], INSTALLER_NAV[6], INSTALLER_NAV[7], ...ADMIN_NAV];
+const DEFAULT_PRIMARY_NAV = [INSTALLER_NAV[0], INSTALLER_NAV[1], INSTALLER_NAV[2], INSTALLER_NAV[3]];
+const DEFAULT_SECONDARY_NAV = [INSTALLER_NAV[4], INSTALLER_NAV[5], INSTALLER_NAV[6], INSTALLER_NAV[7], ...ADMIN_NAV];
+// R7: operator/viewer는 조회 5항목만 노출(설치 진행·진단·인수인계·모델·감사·설정 숨김).
+const READONLY_HREFS = new Set(["/", "/incidents", "/live", "/cameras", "/events"]);
+
+export type ShellRole = "admin" | "operator" | "viewer";
 
 function isActiveRoute(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
@@ -61,15 +64,23 @@ export function AppShell({
   devAuthBypass = false,
   mode = "document",
   statusStrip,
+  role = "admin",
 }: {
   children: React.ReactNode;
   authMode: "open" | "environment" | "local" | "error";
   devAuthBypass?: boolean;
   mode?: ShellMode;
   statusStrip?: React.ReactNode;
+  role?: ShellRole;
 }) {
   const pathname = usePathname();
-  const currentPage = NAV.find(({ href }) => isActiveRoute(pathname, href));
+  const visibleInstallerNav = role === "admin" ? INSTALLER_NAV : INSTALLER_NAV.filter(({ href }) => READONLY_HREFS.has(href));
+  const visibleAdminNav = role === "admin" ? ADMIN_NAV : [];
+  const visibleNav = [...visibleInstallerNav, ...visibleAdminNav];
+  // 모바일 PRIMARY/SECONDARY는 필터 결과에서 파생한다.
+  const primaryNav = role === "admin" ? DEFAULT_PRIMARY_NAV : visibleInstallerNav.slice(0, 4);
+  const secondaryNav = role === "admin" ? DEFAULT_SECONDARY_NAV : [...visibleInstallerNav.slice(4), ...visibleAdminNav];
+  const currentPage = visibleNav.find(({ href }) => isActiveRoute(pathname, href));
   if (pathname === "/login") return <>{children}</>;
   return (
     <div className="flex h-dvh overflow-hidden" data-wall-shell>
@@ -82,7 +93,7 @@ export function AppShell({
           <span className="font-semibold tracking-tight">KSI-CCTV</span>
         </div>
         <nav className="flex-1 overflow-y-auto space-y-0.5 p-2" aria-label="주요 탐색">
-          {INSTALLER_NAV.map(({ href, label, icon: Icon }) => {
+          {visibleInstallerNav.map(({ href, label, icon: Icon }) => {
             const active = isActiveRoute(pathname, href);
             return (
               <Link
@@ -101,24 +112,28 @@ export function AppShell({
               </Link>
             );
           })}
-          <p className="px-3 pt-4 pb-1 text-xs font-medium text-muted-foreground">관리자</p>
-          {ADMIN_NAV.map(({ href, label, icon: Icon }) => {
-            const active = isActiveRoute(pathname, href);
-            return (
-              <Link
-                key={href}
-                href={href}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                  active ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
-                )}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span className="truncate" style={{ wordBreak: "keep-all" }}>{label}</span>
-              </Link>
-            );
-          })}
+          {visibleAdminNav.length > 0 && (
+            <>
+              <p className="px-3 pt-4 pb-1 text-xs font-medium text-muted-foreground">관리자</p>
+              {visibleAdminNav.map(({ href, label, icon: Icon }) => {
+                const active = isActiveRoute(pathname, href);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                      active ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="truncate" style={{ wordBreak: "keep-all" }}>{label}</span>
+                  </Link>
+                );
+              })}
+            </>
+          )}
         </nav>
       </aside>
 
@@ -175,7 +190,7 @@ export function AppShell({
           {children}
         </main>
         <nav data-wall-hide className="flex shrink-0 items-stretch border-t bg-background md:hidden" aria-label="주요 메뉴">
-          {PRIMARY_NAV.map(({ href, label, icon: Icon }) => {
+          {primaryNav.map(({ href, label, icon: Icon }) => {
             const active = isActiveRoute(pathname, href);
             return (
               <Link
@@ -197,7 +212,7 @@ export function AppShell({
               aria-label="더보기 메뉴"
               className={cn(
                 "flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                SECONDARY_NAV.some(({ href }) => isActiveRoute(pathname, href))
+                secondaryNav.some(({ href }) => isActiveRoute(pathname, href))
                   ? "text-primary"
                   : "text-muted-foreground",
               )}
@@ -206,7 +221,7 @@ export function AppShell({
               <span>더보기</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent side="top" align="end" sideOffset={8} className="w-48">
-              {SECONDARY_NAV.map(({ href, label, icon: Icon }) => (
+              {secondaryNav.map(({ href, label, icon: Icon }) => (
                 <DropdownMenuItem
                   key={href}
                   render={<Link href={href} />}

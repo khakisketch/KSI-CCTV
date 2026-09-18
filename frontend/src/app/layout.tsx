@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
+import { cookies } from "next/headers";
+
 import { AppShell } from "@/components/app-shell";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { developmentAuthBypassState } from "@/lib/auth-mode";
-import { getAuthStatus } from "@/lib/auth";
+import { getAuthStatus, SESSION_COOKIE, sessionPrincipal } from "@/lib/auth";
 
 import "./globals.css";
 
@@ -20,6 +22,10 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const devAuthBypass = developmentAuthBypassState().status === "active";
   const { mode: authMode } = await getAuthStatus();
+  // R7: 서버에서 세션 주체를 해석해 내비게이션 역할을 전달한다.
+  // open 모드·개발 bypass·미인증 상태는 기존 표시 유지(admin 기본값).
+  const principal = await sessionPrincipal((await cookies()).get(SESSION_COOKIE)?.value);
+  const role = principal?.role ?? "admin";
   return (
     <html
       lang="ko"
@@ -28,7 +34,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     >
       <body className="min-h-full">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-          <AppShell authMode={authMode} devAuthBypass={devAuthBypass}>{children}</AppShell>
+          <AppShell authMode={authMode} devAuthBypass={devAuthBypass} role={role}>{children}</AppShell>
           <Toaster />
         </ThemeProvider>
       </body>
