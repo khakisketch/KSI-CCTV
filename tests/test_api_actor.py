@@ -189,5 +189,61 @@ class TestActorMiddleware(unittest.TestCase):
         self.assertTrue(all(e["actor"] == "system" for e in actions), actions)
 
 
+@unittest.skipUnless(_HAS_API, "fastapi/httpx 미설치 — skip")
+class TestIncidentActionActorRecord(unittest.TestCase):
+    """R5a2: API 조치 핸들러가 `current_actor()`를 조치 기록 actor로 저장."""
+
+    def setUp(self):
+        set_actor("system")
+
+    def tearDown(self):
+        set_actor("system")
+
+    def _make_client(self, tmp: str):
+        from src.incidents import IncidentStore
+        from src.storage.sqlite_events import SQLiteEventRepository
+
+        store = IncidentStore(Path(tmp) / "incidents.db")
+        events = SQLiteEventRepository(Path(tmp) / "events.db")
+        events.record({"event_id": "event-1", "event_type": "fire"})
+        client = TestClient(create_app(incident_store=store, event_repository=events))
+        return client, store, events
+
+    def test_header_actor_is_stored_in_incident_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client, store, events = self._make_client(tmp)
+            try:
+                with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+                    response = client.post(
+                        "/api/incidents/event-1/actions",
+                        headers={"X-API-Key": _KEY, "X-KSI-Actor": "operator-1"},
+                        json={"status": "acknowledged"},
+                    )
+                    self.assertEqual(response.status_code, 200, response.text)
+                    actions = store.actions("event-1")
+            finally:
+                store.close()
+                events.close()
+        self.assertEqual(response.json()["actions"][0]["actor"], "operator-1")
+        self.assertEqual(actions[0]["actor"], "operator-1")
+
+    def test_missing_header_action_actor_is_system(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client, store, events = self._make_client(tmp)
+            try:
+                with patch.dict(os.environ, {"KSI_CCTV_API_KEY": _KEY}):
+                    response = client.post(
+                        "/api/incidents/event-1/actions",
+                        headers={"X-API-Key": _KEY},
+                        json={"status": "acknowledged"},
+                    )
+                    self.assertEqual(response.status_code, 200, response.text)
+                    actions = store.actions("event-1")
+            finally:
+                store.close()
+                events.close()
+        self.assertEqual(actions[0]["actor"], "system")
+
+
 if __name__ == "__main__":
     unittest.main()

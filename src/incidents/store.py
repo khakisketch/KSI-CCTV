@@ -141,6 +141,7 @@ class IncidentStore:
         status: str,
         disposition: str | None = None,
         note: str = "",
+        actor: str | None = None,
     ) -> dict[str, Any]:
         if status not in INCIDENT_STATUSES:
             raise ValueError("unsupported incident status")
@@ -180,10 +181,10 @@ class IncidentStore:
             )
             connection.execute(
                 """
-                INSERT INTO incident_actions(event_id, previous_status, status, disposition, note, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO incident_actions(event_id, previous_status, status, disposition, note, actor, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (event_id, previous_status, status, selected_disposition, note, now),
+                (event_id, previous_status, status, selected_disposition, note, actor, now),
             )
         incident = self.get(event_id)
         assert incident is not None
@@ -195,7 +196,7 @@ class IncidentStore:
         with self._lock:
             rows = self._connect().execute(
                 """
-                SELECT previous_status, status, disposition, note, created_at
+                SELECT previous_status, status, disposition, note, actor, created_at
                 FROM incident_actions WHERE event_id = ?
                 ORDER BY action_id DESC LIMIT ?
                 """,
@@ -207,7 +208,8 @@ class IncidentStore:
                 "status": str(row[1]),
                 "disposition": str(row[2]) if row[2] else None,
                 "note": str(row[3]),
-                "created_at": str(row[4]),
+                "actor": str(row[4]) if row[4] else None,
+                "created_at": str(row[5]),
             }
             for row in rows
         ]
@@ -272,6 +274,7 @@ class IncidentStore:
                         status TEXT NOT NULL,
                         disposition TEXT,
                         note TEXT NOT NULL,
+                        actor TEXT,
                         created_at TEXT NOT NULL
                     );
                     CREATE INDEX IF NOT EXISTS idx_incident_actions_event
@@ -291,6 +294,11 @@ class IncidentStore:
                     ):
                         if name not in existing_columns:
                             connection.execute(f"ALTER TABLE incidents ADD COLUMN {name} {definition}")
+                    existing_action_columns = {
+                        str(row[1]) for row in connection.execute("PRAGMA table_info(incident_actions)")
+                    }
+                    if "actor" not in existing_action_columns:
+                        connection.execute("ALTER TABLE incident_actions ADD COLUMN actor TEXT")
                     if INCIDENT_SCHEMA_VERSION not in applied:
                         connection.execute(
                             "INSERT INTO incident_schema_migrations(version, applied_at) VALUES (?, ?)",

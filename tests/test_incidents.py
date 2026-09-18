@@ -210,3 +210,66 @@ def test_alert_manager_creates_and_updates_camera_health_incidents():
         }),
     ]
     assert manager.incident_store.recovered == [("cam-01", "recovery-1")]
+
+
+def test_act_records_actor_and_returns_it_in_actions():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = IncidentStore(Path(tmp) / "events.db")
+        store.act("event-actor", status="acknowledged", note="확인", actor="operator-1")
+        actions = store.actions("event-actor")
+
+    assert len(actions) == 1
+    assert actions[0]["actor"] == "operator-1"
+
+
+def test_act_without_actor_defaults_to_none():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = IncidentStore(Path(tmp) / "events.db")
+        incident = store.act("event-no-actor", status="acknowledged", note="확인")
+        actions = store.actions("event-no-actor")
+
+    assert len(actions) == 1
+    assert actions[0]["actor"] is None
+    assert incident["actions"][0]["actor"] is None
+
+
+def test_legacy_action_table_gains_actor_column_on_migration():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "events.db"
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE incidents (
+                    event_id TEXT PRIMARY KEY, category TEXT NOT NULL DEFAULT 'safety', camera_id TEXT,
+                    source_event_type TEXT, status TEXT NOT NULL, disposition TEXT, acknowledged_at TEXT,
+                    resolved_at TEXT, recovered_at TEXT, recovery_event_id TEXT, updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE incident_actions (
+                    action_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL,
+                    previous_status TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    disposition TEXT,
+                    note TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO incident_actions(event_id, previous_status, status, disposition, note, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                ("legacy-1", "new", "acknowledged", None, "구 스키마 기록", "2026-09-18T00:00:00+00:00"),
+            )
+
+        store = IncidentStore(path)
+        actions = store.actions("legacy-1")
+        store.act("legacy-1", status="in_progress", note="이관 후 조치", actor="operator-2")
+        migrated = store.actions("legacy-1")
+        store.close()
+
+    assert actions[0]["actor"] is None
+    assert [item["actor"] for item in migrated] == ["operator-2", None]

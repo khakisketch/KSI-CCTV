@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from src.api import service
+from src.api.actor import current_actor
 from src.api.auth import check_api_key
 
 
@@ -107,6 +108,7 @@ def register(app, auth) -> None:
                 status=body.status,
                 disposition=body.disposition,
                 note=body.note.strip(),
+                actor=current_actor(),
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
