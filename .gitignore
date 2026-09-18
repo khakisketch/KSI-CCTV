@@ -67,6 +67,8 @@ desktop.ini
 *.y4m
 *.nut
 backups/
+# 로컬 에이전트 런타임 상태 — strict gate clean-worktree 전제
+.opencode/
 frontend/playwright-report/
 frontend/test-results/
 frontend/data/
