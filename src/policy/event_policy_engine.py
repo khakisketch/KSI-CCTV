@@ -107,9 +107,8 @@ class EventPolicyEngine:
             policy_map = {}
 
         allowed_runtimes = runtimes or {"detection"}
-        explicit = enabled_events is not None
         defaults = profile.get("default_events") if isinstance(profile, dict) else None
-        names = list(enabled_events) if explicit else (
+        names = list(enabled_events) if enabled_events is not None else (
             list(defaults)
             if isinstance(defaults, list)
             else [

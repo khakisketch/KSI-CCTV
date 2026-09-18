@@ -55,7 +55,7 @@ class PoseOnnxDetector:
         self.session: ort.InferenceSession | None = None
         self.input_name = ""
         self.output_names: list[str] = []
-        self.input_dtype = np.float32
+        self.input_dtype: Any = np.float32
         self.error: str | None = None
         self.metrics = ModelMetrics(name="pose_onnx")
         if self.enabled:

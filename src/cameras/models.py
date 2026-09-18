@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import re
 import secrets
-from typing import Literal
+from typing import Final, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.utils.config import mask_url
 
-CAMERA_SCHEMA_VERSION = 1
+CAMERA_SCHEMA_VERSION: Final = 1
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
@@ -44,7 +44,7 @@ class CameraZone(BaseModel):
 class CameraInput(BaseModel):
     """Installer input. Password is accepted only to move it into CredentialStore."""
 
-    schema_version: Literal[CAMERA_SCHEMA_VERSION] = CAMERA_SCHEMA_VERSION
+    schema_version: Literal[1] = CAMERA_SCHEMA_VERSION
     id: str | None = None
     name: str = Field(min_length=1, max_length=128)
     location: str = Field(default="", max_length=256)
@@ -109,7 +109,7 @@ class CameraInput(BaseModel):
 class CameraConfig(BaseModel):
     """Persisted camera record. Credentials are referenced, never embedded."""
 
-    schema_version: Literal[CAMERA_SCHEMA_VERSION] = CAMERA_SCHEMA_VERSION
+    schema_version: Literal[1] = CAMERA_SCHEMA_VERSION
     id: str
     name: str
     location: str = ""

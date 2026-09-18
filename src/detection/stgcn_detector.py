@@ -46,8 +46,9 @@ class STGCNOnnxClassifier:
             device,
         )
         self.session: ort.InferenceSession | None = None
-        self.input_name, self.error = "", None
-        self.input_dtype = np.float32
+        self.input_name: str = ""
+        self.error: str | None = None
+        self.input_dtype: Any = np.float32
         self.metrics = ModelMetrics(name="stgcn_onnx")
         if self.enabled:
             self._init_session()

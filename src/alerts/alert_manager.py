@@ -215,12 +215,6 @@ class AlertManager:
         )
         self._outbox.start()
 
-        # Batch buffer
-        self._batch_buffer: list[SafetyEvent] = []
-        self._batch_timer: float | None = None
-        self.batch_flush_interval = config.batch_flush_interval
-        self.batch_max_size = config.batch_max_size
-
         logger.info("AlertManager init complete (OutboxWorker included)")
 
         # Image cleanup throttle

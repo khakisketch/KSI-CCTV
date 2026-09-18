@@ -513,7 +513,7 @@ def _register_disabled_profile(
 
 
 def _upload_model_from_source(
-    write_source: Callable[[Path], None],
+    write_source: Callable[[Path], Any],
     source_size: int,
     original_filename: str,
     metadata: dict[str, Any] | None = None,

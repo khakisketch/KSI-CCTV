@@ -588,6 +588,10 @@ class SafetyPipeline:
                 if not isinstance(results, list):
                     results = [self.vlm_provider.analyze(frames[0], prompt)]
                 result = results[0] if results else None
+                if result is None:
+                    # 빈 VLM 결과는 기존 fail-open 경로로 흡수한다.
+                    # (상위 except Exception이 VLM_ERROR로 처리 — AttributeError와 동일 경로)
+                    raise RuntimeError("VLM returned no result")
 
                 # 기본 필드 복사
                 event.description = result.description
@@ -1159,7 +1163,7 @@ class SafetyPipeline:
         """카메라 하나를 교체 적용하고 실패 시 이전 캡처를 복구한다."""
         with self._camera_runtime_lock:
             old = self.camera_manager.get_camera(camera_id)
-            old_args = None
+            old_args: dict[str, Any] | None = None
             old_profile = self._camera_profiles.get(camera_id)
             if old is not None:
                 old_args = {
@@ -1471,7 +1475,8 @@ class SafetyPipeline:
 
             # 프레임 차분
             diff = cv2.absdiff(prev_gray, gray)
-            motion_score = float(np.mean(diff)) / 255.0
+            diff_any: Any = diff
+            motion_score = float(np.mean(diff_any)) / 255.0
             self._last_frame_gray[camera_id] = gray
             return motion_score >= self.motion_threshold
         except Exception as exc:
@@ -2284,16 +2289,16 @@ class SafetyPipeline:
                 )
                 if not submitted:
                     # 캐시 hit 또는 drop → VLM 없이 즉시 콜백
-                    for callback in self.alert_callbacks:
+                    for alert_callback in self.alert_callbacks:
                         try:
-                            callback(event)
+                            alert_callback(event)
                         except Exception as e:
                             logger.error(f"알람 콜백 오류: {e}")
             else:
                 # VLM 불필요(legacy 즉시 알림 등) → alert 콜백 즉시 호출.
-                for callback in self.alert_callbacks:
+                for alert_callback in self.alert_callbacks:
                     try:
-                        callback(event)
+                        alert_callback(event)
                     except Exception as e:
                         logger.error(f"알람 콜백 오류: {e}")
                 # baseline 동작 복원: 즉시 알림 이벤트(legacy _emit_event의 fire/smoke/fall 등)도

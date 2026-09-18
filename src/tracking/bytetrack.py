@@ -6,6 +6,7 @@ import time
 from collections import deque
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 
@@ -187,7 +188,7 @@ class ByteTrackManager:
             "last_update": None,
         }
 
-    def _tracker(self, camera_id: str) -> tuple[object, int]:
+    def _tracker(self, camera_id: str) -> tuple[Any, int]:
         with self._lock:
             existing = self._trackers.get(camera_id)
             if existing is not None:

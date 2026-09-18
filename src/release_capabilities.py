@@ -12,7 +12,7 @@ EXPERIMENTAL_EVENT_CAPABILITIES = frozenset({
 })
 
 # A qualified release must add an event here in source control. This release has none.
-RELEASE_QUALIFIED_EXPERIMENTAL_EVENTS = frozenset()
+RELEASE_QUALIFIED_EXPERIMENTAL_EVENTS: frozenset[str] = frozenset()
 
 UNQUALIFIED_EXPERIMENTAL_REASON = (
     "이 시험 기능은 이번 릴리스에서 자격 검증되지 않아 선택하거나 실행할 수 없습니다."

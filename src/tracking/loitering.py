@@ -154,9 +154,9 @@ class LoiteringMonitor:
             for key in list(self._episodes):
                 if key[0] == camera_id:
                     self._episodes.pop(key, None)
-            for key in list(self._last_emitted):
-                if key[0] == camera_id:
-                    self._last_emitted.pop(key, None)
+            for emitted_key in list(self._last_emitted):
+                if emitted_key[0] == camera_id:
+                    self._last_emitted.pop(emitted_key, None)
             self._stats.pop(camera_id, None)
 
     def stats(self, camera_id: str) -> dict[str, int]:

@@ -6,7 +6,7 @@
 #   - shell syntax: 배포/검증 스크립트의 bash 파싱 오류 차단
 #   - coverage   : pytest-cov 있으면 50% 하한으로 차단
 #                  (커버리지 하한의 유일한 집행점. release gate는 무실패+skip accounting만
-#                   주장하고 커버리지는 측정하지 않는다 — scripts/verify_release_candidate.sh [1/9] 참고)
+#                   주장하고 커버리지는 측정하지 않는다 — scripts/verify_release_candidate.sh [1/8] 참고)
 #   - mypy       : advisory(비차단) — 미타입 레거시 점진 도입
 set -euo pipefail
 

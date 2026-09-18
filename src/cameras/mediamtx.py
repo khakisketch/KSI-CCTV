@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -79,11 +80,12 @@ class MediaMTXClient:
             name = str(item.get("name", ""))
             if not item.get("ready") or not _CAMERA_ID.fullmatch(name):
                 continue
-            tracks = []
+            tracks: list[dict[str, Any]] = []
             for track in item.get("tracks2", []) or []:
                 if not isinstance(track, dict):
                     continue
-                props = track.get("codecProps") if isinstance(track.get("codecProps"), dict) else {}
+                raw_props = track.get("codecProps")
+                props: dict[str, Any] = raw_props if isinstance(raw_props, dict) else {}
                 tracks.append({
                     "codec": str(track.get("codec", "")),
                     "width": props.get("width"),

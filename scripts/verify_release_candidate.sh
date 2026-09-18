@@ -121,7 +121,7 @@ fi
     docker compose version
 } > "$ARTIFACT_DIR/runner-metadata.txt"
 
-printf '%s\n' '[1/9] Python lint and test suite'
+printf '%s\n' '[1/8] Python lint and test suite'
 # 커버리지 하한은 fast gate(scripts/test.sh, pytest-cov 설치 시 50%)에서만 집행한다.
 # 이 release gate는 무실패 + skip accounting을 주장하고 커버리지는 측정하지 않는다.
 "$PYTHON" -m ruff check src tests scripts installer
@@ -132,7 +132,7 @@ printf '%s\n' '[1/9] Python lint and test suite'
     --json-out "$ARTIFACT_DIR/skip-summary.json" \
     --pytest-json-out "$ARTIFACT_DIR/pytest-summary.json"
 
-printf '%s\n' '[2/9] Shell syntax'
+printf '%s\n' '[2/8] Shell syntax'
 for script in scripts/*.sh; do
     bash -n "$script"
 done
@@ -140,7 +140,7 @@ bash -n installer/ksi-cctv-appliance-launcher
 bash -n installer/install_host_tools.sh
 
 if command -v shellcheck >/dev/null 2>&1; then
-    printf '%s\n' '[3/9] ShellCheck'
+    printf '%s\n' '[3/8] ShellCheck'
     shellcheck --shell=bash scripts/*.sh installer/ksi-cctv-appliance-launcher installer/install_host_tools.sh
 elif [ "$STRICT" -eq 1 ]; then
     printf 'error: shellcheck is required in --strict mode\n' >&2
@@ -150,7 +150,7 @@ else
 fi
 
 if "$PYTHON" -m mypy --version >/dev/null 2>&1; then
-    printf '%s\n' '[4/9] Core type check'
+    printf '%s\n' '[4/8] Core type check'
     if ! "$PYTHON" -m mypy --follow-imports=skip \
         src/api/app.py src/api/auth.py src/api/service.py src/run.py src/incidents/store.py \
         src/storage/schema.py src/storage/sqlite_events.py src/storage/sqlite_observations.py \
@@ -170,7 +170,7 @@ else
     printf '%s\n' 'warning: mypy unavailable; install requirements-dev.txt on the release runner'
 fi
 
-printf '%s\n' '[5/9] Compose contracts'
+printf '%s\n' '[5/8] Compose contracts'
 # This deterministic key is only scoped to Compose interpolation; it is not a deployment secret.
 COMPOSE_RENDER_CAPTURE_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 KSI_CCTV_CAPTURE_KEY="$COMPOSE_RENDER_CAPTURE_KEY" docker compose -f docker-compose.yml config --quiet
@@ -178,7 +178,7 @@ KSI_CCTV_CAPTURE_KEY="$COMPOSE_RENDER_CAPTURE_KEY" docker compose -f docker-comp
 KSI_CCTV_CAPTURE_KEY="$COMPOSE_RENDER_CAPTURE_KEY" docker compose -f docker-compose.yml -f docker-compose.diagnostics.yml config --quiet
 "$PYTHON" installer/verify_systemd_unit.py
 
-printf '%s\n' '[6/9] Python dependency audit'
+printf '%s\n' '[6/8] Python dependency audit'
 if "$PYTHON" -m pip_audit --version >/dev/null 2>&1; then
     set +e
     "$PYTHON" -m pip_audit -r requirements.txt --format json > "$ARTIFACT_DIR/pip-audit-runtime.json"
@@ -211,7 +211,7 @@ else
     printf '%s\n' 'warning: pip-audit unavailable; use --strict on the release runner'
 fi
 
-printf '%s\n' '[7/9] Frontend unit/build gate'
+printf '%s\n' '[7/8] Frontend unit/build gate'
 (
     cd frontend
     npm ci --no-audit
@@ -256,7 +256,7 @@ printf '%s\n' '[7/9] Frontend unit/build gate'
     fi
 )
 
-printf '%s\n' '[9/9] Release contract regression coverage included in Python suite'
+printf '%s\n' '[8/8] Release contract regression coverage included in Python suite'
 # 실행 모드를 그대로 말한다. 두 경우에 같은 문구를 내면 보관된 로그만 보고
 # strict 실행을 개발용 실행으로 오해한다(증적 판독 오류).
 if [ "$STRICT" -eq 1 ]; then

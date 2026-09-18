@@ -1,6 +1,7 @@
 """Atomic JSON camera repository with optimistic revision control."""
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import shutil
@@ -63,7 +64,7 @@ class CameraRepository:
         self,
         camera_id: str,
         profile: str,
-        enabled_events: list[str],
+        enabled_events: builtins.list[str],
         expected_revision: int | None = None,
     ) -> tuple[int, CameraConfig]:
         """Atomically merge policy fields without overwriting concurrent camera edits."""

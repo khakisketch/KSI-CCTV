@@ -4,6 +4,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import cv2
 import numpy as np
@@ -132,9 +133,10 @@ class TamperMonitor:
     def _metrics(frame: np.ndarray) -> dict[str, float]:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.resize(gray, (160, 120))
+        gray_any: Any = gray
         return {
-            "brightness": float(np.mean(gray)),
-            "contrast": float(np.std(gray)),
+            "brightness": float(np.mean(gray_any)),
+            "contrast": float(np.std(gray_any)),
             "sharpness": float(cv2.Laplacian(gray, cv2.CV_64F).var()),
         }
 
