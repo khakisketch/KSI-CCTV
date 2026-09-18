@@ -1,6 +1,6 @@
 # Product State - KSI-CCTV
 
-Updated: 2026-09-16
+Updated: 2026-09-18
 
 ## Goal
 
@@ -16,12 +16,12 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 | M4 | 코드 구조화 7-Unit (U1–U8) — SSOT 정리·legacy 격리·스토리지 단일진실·prune 수정 | done | 커밋 `c7c428f`, `9b18b80` |
 | M5 | 구조 작업 트랙 (U9–U12) — http.server 제거·legacy opt-in·라우터 5모듈 분할 | done | 커밋 `37c9090`–`8d6c44f`, `routes/` 66 라우트 불변 |
 | M6 | 후속 개선 — 레거시 cameras.json 이관 도구·문서 | done | 커밋 `62f647b`, `tests/test_migrate_legacy_cameras.py` |
-| M7 | 출고 증거 — ARM64 실측(CUDA·실카메라/HLS)·soak·법률·번들 서명 provenance·strict gate | pending | `docs/release-gate.md` 미해소 blocker 목록 |
+| M7 | 출고 증거 — ARM64 실측(CUDA·실카메라/HLS)·soak·법률·번들 서명 provenance·strict gate | in_progress | strict gate PASS(2026-09-18, `4b2d94e`, attestation `passed:true`); 잔여: ARM64 실측·법률·서명 |
 
 ## Current slice
 
-- Name: 잔여 개선 마무리 (레거시 이관·문서·상태 SSOT)
-- Acceptance (user-visible end-to-end): (1) 레거시 `config/cameras.json` → managed `config/cameras/` 이관이 도구로 제공되고 dry-run/`--apply`가 검증됨 (2) 전체 테스트 스위트 green (3) 상태 SSOT가 최신으로 유지됨
+- Name: M7 출고 증거 — 소프트웨어 게이트 완료, 하드웨어·법률 증거 대기
+- Acceptance (user-visible end-to-end): (1) strict release gate가 클린 커밋에서 통과 — 달성(`4b2d94e`, attestation `passed:true`·evidence 5종) (2) DGX Spark ARM64 실측(CUDA provider·실 RTSP/HLS·전원/복구·채널별 soak) (3) 법률 승인·4-image 서명 provenance
 - Plan ledger: `docs/superpowers/plans/2026-09-13-ksi-code-hardening.md`
 
 ## Next slices
@@ -33,3 +33,4 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 - [2026-09-16] mypy advisory 44건(게이트 비차단, 점진 해소 대상) - source(test.sh) - not blocking
 - [2026-09-16] VLM `runtime_qualified=false` — qwen3-vl 214s/frame으로 timeout 초과(소형/양자화 모델 또는 비동기 경로 선행 필요) - source(release-gate) - not blocking
 - [2026-09-16] 라우터 분할 잔여 미세 정리(모듈 내부 헬퍼 결합, `_build_checker`/`_runtime_event_catalog` 주입 구조) - source(review) - not blocking
+- [2026-09-18] release gate 로그 라벨 불일치 — `[8/9]` 헤더 없이 `[9/9]`로 점프(표기 문제, 기능 영향 없음) - source(gate) - not blocking
