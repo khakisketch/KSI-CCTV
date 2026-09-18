@@ -35,3 +35,7 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 
 - [2026-09-16] VLM `runtime_qualified=false` — qwen3-vl 214s/frame으로 timeout 초과(소형/양자화 모델 또는 비동기 경로 선행 필요) - source(release-gate) - not blocking
 - [2026-09-16] 라우터 분할 잔여 미세 정리(모듈 내부 헬퍼 결합, `_build_checker`/`_runtime_event_catalog` 주입 구조) - source(review) - not blocking
+- [2026-09-18] 로그아웃/접속보호 쿠키 삭제 플래그 불일치(Secure·sameSite 미정합) — 서버 revoke가 권위이나 위생 정리 권장 - source(review) - not blocking
+- [2026-09-18] `roles.ts` `ADMIN_STAR_PREFIXES` 비경계 prefix(`/api/config`가 `/api/configXYZ`에도 매칭) — 안전 방향 과잉 차단, 경계 정리 권장 - source(review) - not blocking
+- [2026-09-18] `requestActor` 이중 읽기(TOCTOU) — 비활성 전환 순간 감사 actor가 `system`으로 기록될 수 있음(일시적) - source(review) - not blocking
+- [2026-09-18] 테스트 갭 — proxy↔requireRole 정합 매트릭스(26개 라우트)·proxy 수준 비활성/삭제 세션 회귀 테스트 부재 - source(review) - not blocking
