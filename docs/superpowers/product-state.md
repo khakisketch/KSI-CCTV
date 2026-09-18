@@ -33,9 +33,5 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 
 ## Backlog
 
-- [2026-09-16] mypy advisory 44건(게이트 비차단, 점진 해소 대상) - source(test.sh) - not blocking
 - [2026-09-16] VLM `runtime_qualified=false` — qwen3-vl 214s/frame으로 timeout 초과(소형/양자화 모델 또는 비동기 경로 선행 필요) - source(release-gate) - not blocking
 - [2026-09-16] 라우터 분할 잔여 미세 정리(모듈 내부 헬퍼 결합, `_build_checker`/`_runtime_event_catalog` 주입 구조) - source(review) - not blocking
-- [2026-09-18] release gate 로그 라벨 불일치 — `[8/9]` 헤더 없이 `[9/9]`로 점프(표기 문제, 기능 영향 없음) - source(gate) - not blocking
-- [2026-09-18] 로그인 username 타이밍 부채널 — 존재하지 않는 사용자명은 scrypt 검증을 건너뛰어 응답 시간 차이로 사용자명 존재 여부를 추측할 수 있음(더미 비교 검토) - source(review) - not blocking
-- [2026-09-18] 사용자 CRUD 감사 기록 미포함 — `/api/users/*` 관리 작업이 감사 로그에 별도 기록되지 않음(추후 검토) - source(review) - not blocking
