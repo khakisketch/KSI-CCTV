@@ -1,7 +1,17 @@
-import { chmod, lstat, mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { promisify } from "node:util";
+import { randomBytes } from "node:crypto";
+
+import {
+  passwordHash,
+  passwordValidationError,
+  prepareDirectory,
+  randomHex,
+  timingSafeCompare,
+  withFileLockMutation,
+} from "./auth-primitives";
+
+export { passwordValidationError };
 
 export const SESSION_COOKIE = "ksi_session";
 export type ProtectionMode = "open" | "environment" | "local" | "error";
@@ -18,13 +28,6 @@ type LocalAuthState = {
   sessionSecret: string;
 };
 
-type MutationLock = {
-  version: 1;
-  owner: string;
-  createdAt: number;
-};
-
-const scrypt = promisify(scryptCallback);
 const PLACEHOLDER = new Set([
   "",
   "change-me",
@@ -34,13 +37,10 @@ const PLACEHOLDER = new Set([
 const DEFAULT_TTL_SEC = 12 * 3600;
 const MIN_TTL_SEC = 5 * 60;
 const MAX_TTL_SEC = 30 * 24 * 3600;
-const MIN_PASSWORD_LENGTH = 12;
-const MAX_PASSWORD_LENGTH = 1024;
 const MIN_ENVIRONMENT_SECRET_LENGTH = 32;
 const MIN_SETUP_TOKEN_LENGTH = 32;
 const STATE_FILE = "auth.json";
 const STATE_LOCK_FILE = `${STATE_FILE}.lock`;
-const MUTATION_LOCK_TTL_MS = 5 * 60_000;
 
 function environmentPassword(): string {
   return process.env.KSI_CCTV_WEB_PASSWORD ?? "";
@@ -112,12 +112,6 @@ async function localState(): Promise<LocalAuthState | undefined | "error"> {
   }
 }
 
-async function prepareDirectory(directory: string): Promise<string> {
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await chmod(directory, 0o700);
-  return directory;
-}
-
 async function prepareSessionDirectory(): Promise<string> {
   return prepareDirectory(sessionDirectory());
 }
@@ -137,10 +131,6 @@ async function sessionPath(token: string): Promise<string> {
   return path.join(sessionDirectory(), await sha256Hex(token));
 }
 
-function randomHex(bytes: number): string {
-  return randomBytes(bytes).toString("hex");
-}
-
 async function pruneExpiredSessions(now: number): Promise<void> {
   const directory = await prepareSessionDirectory();
   const entries = await readdir(directory).catch(() => [] as string[]);
@@ -152,21 +142,13 @@ async function pruneExpiredSessions(now: number): Promise<void> {
   }));
 }
 
-function equal(a: Buffer, b: Buffer): boolean {
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 export function verifySetupToken(token: unknown): boolean {
   const expected = process.env.KSI_CCTV_WEB_SETUP_TOKEN ?? "";
   if (expected !== expected.trim() || expected.length < MIN_SETUP_TOKEN_LENGTH || isPlaceholder(expected)) {
     return false;
   }
   if (typeof token !== "string" || token.length > 1024) return false;
-  return equal(Buffer.from(token, "utf8"), Buffer.from(expected, "utf8"));
-}
-
-async function passwordHash(password: string, salt: Buffer): Promise<Buffer> {
-  return Buffer.from((await scrypt(password, salt, 64)) as Uint8Array);
+  return timingSafeCompare(Buffer.from(token, "utf8"), Buffer.from(expected, "utf8"));
 }
 
 async function currentCredential(): Promise<{ mode: "environment" | "local"; password?: string; passwordHash?: Buffer; secret: string } | undefined> {
@@ -186,14 +168,6 @@ export async function protectionStatus(): Promise<ProtectionStatus> {
   if (state === "error") return { mode: "error", protected: true, management: false };
   if (state) return { mode: "local", protected: true, management: true };
   return { mode: "open", protected: false, management: true };
-}
-
-export function passwordValidationError(password: unknown): string | undefined {
-  if (typeof password !== "string" || !password.trim()) return "비밀번호를 입력하세요.";
-  if (password !== password.trim()) return "비밀번호 앞뒤에는 공백을 사용할 수 없습니다.";
-  if (password.length < MIN_PASSWORD_LENGTH) return `비밀번호는 ${MIN_PASSWORD_LENGTH}자 이상이어야 합니다.`;
-  if (password.length > MAX_PASSWORD_LENGTH) return `비밀번호는 ${MAX_PASSWORD_LENGTH}자 이하여야 합니다.`;
-  return undefined;
 }
 
 export async function setupLocalProtection(password: unknown): Promise<"created" | "exists" | "invalid" | "conflict"> {
@@ -220,58 +194,7 @@ export async function setupLocalProtection(password: unknown): Promise<"created"
 }
 
 async function withLocalMutation<T>(mutation: () => Promise<T>): Promise<T | "conflict"> {
-  await prepareDirectory(authDirectory());
-  const lock: MutationLock = { version: 1, owner: randomHex(16), createdAt: Date.now() };
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await writeFile(stateLockPath(), JSON.stringify(lock), { encoding: "utf8", flag: "wx", mode: 0o600 });
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (attempt || !(await clearStaleMutationLock())) return "conflict";
-    }
-  }
-  try {
-    return await mutation();
-  } finally {
-    const owner = parseMutationLock(await readFile(stateLockPath(), "utf8").catch(() => ""));
-    if (owner?.owner === lock.owner) await unlink(stateLockPath()).catch(() => undefined);
-  }
-}
-
-function parseMutationLock(value: string): MutationLock | undefined {
-  try {
-    const record = JSON.parse(value) as Record<string, unknown>;
-    return record.version === 1 && typeof record.owner === "string" && /^[a-f0-9]{32}$/.test(record.owner)
-      && typeof record.createdAt === "number" && Number.isFinite(record.createdAt)
-      ? record as MutationLock
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function clearStaleMutationLock(): Promise<boolean> {
-  const lockPath = stateLockPath();
-  let raw: string;
-  let modifiedAt: number;
-  try {
-    [raw, modifiedAt] = await Promise.all([
-      readFile(lockPath, "utf8"),
-      lstat(lockPath).then((stat) => stat.mtimeMs),
-    ]);
-  } catch {
-    return false;
-  }
-  const createdAt = parseMutationLock(raw)?.createdAt ?? modifiedAt;
-  if (Date.now() - createdAt < MUTATION_LOCK_TTL_MS) return false;
-  if ((await readFile(lockPath, "utf8").catch(() => "")) !== raw) return false;
-  try {
-    await unlink(lockPath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
+  return withFileLockMutation(authDirectory(), stateLockPath(), mutation);
 }
 
 export async function changeLocalPassword(currentPassword: unknown, newPassword: unknown): Promise<"changed" | "invalid" | "unauthorized" | "unavailable" | "conflict"> {
@@ -296,7 +219,7 @@ export async function changeLocalPassword(currentPassword: unknown, newPassword:
 
 async function verifyLocalPassword(state: LocalAuthState, input: unknown): Promise<boolean> {
   if (typeof input !== "string") return false;
-  return equal(await passwordHash(input, Buffer.from(state.salt, "base64")), Buffer.from(state.passwordHash, "base64"));
+  return timingSafeCompare(await passwordHash(input, Buffer.from(state.salt, "base64")), Buffer.from(state.passwordHash, "base64"));
 }
 
 export async function disableLocalProtection(currentPassword: unknown): Promise<"disabled" | "unauthorized" | "unavailable" | "conflict"> {
@@ -328,7 +251,7 @@ export function sessionTtlSeconds(env: Record<string, string | undefined> = proc
 export async function verifyPassword(input: string): Promise<boolean> {
   const credential = await currentCredential();
   if (!credential) return false;
-  if (credential.mode === "environment") return equal(Buffer.from(input), Buffer.from(credential.password!));
+  if (credential.mode === "environment") return timingSafeCompare(Buffer.from(input), Buffer.from(credential.password!));
   const state = await localState();
   return !!state && state !== "error" && verifyLocalPassword(state, input);
 }
@@ -361,7 +284,7 @@ export async function verifySession(token: string | undefined): Promise<boolean>
     await unlink(await sessionPath(token)).catch(() => undefined);
     return false;
   }
-  if (!equal(Buffer.from(sig ?? ""), Buffer.from(await hmacHex(credential.secret, `sess:${id}:${exp}`)))) return false;
+  if (!timingSafeCompare(Buffer.from(sig ?? ""), Buffer.from(await hmacHex(credential.secret, `sess:${id}:${exp}`)))) return false;
   try {
     return (await readFile(await sessionPath(token), "utf8")) === exp;
   } catch {
