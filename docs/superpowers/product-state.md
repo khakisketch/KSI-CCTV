@@ -26,7 +26,10 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 
 ## Next slices
 
-- M7 출고 증거 트랙: 내부 릴리스 러너에서 `scripts/verify_release_candidate.sh --strict`, DGX Spark ARM64 실측(CUDA provider·실 RTSP/HLS·전원/복구·16채널 soak), 법률 승인, 4-image 서명 provenance.
+- [proposed] P1 RBAC/다중관리자 — 인증·세션·감사 actor 재설계 필요(설계 세션 선행, 코드-only 가능, 확장 1순위)
+- [proposed] P2 알림 채널 확장(webhook/SMS) — 현재 email(outbox)만; 요구 확인 후 설계
+- [proposed] P3 LLM 보고 — 이벤트/인시던트 데이터는 있으나 보고 서브시스템 없음; 요구 정의 필요
+- [data/legal] theft/weapons/smoking·production open-vocab — 모델·라이선스·정확도 자격 의존(코드-only 불가)
 
 ## Backlog
 
