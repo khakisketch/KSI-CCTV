@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from ruamel.yaml import YAML as _RuamelYAML
 
 from src.alerts.alert_manager import parse_alert_log_line
+from src.api.actor import current_actor
 from src.release_capabilities import release_qualification
 from src.utils.config import mask_text, mask_url
 from src.utils.health import ComponentHealth
@@ -1193,6 +1194,9 @@ def write_audit(event: str, audit_log: Path | None = None, **fields: Any) -> boo
     """Durably append a signed, hash-chained audit entry without blocking mutations on failure."""
     path = audit_log or _AUDIT_LOG
     try:
+        # R5a: 요청 컨텍스트의 actor를 기록한다. 호출자가 actor=를 명시하면
+        # 그것이 우선하고, 그 외에는 미들웨어가 캡처한 값(기본 "system").
+        fields.setdefault("actor", current_actor())
         path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = _audit_lock(path)
         try:

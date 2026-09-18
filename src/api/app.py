@@ -22,6 +22,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 
 from src.api import service
+from src.api.actor import reset_actor, sanitize_actor, set_actor
 from src.api.auth import require_api_key
 from src.api.routes import cameras as cameras_routes
 from src.api.routes import commissioning as commissioning_routes
@@ -117,6 +118,23 @@ def create_app(
     )
 
     auth = [Depends(require_api_key)]
+
+    @app.middleware("http")
+    async def capture_actor(request: Request, call_next):
+        """Capture the console `X-KSI-Actor` header into request context.
+
+        `write_audit` records this value without touching its 32 call sites.
+        Exception-safe: any header/read failure falls back to "system".
+        """
+        try:
+            raw_actor = request.headers.get("x-ksi-actor")
+        except Exception:
+            raw_actor = None
+        token = set_actor(sanitize_actor(raw_actor))
+        try:
+            return await call_next(request)
+        finally:
+            reset_actor(token)
 
     @app.middleware("http")
     async def guard_model_upload_body(request: Request, call_next):
