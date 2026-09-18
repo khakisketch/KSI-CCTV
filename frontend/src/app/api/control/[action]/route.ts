@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { engineGet, engineWrite } from "@/lib/engine";
+import { requireRole } from "@/lib/require-role";
 
 // 파이프라인 제어 프록시. 브라우저 → 이 라우트(서버, 키 부착) → 엔진 /api/control/{status,start,stop}.
 // 제어는 데몬(src/run.py)에 mount된 파이프라인에서만 실제 동작(standalone API는 connected=false/503).
 // 세션 게이트(middleware) 뒤, API 키 미노출.
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
+  const denied = await requireRole(req, "admin");
+  if (denied) return denied;
   const { action } = await ctx.params;
   if (action !== "status") {
     return NextResponse.json({ detail: "허용되지 않은 액션" }, { status: 405 });
@@ -15,7 +18,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ action: st
   return NextResponse.json(data ?? { connected: false, running: false });
 }
 
-export async function POST(_req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
+  const denied = await requireRole(req, "admin");
+  if (denied) return denied;
   const { action } = await ctx.params;
   if (action !== "start" && action !== "stop") {
     return NextResponse.json({ detail: "허용되지 않은 액션" }, { status: 405 });

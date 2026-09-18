@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { engineWrite } from "@/lib/engine";
+import { requireRole } from "@/lib/require-role";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const denied = await requireRole(req, "operator");
+  if (denied) return denied;
   const { id } = await context.params;
   if (!/^[A-Za-z0-9._-]+$/.test(id)) {
     return NextResponse.json({ detail: "잘못된 카메라 id" }, { status: 400 });

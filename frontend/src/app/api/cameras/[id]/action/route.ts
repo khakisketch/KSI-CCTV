@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { engineWrite } from "@/lib/engine";
+import { requireRole } from "@/lib/require-role";
 
 const ALLOWED = new Set(["test", "apply", "enable", "disable"]);
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const denied = await requireRole(req, "operator");
+  if (denied) return denied;
   const { id } = await context.params;
   const body = (await req.json().catch(() => ({}))) as { action?: string; expected_revision?: number };
   if (!body.action || !ALLOWED.has(body.action)) {

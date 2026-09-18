@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireRole } from "@/lib/require-role";
+
 // 모델 업로드 multipart 프록시. 브라우저 → 이 라우트(서버) → 엔진 /api/models/upload.
 // 멀티파트 본문(파일 포함)을 버퍼링 없이 스트리밍 전달하고 X-API-Key를 서버에서 부착한다.
 // API 키는 브라우저 미노출. 세션 게이트(middleware) 뒤.
@@ -10,6 +12,8 @@ const ENGINE = (process.env.KSI_CCTV_ENGINE_URL ?? "http://127.0.0.1:8000").repl
 const KEY = process.env.KSI_CCTV_API_KEY ?? "";
 
 export async function POST(req: NextRequest) {
+  const denied = await requireRole(req, "admin");
+  if (denied) return denied;
   const contentType = req.headers.get("content-type") ?? "";
   const contentLength = req.headers.get("content-length");
   let upstream: Response;

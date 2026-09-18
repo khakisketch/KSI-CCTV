@@ -1,8 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { engineFetch } from "@/lib/engine";
+import { requireRole } from "@/lib/require-role";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const denied = await requireRole(req, "admin");
+  if (denied) return denied;
   const response = await engineFetch("/api/support/bundle");
   if (!response?.ok || !response.body) {
     return NextResponse.json(
