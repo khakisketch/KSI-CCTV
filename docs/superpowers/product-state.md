@@ -30,7 +30,6 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 
 ## Backlog
 
-- [2026-09-16] 원격 push 차단 — `https://github.com/KhakiSkech/KSI-CCTV.git`가 `Repository not found` 반환(저장소명/권한/자격증명 확인 필요) - source(task) - push만 차단, 코드/검증과 무관
 - [2026-09-16] mypy advisory 44건(게이트 비차단, 점진 해소 대상) - source(test.sh) - not blocking
 - [2026-09-16] VLM `runtime_qualified=false` — qwen3-vl 214s/frame으로 timeout 초과(소형/양자화 모델 또는 비동기 경로 선행 필요) - source(release-gate) - not blocking
 - [2026-09-16] 라우터 분할 잔여 미세 정리(모듈 내부 헬퍼 결합, `_build_checker`/`_runtime_event_catalog` 주입 구조) - source(review) - not blocking
