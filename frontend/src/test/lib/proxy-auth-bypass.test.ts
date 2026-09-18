@@ -1,7 +1,12 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { NextRequest } from "next/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEVELOPMENT_AUTH_BYPASS_HEADER } from "@/lib/auth-mode";
+import { createSession, SESSION_COOKIE } from "@/lib/auth";
+import { createUser, findUserByUsername } from "@/lib/users";
 import { proxy } from "@/proxy";
 
 const TOKEN = "b".repeat(64);
@@ -152,5 +157,90 @@ describe("auth bypass proxy boundary", () => {
 
     expect(protectedResponse.headers.get("location")).toBe("http://localhost:3000/login");
     expect(loginResponse.headers.get("x-middleware-next")).toBe("1");
+  });
+});
+
+describe("proxy role gate (RBAC R3)", () => {
+  let authDir = "";
+  let adminToken = "";
+  let operatorToken = "";
+  let viewerToken = "";
+
+  async function userId(username: string): Promise<string> {
+    const found = await findUserByUsername(username);
+    if (!found || found === "error") throw new Error(`user not found: ${username}`);
+    return found.id;
+  }
+
+  function withSession(url: string, init?: { method?: string; headers?: HeadersInit }) {
+    return proxy(new NextRequest(url, init));
+  }
+
+  function authed(url: string, token: string | undefined, init?: { method?: string; headers?: HeadersInit }) {
+    const headers = new Headers(init?.headers);
+    if (token) headers.set("cookie", `${SESSION_COOKIE}=${token}`);
+    return proxy(new NextRequest(url, { ...init, headers }));
+  }
+
+  beforeEach(async () => {
+    authDir = await mkdtemp(path.join(os.tmpdir(), "ksi-proxy-rbac-"));
+    vi.stubEnv("KSI_CCTV_WEB_AUTH_DIR", authDir);
+    vi.stubEnv("KSI_CCTV_WEB_PASSWORD", "role-gate-password");
+    vi.stubEnv("KSI_CCTV_WEB_SECRET", "s".repeat(32));
+    expect(await createUser("gate-op", "operator", "operator-pass-123")).toBe("created");
+    expect(await createUser("gate-view", "viewer", "viewer-pass-12345")).toBe("created");
+    adminToken = await createSession(3600);
+    operatorToken = await createSession(3600, await userId("gate-op"));
+    viewerToken = await createSession(3600, await userId("gate-view"));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(authDir, { recursive: true, force: true });
+  });
+
+  it("redirects unauthenticated admin-path API requests to login", async () => {
+    const response = await withSession("http://localhost:3000/api/models");
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+  });
+
+  it("denies a viewer on admin API paths with 403 and no-store", async () => {
+    const response = await authed("http://localhost:3000/api/models", viewerToken);
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toEqual({ detail: "이 리소스에 접근할 권한이 없습니다." });
+  });
+
+  it("redirects a viewer on admin pages to the console root", async () => {
+    const response = await authed("http://localhost:3000/settings/users", viewerToken);
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/");
+  });
+
+  it("allows an operator to mutate cameras but blocks models", async () => {
+    const allowed = await authed("http://localhost:3000/api/cameras/1", operatorToken, { method: "POST" });
+    expect(allowed.headers.get("x-middleware-next")).toBe("1");
+
+    const denied = await authed("http://localhost:3000/api/models", operatorToken);
+    expect(denied.status).toBe(403);
+    expect(denied.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("allows an operator to read viewer paths", async () => {
+    const response = await authed("http://localhost:3000/api/events", operatorToken);
+
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("allows an admin on admin, operator, and viewer paths", async () => {
+    const models = await authed("http://localhost:3000/api/models", adminToken);
+    const cameras = await authed("http://localhost:3000/api/cameras/1", adminToken, { method: "POST" });
+    const settings = await authed("http://localhost:3000/settings", adminToken);
+
+    expect(models.headers.get("x-middleware-next")).toBe("1");
+    expect(cameras.headers.get("x-middleware-next")).toBe("1");
+    expect(settings.headers.get("x-middleware-next")).toBe("1");
   });
 });

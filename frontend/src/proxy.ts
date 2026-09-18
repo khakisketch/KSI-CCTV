@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getAuthStatus, SESSION_COOKIE, verifySession } from "@/lib/auth";
+import { getAuthStatus, SESSION_COOKIE, sessionPrincipal } from "@/lib/auth";
 import {
   DEVELOPMENT_AUTH_BYPASS_HEADER,
   developmentAuthBypassState,
 } from "@/lib/auth-mode";
+import { minRoleForPath, roleAtLeast } from "@/lib/roles";
 
 // 모든 라우트를 게이트(로그인 페이지·인증 API·정적 제외). 미인증·미설정 → /login.
 export async function proxy(req: NextRequest) {
@@ -73,11 +74,27 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(url);
   }
   const token = req.cookies.get(SESSION_COOKIE)?.value;
-  if (await verifySession(token)) return NextResponse.next();
-  const url = req.nextUrl.clone();
-  url.pathname = "/login";
-  url.search = "";
-  return NextResponse.redirect(url);
+  const principal = await sessionPrincipal(token);
+  if (!principal) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/login";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+  const minimum = minRoleForPath(pathname, req.method);
+  if (minimum !== null && !roleAtLeast(principal.role, minimum)) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        { detail: "이 리소스에 접근할 권한이 없습니다." },
+        { status: 403, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    const url = req.nextUrl.clone();
+    url.pathname = "/";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+  return NextResponse.next();
 }
 
 export const config = {
