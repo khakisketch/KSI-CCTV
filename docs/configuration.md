@@ -74,6 +74,39 @@ KSI_CCTV_WEB_DEV=1 KSI_CCTV_DEV_AUTH_BYPASS=1 bash scripts/run_web.sh
 
 ---
 
+## 웹 콘솔 역할 기반 접근 제어(RBAC)
+
+웹 콘솔은 3역할(`admin` > `operator` > `viewer`, 상위는 하위 포함)을 사용합니다.
+강제는 2계층입니다: `proxy.ts` 1차 게이트(페이지 미달 → `/`, `/api/*` → 403) +
+변경 핸들러 `requireRole` 2차 방어심층(미인증 401, 역할 미달 403).
+
+| 역할 | 권한 요약 |
+|---|---|
+| `viewer` | 실시간·이벤트·인시던트·카메라/관측/텔레메트리 조회 |
+| `operator` | viewer + 알람 확인·인시던트 조치·카메라 CRUD/구역/적용·ONVIF |
+| `admin` | operator + 모델·사용자·시스템·파이프라인 제어·커미셔닝·감사·알림 설정 |
+
+- **관리자(admin) = 기존 단일 비밀번호(legacy, 무변경)**: 환경변수 `KSI_CCTV_WEB_PASSWORD` 또는
+  로컬 `data/auth.json` 경로를 유지하며 사용자명이 없습니다(감사 기록은 `admin`). 마이그레이션 없습니다.
+- **관제원/뷰어 = `data/users.json`**: `{version:1, users:[{id, username, role, passwordHash, salt,
+  enabled, createdAt, updatedAt}]}` 형식입니다. 관리는 admin 전용 `/settings` 사용자 관리 섹션에서
+  CRUD합니다. 사용자명은 `^[A-Za-z0-9._-]{1,64}$`(중복 금지), 역할은 `operator`·`viewer`만 허용,
+  비밀번호는 12자 이상·앞뒤 공백 금지입니다.
+- **로그인**: 로그인 폼의 사용자명 입력은 선택 사항입니다. 비우면 관리자 경로(단일 비밀번호),
+  입력하면 `users.json` 검증 후 개인 세션을 발급합니다. 세션 파일 내용은 `{exp, userId}` JSON이며,
+  기존 평문 epoch 세션은 admin으로 하위호환됩니다.
+- **역할은 매 요청 재해석**: `sessionPrincipal`이 요청마다 `users.json`에서 역할·활성 상태를 다시
+  조회하므로, 역할 변경·비활성·삭제·파일 손상은 즉시 반영됩니다(해당 개인 세션은 무효).
+- **감사 actor**: 콘솔 `engineWrite`/`engineGet`이 `X-KSI-Actor` 헤더(서버 전용)를 싣고, 엔진
+  미들웨어가 이를 ContextVar로 캡처해 `write_audit`의 actor 필드와 인시던트 조치 기록
+  (`incident_actions.actor`)에 저장합니다. admin/레거시 세션 → `admin`, 개인 세션 → 사용자명,
+  미인증·비활성·손상 → `system`입니다.
+- **저장 위치·권한**: 사용자 저장소는 `KSI_CCTV_WEB_AUTH_DIR` 디렉터리(기본 `./data`)의
+  `users.json`입니다. 디렉터리는 `0700`, 파일·원자쓰기 임시파일·lock 파일은 `0600`이며,
+  변경은 lock(`users.json.lock`)으로 직렬화합니다.
+
+---
+
 ## 설정 파일 목록
 
 | 파일 | 용도 |

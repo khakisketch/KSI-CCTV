@@ -26,7 +26,7 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 
 ## Next slices
 
-- [proposed] P1 RBAC/다중관리자 — 인증·세션·감사 actor 재설계 필요(설계 세션 선행, 코드-only 가능, 확장 1순위)
+- [done] P1 RBAC/다중관리자(관리자·관제원·뷰어) — 구현 완료(R1–R8, 커밋 `47961a0`·`b302ef8`·`e66f9fe`·`a4c2248`·`7b8ef80`·`334aa02`·`16231f4`·`f8189eb`·`1592ad4`; 계획서 `docs/superpowers/plans/2026-09-18-rbac.md`)
 - [proposed] P2 알림 채널 확장(webhook/SMS) — 현재 email(outbox)만; 요구 확인 후 설계
 - [proposed] P3 LLM 보고 — 이벤트/인시던트 데이터는 있으나 보고 서브시스템 없음; 요구 정의 필요
 - [data/legal] theft/weapons/smoking·production open-vocab — 모델·라이선스·정확도 자격 의존(코드-only 불가)
@@ -37,3 +37,5 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 - [2026-09-16] VLM `runtime_qualified=false` — qwen3-vl 214s/frame으로 timeout 초과(소형/양자화 모델 또는 비동기 경로 선행 필요) - source(release-gate) - not blocking
 - [2026-09-16] 라우터 분할 잔여 미세 정리(모듈 내부 헬퍼 결합, `_build_checker`/`_runtime_event_catalog` 주입 구조) - source(review) - not blocking
 - [2026-09-18] release gate 로그 라벨 불일치 — `[8/9]` 헤더 없이 `[9/9]`로 점프(표기 문제, 기능 영향 없음) - source(gate) - not blocking
+- [2026-09-18] 로그인 username 타이밍 부채널 — 존재하지 않는 사용자명은 scrypt 검증을 건너뛰어 응답 시간 차이로 사용자명 존재 여부를 추측할 수 있음(더미 비교 검토) - source(review) - not blocking
+- [2026-09-18] 사용자 CRUD 감사 기록 미포함 — `/api/users/*` 관리 작업이 감사 로그에 별도 기록되지 않음(추후 검토) - source(review) - not blocking
