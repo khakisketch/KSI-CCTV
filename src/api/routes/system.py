@@ -44,7 +44,7 @@ class AuditEntryBody(BaseModel):
 
 
 _AUDIT_EVENT_RE = re.compile(r"^[a-z0-9_]{1,64}$")
-_AUDIT_FORBIDDEN_KEYS = frozenset({"password", "passwordhash", "salt", "token", "secret"})
+_AUDIT_FORBIDDEN_KEYS = frozenset({"password", "passwordhash", "salt", "token", "secret", "apikey"})
 # write_audit(event, **fields) 호출과 충돌하는 예약 키(경로 주입·TypeError 방지).
 _AUDIT_RESERVED_KEYS = frozenset({"audit_log", "event"})
 # 스푸핑 방지: ContextVar actor만 기록하므로 body의 actor 관련 키는 버린다(무시 선택).
@@ -53,8 +53,8 @@ _AUDIT_MAX_FIELDS_BYTES = 4096
 
 
 def _audit_normalize_key(key: str) -> str:
-    """금지/actor 키 비교용 정규화(대소문자·`_`·`-` 무시)."""
-    return key.lower().replace("_", "").replace("-", "")
+    """금지/actor 키 비교용 정규화(대소문자·`_`·`-`·공백 무시)."""
+    return key.lower().replace("_", "").replace("-", "").replace(" ", "")
 
 
 def register(

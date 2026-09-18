@@ -152,6 +152,14 @@ class TestAuditEntryIngest(unittest.TestCase):
             response = self._post({"event": "console_user_created"})
         self.assertEqual(response.status_code, 503)
 
+    def test_forbidden_key_apikey_variants_400(self):
+        for key in ("apikey", "apiKey", "API-KEY", "api_key", "api key", "Api Key"):
+            with self.subTest(key=key):
+                response = self._post(
+                    {"event": "console_user_created", "fields": {key: "x"}}
+                )
+                self.assertEqual(response.status_code, 400, response.text)
+
 
 if __name__ == "__main__":
     unittest.main()

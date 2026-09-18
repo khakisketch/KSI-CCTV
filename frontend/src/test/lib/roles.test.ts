@@ -100,3 +100,27 @@ describe("minRoleForPath viewer fallback", () => {
     expect(minRoleForPath("/login")).toBeNull();
   });
 });
+
+describe("minRoleForPath unregistered /api/* fail-closed (F2-M3)", () => {
+  it("keeps viewer for unregistered /api/* reads", () => {
+    expect(minRoleForPath("/api/unknown", "GET")).toBe("viewer");
+    expect(minRoleForPath("/api/unknown/nested", "GET")).toBe("viewer");
+    expect(minRoleForPath("/api/unknown")).toBe("viewer");
+  });
+
+  it("requires admin for unregistered /api/* mutations", () => {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      expect(minRoleForPath("/api/unknown", method)).toBe("admin");
+      expect(minRoleForPath("/api/unknown/nested", method)).toBe("admin");
+    }
+  });
+
+  it("keeps existing matched rules unchanged", () => {
+    expect(minRoleForPath("/api/users", "GET")).toBe("admin");
+    expect(minRoleForPath("/api/models", "POST")).toBe("admin");
+    expect(minRoleForPath("/api/cameras/1", "POST")).toBe("operator");
+    expect(minRoleForPath("/api/cameras/1", "GET")).toBe("viewer");
+    expect(minRoleForPath("/api/events", "GET")).toBe("viewer");
+    expect(minRoleForPath("/api/onvif/discover", "POST")).toBe("operator");
+  });
+});

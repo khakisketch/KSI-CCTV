@@ -61,5 +61,11 @@ export function minRoleForPath(pathname: string, method = "GET"): Role | null {
   }
   if (INCIDENT_ACTIONS_PATTERN.test(pathname)) return "operator";
   if (pathname === ONVIF_BASE || pathname.startsWith(`${ONVIF_BASE}/`)) return "operator";
+  // 미등록 `/api/*` 변경 요청은 fail-closed(향후 라우트 누락 시 viewer 변경 방지).
+  // 미등록 GET은 기존대로 viewer(읽기), 그 외 /api/* 비-GET은 admin.
+  if (pathname === "/api" || pathname.startsWith("/api/")) {
+    if (MUTATION_METHODS.has(normalizedMethod)) return "admin";
+    return "viewer";
+  }
   return "viewer";
 }

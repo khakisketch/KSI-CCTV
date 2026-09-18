@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireRole } from "@/lib/require-role";
+import { requestActor, requireRole } from "@/lib/require-role";
 
 // 모델 업로드 multipart 프록시. 브라우저 → 이 라우트(서버) → 엔진 /api/models/upload.
 // 멀티파트 본문(파일 포함)을 버퍼링 없이 스트리밍 전달하고 X-API-Key를 서버에서 부착한다.
@@ -16,12 +16,14 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
   const contentType = req.headers.get("content-type") ?? "";
   const contentLength = req.headers.get("content-length");
+  const actor = await requestActor(req);
   let upstream: Response;
   try {
     upstream = await fetch(`${ENGINE}/api/models/upload`, {
       method: "POST",
       headers: {
         "X-API-Key": KEY,
+        "X-KSI-Actor": actor,
         "content-type": contentType,
         ...(contentLength ? { "content-length": contentLength } : {}),
       },

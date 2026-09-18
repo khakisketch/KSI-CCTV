@@ -452,4 +452,88 @@ describe("users routes (RBAC R6)", () => {
       spy.mockRestore();
     }
   });
+
+  it("warns on audit failure (ok:false) but keeps 201 on create without sensitive data (F2-M1)", async () => {
+    const engine = await import("@/lib/engine");
+    const spy = vi.spyOn(engine, "engineWrite").mockResolvedValue({ ok: false, status: 503, data: null });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await createUserRoute(requestWith("http://localhost:3000/api/users", adminToken, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: "audit-warn-op", role: "viewer", password: VALID_PASSWORD }),
+      }));
+
+      expect(response.status).toBe(201);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = String(warn.mock.calls[0]?.[0] ?? "");
+      expect(message).toContain("user_created");
+      expect(message).not.toContain(VALID_PASSWORD);
+      expect(message).not.toContain("audit-warn-op");
+    } finally {
+      spy.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it("warns on audit throw but keeps 200 on patch without sensitive data (F2-M1)", async () => {
+    const engine = await import("@/lib/engine");
+    const spy = vi.spyOn(engine, "engineWrite").mockRejectedValue(new Error("engine down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const id = await userId("route-op");
+      const response = await patchUserRoute(
+        requestWith(`http://localhost:3000/api/users/${id}`, adminToken, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: false }),
+        }),
+        params(id),
+      );
+
+      expect(response.status).toBe(200);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("user_updated");
+    } finally {
+      spy.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it("warns on audit failure (ok:false) but keeps 200 on delete and reset (F2-M1)", async () => {
+    const engine = await import("@/lib/engine");
+    const spy = vi.spyOn(engine, "engineWrite").mockResolvedValue({ ok: false, status: 500, data: null });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await createUser("audit-warn-gone", "viewer", VALID_PASSWORD)).toBe("created");
+      const deleteId = await userId("audit-warn-gone");
+      const deleted = await deleteUserRoute(
+        requestWith(`http://localhost:3000/api/users/${deleteId}`, adminToken, { method: "DELETE" }),
+        params(deleteId),
+      );
+      expect(deleted.status).toBe(200);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("user_deleted");
+
+      warn.mockClear();
+      const resetId = await userId("route-op");
+      const resetPassword = "audit-warn-reset-123";
+      const reset = await resetPasswordRoute(
+        requestWith(`http://localhost:3000/api/users/${resetId}/reset-password`, adminToken, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: resetPassword }),
+        }),
+        params(resetId),
+      );
+      expect(reset.status).toBe(200);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const resetMessage = String(warn.mock.calls[0]?.[0] ?? "");
+      expect(resetMessage).toContain("user_password_reset");
+      expect(resetMessage).not.toContain(resetPassword);
+    } finally {
+      spy.mockRestore();
+      warn.mockRestore();
+    }
+  });
 });

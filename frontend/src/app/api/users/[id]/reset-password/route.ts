@@ -6,16 +6,20 @@ import { findUserById, resetUserPassword } from "@/lib/users";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-// 사용자 관리 감사 — best-effort: 실패해도 사용자 작업을 막지 않는다.
+// 사용자 관리 감사 — best-effort: 실패해도 사용자 작업을 막지 않되 실패를 경고 로그로 남긴다.
 async function auditUserEvent(
   event: string,
   fields: Record<string, unknown>,
   actor: string,
 ): Promise<void> {
   try {
-    await engineWrite("/api/audit/entry", { event, fields }, "POST", 8000, actor);
-  } catch {
-    // 감사 실패 무시 — 기존 응답 유지
+    const result = await engineWrite("/api/audit/entry", { event, fields }, "POST", 8000, actor);
+    if (!result.ok) {
+      console.warn(`[audit] ${event} failed: status=${result.status}`);
+    }
+  } catch (error) {
+    // 감사 실패 무시 — 기존 응답 유지 (민감정보 미기록: 이벤트명·사유만)
+    console.warn(`[audit] ${event} failed: error=${error instanceof Error ? error.message : "unknown"}`);
   }
 }
 
