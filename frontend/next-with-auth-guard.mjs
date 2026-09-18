@@ -296,9 +296,16 @@ async function startProtectedDevServer() {
 async function ensureStandaloneAssetLink(linkPath, target) {
   try {
     const stat = await lstat(linkPath);
-    if (!stat.isSymbolicLink() || await readlink(linkPath) !== target) {
-      throw new Error(`Refusing to replace unexpected standalone asset path: ${linkPath}`);
+    if (stat.isSymbolicLink()) {
+      if (await readlink(linkPath) !== target) {
+        throw new Error(`Refusing to replace unexpected standalone asset path: ${linkPath}`);
+      }
+      return;
     }
+    if (stat.isDirectory()) {
+      return;
+    }
+    throw new Error(`Refusing to replace unexpected standalone asset path: ${linkPath}`);
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
     await symlink(target, linkPath, "dir");
