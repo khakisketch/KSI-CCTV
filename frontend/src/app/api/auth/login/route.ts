@@ -8,6 +8,7 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { loginRateLimiter, loginSource } from "@/lib/login-rate-limit";
+import { findUserByUsername, verifyUserPassword } from "@/lib/users";
 
 export async function POST(req: NextRequest) {
   const trustProxy = process.env.KSI_CCTV_TRUST_PROXY?.toLowerCase() === "true";
@@ -28,15 +29,25 @@ export async function POST(req: NextRequest) {
   }
   if (protection.mode === "error") return NextResponse.json({ detail: "인증 상태를 읽을 수 없습니다." }, { status: 503 });
   const body = await req.json().catch(() => ({}));
+  const username = typeof body?.username === "string" ? body.username.trim() : "";
   const pw = typeof body?.password === "string" ? body.password : "";
-  if (!(await verifyPassword(pw))) {
+  let userId: string | undefined;
+  if (username) {
+    const candidate = await findUserByUsername(username);
+    const user = candidate && candidate !== "error" && candidate.enabled ? candidate : undefined;
+    if (!user || !(await verifyUserPassword(user, pw))) {
+      loginRateLimiter.consume(source);
+      return NextResponse.json({ detail: "사용자명 또는 비밀번호가 올바르지 않습니다." }, { status: 401 });
+    }
+    userId = user.id;
+  } else if (!(await verifyPassword(pw))) {
     loginRateLimiter.consume(source);
     return NextResponse.json({ detail: "비밀번호가 올바르지 않습니다." }, { status: 401 });
   }
   const ttlSec = sessionTtlSeconds();
   let token: string;
   try {
-    token = await createSession(ttlSec);
+    token = await createSession(ttlSec, userId);
   } catch {
     return NextResponse.json(
       { detail: "안전한 로그인 세션을 만들지 못했습니다. 저장소 상태를 확인하세요." },

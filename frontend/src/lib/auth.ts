@@ -10,10 +10,15 @@ import {
   timingSafeCompare,
   withFileLockMutation,
 } from "./auth-primitives";
+import { roleForUserId } from "./users";
 
 export { passwordValidationError };
 
 export const SESSION_COOKIE = "ksi_session";
+export type SessionPrincipal = {
+  role: "admin" | "operator" | "viewer";
+  userId?: string;
+};
 export type ProtectionMode = "open" | "environment" | "local" | "error";
 export type ProtectionStatus = {
   mode: ProtectionMode;
@@ -131,13 +136,41 @@ async function sessionPath(token: string): Promise<string> {
   return path.join(sessionDirectory(), await sha256Hex(token));
 }
 
+type SessionRecord = {
+  exp: number;
+  userId?: string;
+};
+
+/**
+ * 세션 파일 파서. 현행 JSON `{"exp","userId?"}`와 레거시 평문 epoch를 모두
+ * 읽는다(하위호환). 손상된 내용은 undefined — 호출부가 무효로 처리한다.
+ */
+function parseSessionRecord(raw: string): SessionRecord | undefined {
+  if (/^\d+$/.test(raw.trim())) {
+    const exp = Number(raw.trim());
+    return Number.isSafeInteger(exp) ? { exp } : undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.exp !== "number" || !Number.isSafeInteger(record.exp)) return undefined;
+  if (record.userId === undefined) return { exp: record.exp };
+  if (typeof record.userId !== "string" || record.userId.length === 0) return undefined;
+  return { exp: record.exp, userId: record.userId };
+}
+
 async function pruneExpiredSessions(now: number): Promise<void> {
   const directory = await prepareSessionDirectory();
   const entries = await readdir(directory).catch(() => [] as string[]);
   await Promise.all(entries.map(async (entry) => {
     if (!/^[a-f0-9]{64}$/.test(entry)) return;
     const file = path.join(directory, entry);
-    const exp = Number(await readFile(file, "utf8").catch(() => "0"));
+    const exp = parseSessionRecord(await readFile(file, "utf8").catch(() => ""))?.exp ?? NaN;
     if (!Number.isFinite(exp) || exp < now) await unlink(file).catch(() => undefined);
   }));
 }
@@ -256,16 +289,17 @@ export async function verifyPassword(input: string): Promise<boolean> {
   return !!state && state !== "error" && verifyLocalPassword(state, input);
 }
 
-export async function createSession(ttlSec: number = sessionTtlSeconds()): Promise<string> {
+export async function createSession(ttlSec: number = sessionTtlSeconds(), userId?: string): Promise<string> {
   const credential = await currentCredential();
   if (!credential) throw new Error("authentication is not configured");
   const exp = Math.floor(Date.now() / 1000) + ttlSec;
+  const body = JSON.stringify(userId === undefined ? { exp } : { exp, userId });
   await pruneExpiredSessions(Math.floor(Date.now() / 1000));
   for (let attempt = 0; attempt < 3; attempt++) {
     const id = randomHex(32);
     const token = `${id}.${exp}.${await hmacHex(credential.secret, `sess:${id}:${exp}`)}`;
     try {
-      await writeFile(await sessionPath(token), String(exp), { encoding: "utf8", flag: "wx", mode: 0o600 });
+      await writeFile(await sessionPath(token), body, { encoding: "utf8", flag: "wx", mode: 0o600 });
       return token;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -274,22 +308,43 @@ export async function createSession(ttlSec: number = sessionTtlSeconds()): Promi
   throw new Error("session allocation failed");
 }
 
-export async function verifySession(token: string | undefined): Promise<boolean> {
-  if (!token) return false;
+/** 토큰 서명·만료·세션 파일 일치성을 검증하고 파싱된 레코드를 반환한다. */
+async function readValidSessionRecord(token: string | undefined): Promise<SessionRecord | null> {
+  if (!token) return null;
   const credential = await currentCredential();
-  if (!credential) return false;
+  if (!credential) return null;
   const [id, exp, sig, extra] = token.split(".");
-  if (extra !== undefined || !/^[a-f0-9]{64}$/.test(id ?? "") || !/^\d+$/.test(exp ?? "")) return false;
+  if (extra !== undefined || !/^[a-f0-9]{64}$/.test(id ?? "") || !/^\d+$/.test(exp ?? "")) return null;
   if (Number(exp) < Math.floor(Date.now() / 1000)) {
     await unlink(await sessionPath(token)).catch(() => undefined);
-    return false;
+    return null;
   }
-  if (!timingSafeCompare(Buffer.from(sig ?? ""), Buffer.from(await hmacHex(credential.secret, `sess:${id}:${exp}`)))) return false;
+  if (!timingSafeCompare(Buffer.from(sig ?? ""), Buffer.from(await hmacHex(credential.secret, `sess:${id}:${exp}`)))) return null;
+  let record: SessionRecord | undefined;
   try {
-    return (await readFile(await sessionPath(token), "utf8")) === exp;
+    record = parseSessionRecord(await readFile(await sessionPath(token), "utf8"));
   } catch {
-    return false;
+    return null;
   }
+  if (!record || record.exp !== Number(exp)) return null;
+  return record;
+}
+
+export async function verifySession(token: string | undefined): Promise<boolean> {
+  return (await sessionPrincipal(token)) !== null;
+}
+
+/**
+ * 세션의 행위 주체를 해석한다. userId가 없으면(신규 admin JSON·레거시 평문
+ * epoch) `{role:"admin"}`. 개인 세션은 users.json에서 역할·활성 상태를 매번
+ * 재조회하므로 비활성·삭제·손상 시 null(세션 즉시 무효).
+ */
+export async function sessionPrincipal(token: string | undefined): Promise<SessionPrincipal | null> {
+  const record = await readValidSessionRecord(token);
+  if (!record) return null;
+  if (record.userId === undefined) return { role: "admin" };
+  const role = await roleForUserId(record.userId);
+  return role === undefined ? null : { role, userId: record.userId };
 }
 
 export async function revokeSession(token: string | undefined): Promise<void> {

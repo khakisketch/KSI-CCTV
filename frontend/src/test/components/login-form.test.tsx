@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LoginForm } from "@/components/login-form";
 
@@ -28,5 +29,37 @@ describe("LoginForm", () => {
 
     expect(screen.getByText("접근 보호 복구 필요")).toBeInTheDocument();
     expect(screen.queryByLabelText("비밀번호")).not.toBeInTheDocument();
+  });
+});
+
+describe("LoginForm username (RBAC R2)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("offers an optional username field in protected modes only", () => {
+    const { unmount } = render(<LoginForm mode="local" />);
+    const username = screen.getByLabelText("사용자명");
+    expect(username).toHaveAttribute("autocomplete", "username");
+    expect(username).not.toBeRequired();
+    unmount();
+
+    render(<LoginForm mode="open" />);
+    expect(screen.queryByLabelText("사용자명")).not.toBeInTheDocument();
+  });
+
+  it("submits the username together with the password", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<LoginForm mode="local" />);
+
+    await user.type(screen.getByLabelText("사용자명"), "op1");
+    await user.type(screen.getByLabelText("비밀번호"), "operator-pass-123");
+    await user.click(screen.getByRole("button", { name: "로그인" }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, { body: string }];
+    expect(JSON.parse(init.body)).toEqual({ username: "op1", password: "operator-pass-123" });
   });
 });

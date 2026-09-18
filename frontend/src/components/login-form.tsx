@@ -12,6 +12,7 @@ type AuthMode = "open" | "environment" | "local" | "error";
 
 export function LoginForm({ mode }: { mode: AuthMode }) {
   const router = useRouter();
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -19,7 +20,10 @@ export function LoginForm({ mode }: { mode: AuthMode }) {
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formPassword = String(new FormData(event.currentTarget).get("password") ?? "");
+    const form = new FormData(event.currentTarget);
+    const formUsername = String(form.get("username") ?? "");
+    const name = (formUsername || username).trim();
+    const formPassword = String(form.get("password") ?? "");
     const value = (formPassword || password).trim();
     if (!value) {
       setError("비밀번호를 입력하세요.");
@@ -31,7 +35,7 @@ export function LoginForm({ mode }: { mode: AuthMode }) {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: value }),
+        body: JSON.stringify(name ? { username: name, password: value } : { password: value }),
       });
       if (response.ok) {
         router.push("/");
@@ -69,7 +73,15 @@ export function LoginForm({ mode }: { mode: AuthMode }) {
             </div>
           ) : (
             <form onSubmit={submit} className="space-y-3">
-              <input name="username" autoComplete="username" className="sr-only" tabIndex={-1} aria-hidden="true" />
+              <Input
+                type="text"
+                name="username"
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="사용자명 (선택)"
+                aria-label="사용자명"
+              />
               <Input
                 type="password"
                 name="password"
