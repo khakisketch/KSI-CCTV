@@ -177,3 +177,23 @@ describe("multi-user store (users.json)", () => {
     expect(await listUsers()).toHaveLength(1);
   });
 });
+
+describe("findUserById (RBAC R5b)", () => {
+  it("finds a user by id", async () => {
+    const { findUserById } = await import("@/lib/users");
+    expect(await createUser("op1", "operator", PASSWORD)).toBe("created");
+    const created = await findUserByUsername("op1");
+    if (!created || created === "error") throw new Error("user not found");
+    const found = await findUserById(created.id);
+    expect(found).not.toBe("error");
+    expect(found).toMatchObject({ id: created.id, username: "op1", role: "operator" });
+  });
+
+  it("returns undefined for unknown or invalid ids and error for a corrupted store", async () => {
+    const { findUserById } = await import("@/lib/users");
+    expect(await findUserById("nobody")).toBeUndefined();
+    expect(await findUserById("")).toBeUndefined();
+    await writeFile(path.join(authDir, "users.json"), "not json", "utf8");
+    expect(await findUserById("whatever")).toBe("error");
+  });
+});

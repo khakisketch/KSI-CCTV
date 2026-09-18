@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { engineWrite } from "@/lib/engine";
-import { requireRole } from "@/lib/require-role";
+import { requestActor, requireRole } from "@/lib/require-role";
 
 const ALLOWED = new Set(["test", "apply", "enable", "disable"]);
 
@@ -16,9 +16,13 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
   const revision = Number.isInteger(body.expected_revision)
     ? `?expected_revision=${body.expected_revision}`
     : "";
+  const actor = await requestActor(req);
   const r = await engineWrite(
     `/api/cameras/${encodeURIComponent(id)}/${body.action}${revision}`,
     {},
+    "POST",
+    8000,
+    actor,
   );
   return NextResponse.json(r.data ?? { detail: "엔진 연결 실패" }, { status: r.ok ? 200 : r.status || 502 });
 }

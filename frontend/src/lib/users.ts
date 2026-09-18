@@ -206,6 +206,14 @@ export async function verifyUserPassword(user: User, password: unknown): Promise
   );
 }
 
+export async function findUserById(id: string): Promise<User | undefined | "error"> {
+  if (typeof id !== "string" || id.length === 0) return undefined;
+  const state = await readUsersFile();
+  if (state === undefined) return undefined;
+  if (state === "error") return "error";
+  return state.users.find((user) => user.id === id);
+}
+
 export async function roleForUserId(id: string): Promise<UserRole | undefined> {
   if (typeof id !== "string") return undefined;
   const state = await readUsersFile();

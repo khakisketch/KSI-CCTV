@@ -77,3 +77,51 @@ describe("requireRole (RBAC R4)", () => {
     await expect(requireRole(requestWith(adminToken), "admin")).resolves.toBeNull();
   });
 });
+
+describe("requestActor (RBAC R5b)", () => {
+  let authDir = "";
+  let adminToken = "";
+  let operatorToken = "";
+
+  async function userId(username: string): Promise<string> {
+    const found = await findUserByUsername(username);
+    if (!found || found === "error") throw new Error(`user not found: ${username}`);
+    return found.id;
+  }
+
+  function requestWith(token: string | undefined) {
+    const headers = new Headers();
+    if (token) headers.set("cookie", `${SESSION_COOKIE}=${token}`);
+    return new NextRequest("http://localhost:3000/api/models", { headers });
+  }
+
+  beforeEach(async () => {
+    authDir = await mkdtemp(path.join(os.tmpdir(), "ksi-request-actor-"));
+    vi.stubEnv("KSI_CCTV_WEB_AUTH_DIR", authDir);
+    vi.stubEnv("KSI_CCTV_WEB_PASSWORD", "request-actor-password");
+    vi.stubEnv("KSI_CCTV_WEB_SECRET", "s".repeat(32));
+    expect(await createUser("ra-op", "operator", "operator-pass-123")).toBe("created");
+    adminToken = await createSession(3600);
+    operatorToken = await createSession(3600, await userId("ra-op"));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(authDir, { recursive: true, force: true });
+  });
+
+  it("resolves admin sessions to admin", async () => {
+    const { requestActor } = await import("@/lib/require-role");
+    await expect(requestActor(requestWith(adminToken))).resolves.toBe("admin");
+  });
+
+  it("resolves user sessions to their username", async () => {
+    const { requestActor } = await import("@/lib/require-role");
+    await expect(requestActor(requestWith(operatorToken))).resolves.toBe("ra-op");
+  });
+
+  it("resolves unauthenticated requests to system", async () => {
+    const { requestActor } = await import("@/lib/require-role");
+    await expect(requestActor(requestWith(undefined))).resolves.toBe("system");
+  });
+});

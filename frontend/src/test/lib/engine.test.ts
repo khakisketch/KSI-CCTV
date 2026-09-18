@@ -144,4 +144,44 @@ describe("getEvents", () => {
 
     expect(timeout).toHaveBeenCalledWith(20_000);
   });
+
+  it("engineWrite는 actor가 있으면 X-KSI-Actor 헤더를 전송한다", async () => {
+    vi.resetModules();
+    process.env.KSI_CCTV_ENGINE_URL = "http://engine-test:8000";
+    process.env.KSI_CCTV_API_KEY = "test-key";
+    const { engineWrite } = await import("@/lib/engine");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({ ok: true }),
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await engineWrite("/api/cameras", {}, "POST", 8000, "rr-op");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://engine-test:8000/api/cameras",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-KSI-Actor": "rr-op" }),
+      }),
+    );
+  });
+
+  it("engineWrite는 actor가 없으면 X-KSI-Actor 헤더를 보내지 않는다", async () => {
+    vi.resetModules();
+    process.env.KSI_CCTV_ENGINE_URL = "http://engine-test:8000";
+    process.env.KSI_CCTV_API_KEY = "test-key";
+    const { engineWrite } = await import("@/lib/engine");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({ ok: true }),
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await engineWrite("/api/cameras", {}, "POST");
+
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers).not.toHaveProperty("X-KSI-Actor");
+  });
 });
