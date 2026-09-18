@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from fastapi.responses import JSONResponse
 from src.api import service
 from src.api.actor import reset_actor, sanitize_actor, set_actor
 from src.api.auth import require_api_key
+from src.api.deps import build_health_checker, runtime_event_catalog
 from src.api.routes import cameras as cameras_routes
 from src.api.routes import commissioning as commissioning_routes
 from src.api.routes import events as events_routes
@@ -41,12 +43,6 @@ from src.cameras import (
 from src.commissioning import CommissioningStore
 from src.incidents import IncidentStore
 from src.utils.config import AppConfig
-from src.utils.health import (
-    HealthChecker,
-    check_disk_space,
-    check_memory_usage,
-    register_pipeline_health_checks,
-)
 
 
 def create_app(
@@ -212,47 +208,8 @@ def create_app(
             )
         return response
 
-    def _build_checker() -> HealthChecker:
-        if checker_factory is not None:
-            checker = checker_factory()
-        else:
-            checker = HealthChecker()
-            checker.register("disk_space", check_disk_space)
-            checker.register("memory_usage", check_memory_usage)
-        if app.state.durable_event_store_status is not None:
-            checker.register(
-                "durable_event_store", app.state.durable_event_store_status.health_check
-            )
-        if app.state.pipeline is not None:
-            register_pipeline_health_checks(checker, app.state.pipeline)
-        return checker
-
-    def _runtime_event_catalog() -> dict[str, Any]:
-        catalog = service.get_event_catalog()
-        pipeline_obj = app.state.pipeline
-        registry = getattr(pipeline_obj, "model_registry", None)
-        loaded_models = set(getattr(registry, "active_model_names", []) or [])
-        legacy_detector = getattr(pipeline_obj, "detector", None)
-        ai_available = bool(legacy_detector is not None or loaded_models)
-        for item in catalog.get("catalog", []):
-            if not isinstance(item, dict):
-                continue
-            runtime = item.get("runtime")
-            item["runtime_available"] = runtime == "health" or ai_available
-            if item.get("selectable") and runtime in {"detection", "tracking"} and not ai_available:
-                item["selectable"] = False
-                item["blocked_reason"] = "활성화된 AI 모델이 없어 현재 장비에서 실행할 수 없습니다."
-                item["reason"] = item["blocked_reason"]
-        catalog["runtime"] = {
-            "ai_available": ai_available,
-            "loaded_models": sorted(loaded_models),
-            "ai_runtime": (
-                pipeline_obj.get_ai_runtime_status()
-                if pipeline_obj is not None and hasattr(pipeline_obj, "get_ai_runtime_status")
-                else {}
-            ),
-        }
-        return catalog
+    _build_checker = partial(build_health_checker, app, checker_factory)
+    _runtime_event_catalog = partial(runtime_event_catalog, app)
 
     # ── 헬스/제어(routes/ops.py로 이동 — 등록 순서 불변) ─────────────────────
     ops_routes.register(app, auth, build_checker=_build_checker)
