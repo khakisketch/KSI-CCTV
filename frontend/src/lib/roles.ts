@@ -11,7 +11,7 @@ export function roleAtLeast(role: Role, min: Role): boolean {
 }
 
 // 선언 테이블: 공개(`/login*`·`/api/auth/*`) → admin 전용 → operator → viewer(그 외).
-// `*` 항목은 단순 prefix, `/*` 항목은 경계(base 또는 base + "/") 매칭이다.
+// `ADMIN_STAR_PREFIXES`·`ADMIN_SLASH_BASES` 모두 경계(base 또는 base + "/") 매칭이다.
 const ADMIN_STAR_PREFIXES = [
   "/api/users",
   "/api/models",
@@ -47,7 +47,7 @@ export function minRoleForPath(pathname: string, method = "GET"): Role | null {
   if (pathname.startsWith("/login")) return null;
   if (pathname === "/api/auth" || pathname.startsWith("/api/auth/")) return null;
   for (const prefix of ADMIN_STAR_PREFIXES) {
-    if (pathname.startsWith(prefix)) return "admin";
+    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) return "admin";
   }
   for (const base of ADMIN_SLASH_BASES) {
     if (pathname === base || pathname.startsWith(`${base}/`)) return "admin";

@@ -124,3 +124,19 @@ describe("minRoleForPath unregistered /api/* fail-closed (F2-M3)", () => {
     expect(minRoleForPath("/api/onvif/discover", "POST")).toBe("operator");
   });
 });
+
+describe("minRoleForPath ADMIN_STAR_PREFIXES boundary (L1)", () => {
+  it("matches exact prefixes and slash children but not lookalike siblings", () => {
+    expect(minRoleForPath("/api/config", "GET")).toBe("admin");
+    expect(minRoleForPath("/api/config/", "GET")).toBe("admin");
+    expect(minRoleForPath("/api/config/a", "GET")).toBe("admin");
+    expect(minRoleForPath("/api/configXYZ", "GET")).toBe("viewer");
+    expect(minRoleForPath("/api/config-export", "GET")).toBe("viewer");
+    expect(minRoleForPath("/api/users2", "GET")).toBe("viewer");
+    expect(minRoleForPath("/settingsXYZ", "GET")).toBe("viewer");
+  });
+
+  it("still fail-closes unregistered lookalike mutations as admin", () => {
+    expect(minRoleForPath("/api/configXYZ", "POST")).toBe("admin");
+  });
+});

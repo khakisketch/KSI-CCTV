@@ -19,8 +19,13 @@ function sameOrigin(req: NextRequest): boolean {
   return origin === req.nextUrl.origin || req.headers.get("sec-fetch-site") === "same-origin";
 }
 
-function clearSession(response: NextResponse): NextResponse {
-  response.cookies.set(SESSION_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
+function clearSession(response: NextResponse, req: NextRequest): NextResponse {
+  const trustProxy = process.env.KSI_CCTV_TRUST_PROXY?.toLowerCase() === "true";
+  const forwardedProto = trustProxy ? req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() : undefined;
+  const secureCookie = process.env.KSI_CCTV_WEB_COOKIE_SECURE
+    ? process.env.KSI_CCTV_WEB_COOKIE_SECURE.toLowerCase() !== "false"
+    : forwardedProto === "https" || req.nextUrl.protocol === "https:";
+  response.cookies.set(SESSION_COOKIE, "", { httpOnly: true, sameSite: "lax", secure: secureCookie, path: "/", maxAge: 0 });
   return response;
 }
 
@@ -83,7 +88,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ detail: "현재 비밀번호가 올바르지 않습니다." }, { status: 401 });
     }
     if (result !== "changed") return NextResponse.json({ detail: "보호 상태를 변경하지 못했습니다." }, { status: 409 });
-    return clearSession(NextResponse.json({ ok: true, mode: "local" }));
+    return clearSession(NextResponse.json({ ok: true, mode: "local" }), req);
   }
   const result = await disableLocalProtection(body?.currentPassword);
   if (result === "unauthorized") {
@@ -91,5 +96,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ detail: "현재 비밀번호가 올바르지 않습니다." }, { status: 401 });
   }
   if (result !== "disabled") return NextResponse.json({ detail: "보호 상태를 변경하지 못했습니다." }, { status: 409 });
-  return clearSession(NextResponse.json({ ok: true, mode: "open" }));
+  return clearSession(NextResponse.json({ ok: true, mode: "open" }), req);
 }

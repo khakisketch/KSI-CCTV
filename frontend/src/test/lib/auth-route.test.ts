@@ -319,3 +319,94 @@ describe("login password length cap (F1-H3a)", () => {
     expect(passwordHashMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("logout cookie clearing flags (M4)", () => {
+  beforeEach(() => {
+    vi.stubEnv("KSI_CCTV_WEB_PASSWORD", "test-password");
+    vi.stubEnv("KSI_CCTV_WEB_SECRET", "s".repeat(32));
+    vi.stubEnv("KSI_CCTV_WEB_SESSION_TTL_SEC", "604800");
+    vi.stubEnv("KSI_CCTV_TRUST_PROXY", "false");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("clears the session cookie with the login transport attributes", async () => {
+    const { POST: logout } = await import("@/app/api/auth/logout/route");
+    const response = await logout(new NextRequest("http://appliance.local/api/auth/logout", { method: "POST" }));
+    const setCookie = response.headers.get("set-cookie") ?? "";
+
+    expect(response.status).toBe(200);
+    expect(setCookie).toContain(`${SESSION_COOKIE}=`);
+    expect(setCookie).toMatch(/;\s*Path=\//i);
+    expect(setCookie).toMatch(/;\s*HttpOnly/i);
+    expect(setCookie).toMatch(/;\s*SameSite=Lax/i);
+    expect(setCookie).toContain("Max-Age=0");
+    expect(setCookie).not.toMatch(/;\s*Secure/i);
+  });
+
+  it("marks the cleared cookie Secure when cookie-secure is forced", async () => {
+    vi.stubEnv("KSI_CCTV_WEB_COOKIE_SECURE", "true");
+    const { POST: logout } = await import("@/app/api/auth/logout/route");
+    const response = await logout(new NextRequest("http://appliance.local/api/auth/logout", { method: "POST" }));
+    const setCookie = response.headers.get("set-cookie") ?? "";
+
+    expect(response.status).toBe(200);
+    expect(setCookie).toMatch(/;\s*Secure/i);
+    expect(setCookie).toMatch(/;\s*SameSite=Lax/i);
+    expect(setCookie).toContain("Max-Age=0");
+  });
+});
+
+describe("protection cookie clearing flags (M4)", () => {
+  let authDir = "";
+  let sessionDir = "";
+
+  beforeEach(async () => {
+    authDir = await mkdtemp(path.join(os.tmpdir(), "ksi-protection-clear-"));
+    sessionDir = await mkdtemp(path.join(os.tmpdir(), "ksi-protection-clear-sessions-"));
+    vi.stubEnv("KSI_CCTV_WEB_AUTH_DIR", authDir);
+    vi.stubEnv("KSI_CCTV_WEB_SESSION_DIR", sessionDir);
+    vi.stubEnv("KSI_CCTV_WEB_PASSWORD", "");
+    vi.stubEnv("KSI_CCTV_WEB_SECRET", "");
+    vi.stubEnv("KSI_CCTV_WEB_SETUP_TOKEN", "t".repeat(32));
+    vi.stubEnv("KSI_CCTV_TRUST_PROXY", "true");
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(authDir, { recursive: true, force: true });
+    await rm(sessionDir, { recursive: true, force: true });
+  });
+
+  it("clears the session cookie with the login transport attributes on password change", async () => {
+    const { POST: protection } = await import("@/app/api/auth/protection/route");
+    const setup = await protection(new NextRequest("http://console.test/api/auth/protection", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://console.test" },
+      body: JSON.stringify({ action: "setup", newPassword: "local-password-123", setupToken: "t".repeat(32) }),
+    }));
+    const token = setup.cookies.get(SESSION_COOKIE)?.value;
+    expect(setup.status).toBe(200);
+    expect(token).toBeTruthy();
+
+    const change = await protection(new NextRequest("http://console.test/api/auth/protection", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://console.test",
+        cookie: `${SESSION_COOKIE}=${token}`,
+      },
+      body: JSON.stringify({ action: "change", currentPassword: "local-password-123", newPassword: "changed-password-123" }),
+    }));
+    const setCookie = change.headers.get("set-cookie") ?? "";
+
+    expect(change.status).toBe(200);
+    expect(setCookie).toContain(`${SESSION_COOKIE}=`);
+    expect(setCookie).toMatch(/;\s*Path=\//i);
+    expect(setCookie).toMatch(/;\s*HttpOnly/i);
+    expect(setCookie).toMatch(/;\s*SameSite=Lax/i);
+    expect(setCookie).toContain("Max-Age=0");
+  });
+});
