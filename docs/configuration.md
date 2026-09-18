@@ -266,6 +266,60 @@ fire:
 
 ---
 
+## Pose/ST-GCN behavior 추론 (opt-in)
+
+`config/default.yaml`의 `behavior` 블록이 전체 스위치이며 기본값은 `enabled: false`다.
+카탈로그(`config/event_policies.yaml`)의 이벤트별 `behavior.enabled`도 기본 `false`다.
+
+```yaml
+# config/default.yaml
+behavior:
+  enabled: false        # true로만 behavior plan 실행
+  iou_threshold: 0.50
+  inference_stride: 5
+  stale_after_sec: 10
+  max_tracks_per_camera: 100
+```
+
+활성화 요건 (모두 충족해야 발화):
+
+1. 포즈/액션 ONNX 모델 파일을 제공한다 — 기본 경로 `./models/pose.onnx`,
+   `./models/stgcn.onnx` (`config/model_profiles.yaml`의 `pose_onnx`·`stgcn_onnx` 참조).
+2. `config/model_profiles.yaml`에서 `pose_onnx`·`stgcn_onnx` 두 프로파일을
+   `enabled: true`로 설정한다(기본 `false`, 업로드 모델도 기본 비활성).
+3. `config/default.yaml`의 `behavior.enabled: true`와 해당 이벤트 카탈로그의
+   `behavior.enabled: true`를 설정한다.
+
+동작 계약:
+
+- `behavior.enabled`인 이벤트는 레거시 bbox 휴리스틱 평가에서 제외된다
+  (`src/policy/event_policy_engine.py` — "legacy bbox heuristic must not emit
+  alongside it"). 같은 이벤트는 ST-GCN `stgcn_action` 경로로만 발화하며,
+  `behavior.enabled: false`로 되돌리면 휴리스틱 decision이 복원된다(폴백).
+- pose/action 모델이 레지스트리에 없으면 해당 plan은 이벤트를 내지 않고
+  `get_status()["behavior"]["counters"]["unavailable"]`만 증가시키며,
+  미가용 경고 로그(`[behavior] pose/action models unavailable`)는 1회만 출력된다.
+- 시간 게이트(`temporal.min_hits/window_frames/max_gap_sec/clear_after_sec`)는
+  `src/policy/rule_evaluators.py`가 적용한다. 예: 카탈로그 기본
+  `temporal: {min_hits: 2, ...}`에서는 1회 hit는 미발화, 2회 hit부터 발화한다.
+
+실험 게이팅:
+
+- `fall`·`fight` 등은 `src/release_capabilities.py`의
+  `EXPERIMENTAL_EVENT_CAPABILITIES`에 속하며 이번 릴리스의
+  `RELEASE_QUALIFIED_EXPERIMENTAL_EVENTS`에는 포함되지 않았으므로,
+  자격 검증 전에는 웹 콘솔에서 선택할 수 없다(의도된 게이팅, 우회 금지).
+
+상태 확인:
+
+- `get_status()["behavior"]` (및 `ai_runtime.behavior`): `enabled`·`counters`
+  (`unavailable`·`pose_failures`·`action_failures`·`inferences`)·버퍼 점유.
+- 헬스(`src/utils/health.py::check_ai_runtime`): `behavior`가 enabled인데 모델이
+  없으면 `behavior_models_unavailable`, pose/action 실패 누적 3회 이상이면
+  `behavior_runtime_errors`를 보고한다.
+
+---
+
 ## config/camera_profiles.yaml
 
 카메라별 도메인과 활성 이벤트를 정의합니다. 실행 모델은 직접 지정하지 않습니다.

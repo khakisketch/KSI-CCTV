@@ -237,3 +237,107 @@ def test_iou_association_rejects_ambiguous_pose_matches():
     ambiguous = PoseObservation([(1, 1, 1)], (0, 0, 20, 20), 1, 1)
     assert pipeline._associate_poses([ambiguous], tracks) == []
     assert pipeline.get_status()["behavior"]["counters"]["ambiguous"] == 1
+
+
+def _suppression_policies(behavior_enabled: bool) -> dict:
+    return {
+        "catalog": {"fire": {
+            "status": "active", "runtime": "detection",
+            "behavior": {"enabled": behavior_enabled},
+        }},
+        "profiles": {"general": {"policies": {"fire": {
+            "trigger": {"models": ["m"], "classes": ["fire"]},
+            "rule": {"type": "direct_detection"},
+        }}}},
+    }
+
+
+def test_behavior_enabled_suppresses_heuristic_and_disable_restores_fallback():
+    """behavior.enabled=true suppresses the legacy heuristic; false restores it."""
+    policies = _suppression_policies(True)
+    engine = EventPolicyEngine(policies)
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)
+    detections = {"m": [Detection(0, "fire", 0.9, (0, 0, 5, 5))]}
+    assert engine.evaluate("general", detections, frame, "cam", enabled_events=["fire"]) == []
+    policies["catalog"]["fire"]["behavior"]["enabled"] = False
+    restored = engine.evaluate("general", detections, frame, "cam", enabled_events=["fire"])
+    assert len(restored) == 1
+    assert restored[0].policy_name == "fire"
+
+
+def test_behavior_unavailable_warns_once_while_counting_every_frame(caplog):
+    """Missing pose/action models: no events, unavailable++ per frame, one warning."""
+    import logging
+    from datetime import datetime
+
+    policies = _suppression_policies(True)
+    registry = Mock()
+    registry.pose_detectors = {}
+    registry.action_classifiers = {}
+    pipeline = SafetyPipeline(
+        model_registry=registry, policy_engine=EventPolicyEngine(policies),
+        track_manager=Mock(), behavior_settings={"enabled": True},
+    )
+    plan = {"pose_model": "pose", "action_model": "action", "event_name": "fire"}
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    timestamp = datetime(2026, 1, 1)
+    with caplog.at_level(logging.WARNING, logger="src.pipeline.pipeline"):
+        first = pipeline._process_behavior_plan("cam", timestamp, image, [], {}, plan)
+        second = pipeline._process_behavior_plan("cam", timestamp, image, [], {}, plan)
+    assert first == [] and second == []
+    assert pipeline.get_status()["behavior"]["counters"]["unavailable"] == 2
+    warnings = [
+        record for record in caplog.records
+        if record.name == "src.pipeline.pipeline" and record.levelno >= logging.WARNING
+    ]
+    assert len(warnings) == 1
+    assert "unavailable" in warnings[0].getMessage()
+
+
+def test_behavior_temporal_min_hits_gates_first_hit_and_fires_on_second():
+    """Catalog plan temporal.min_hits=2: first hit silent, second hit emits."""
+    from datetime import datetime, timedelta
+    from unittest.mock import Mock
+
+    base = datetime(2026, 1, 1)
+    first_seen, second_seen = base, base + timedelta(seconds=1)
+    track = TrackSnapshot(
+        "cam", 7, "person", (10, 10, 30, 50), 0.9, first_seen, second_seen,
+        (TrackPoint(20, 50, first_seen),),
+    )
+    policies = {
+        "catalog": {"fire": {"status": "active", "runtime": "detection", "behavior": {
+            "enabled": True, "person": {"models": ["person_yolo"], "classes": ["person"]},
+            "pose_model": "pose", "action_model": "action", "action_label": "fire",
+            "min_confidence": 0.5,
+            "temporal": {"min_hits": 2, "window_frames": 4, "max_gap_sec": 60},
+        }}},
+        "profiles": {"general": {"policies": {"fire": {
+            "trigger": {"models": ["person_yolo"], "classes": ["person"]},
+            "rule": {"type": "pose_anomaly"}, "cooldown_sec": 0,
+        }}}},
+    }
+    registry = Mock()
+    registry.models = {"person_yolo": Mock()}
+    registry.pose_detectors = {"pose": Mock()}
+    registry.action_classifiers = {"action": Mock(sequence_length=1)}
+    registry.detect_poses.side_effect = [
+        [PoseObservation([(11, 22, 0.9), (12, 23, 0.9)], track.bbox, first_seen.timestamp(), 0.9)],
+        [PoseObservation([(11, 22, 0.9), (12, 23, 0.9)], track.bbox, second_seen.timestamp(), 0.9)],
+    ]
+    registry.classify_action.return_value = ActionPrediction("fire", 0, 0.9, [0.9, 0.1])
+    tracker = Mock()
+    tracker.update.return_value = [track]
+    engine = EventPolicyEngine(policies)
+    plan = engine.behavior_plans("general", ["fire"])[0]
+    assert plan["temporal"]["min_hits"] == 2
+    pipeline = SafetyPipeline(
+        model_registry=registry, policy_engine=engine, track_manager=tracker,
+        behavior_settings={"enabled": True, "inference_stride": 1, "iou_threshold": 0.5},
+    )
+    image = np.zeros((80, 80, 3), dtype=np.uint8)
+    person = {"person_yolo": [Detection(0, "person", 0.9, track.bbox)]}
+    assert pipeline._process_behavior_plan("cam", first_seen, image, [track], person, plan) == []
+    second = pipeline._process_behavior_plan("cam", second_seen, image, [track], person, plan)
+    assert len(second) == 1
+    assert second[0].event_type == "fire"

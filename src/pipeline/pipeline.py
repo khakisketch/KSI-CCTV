@@ -252,6 +252,7 @@ class SafetyPipeline:
             "pose_failures": 0, "action_failures": 0, "unavailable": 0,
             "unmatched": 0, "ambiguous": 0, "inferences": 0,
         }
+        self._behavior_unavailable_warned = False
         self._snapshot_sanitizer: Callable[[np.ndarray], np.ndarray] | None = None
         self._snapshot_sanitizer_required = False
 
@@ -1855,6 +1856,15 @@ class SafetyPipeline:
         if pose_model not in pose_detectors or action_model not in classifiers:
             with self._state_lock:
                 self._behavior_counters["unavailable"] += 1
+                warn_once = not self._behavior_unavailable_warned
+                if warn_once:
+                    self._behavior_unavailable_warned = True
+            if warn_once:
+                logger.warning(
+                    "[behavior] pose/action models unavailable "
+                    "(pose=%r, action=%r) — behavior events suppressed",
+                    pose_model, action_model,
+                )
             return []
         classes = set(plan.get("person_classes", []) or [])
         boxes = [d.bbox for model in plan.get("person_models", []) for d in all_detections.get(model, []) if not classes or d.class_name in classes]
