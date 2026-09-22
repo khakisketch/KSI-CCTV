@@ -3,12 +3,27 @@ import { cookies } from "next/headers";
 import { AlertSettings } from "@/components/alert-settings";
 import { AccessProtectionSettings } from "@/components/access-protection-settings";
 import { UserManagement } from "@/components/user-management";
+import {
+  WebhookSettings,
+  type WebhookActionResult,
+  type WebhookEndpointView,
+  type WebhookSettingsActions,
+} from "@/components/webhook-settings";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toPublicUser } from "@/app/api/users/route";
-import { getAlertDeliveryStatus, getAlertPreferences, getConfig, getPolicies } from "@/lib/engine";
+import {
+  engineWrite,
+  getAlertDeliveryStatus,
+  getAlertPreferences,
+  getConfig,
+  getPolicies,
+  getWebhookChannels,
+  getWebhooks,
+} from "@/lib/engine";
 import { getAuthStatus, SESSION_COOKIE, sessionPrincipal } from "@/lib/auth";
-import { listUsers } from "@/lib/users";
+import { roleAtLeast } from "@/lib/roles";
+import { findUserById, listUsers } from "@/lib/users";
 
 export const dynamic = "force-dynamic";
 
@@ -50,18 +65,156 @@ function Section({ title, data }: { title: string; data: Record<string, unknown>
 }
 
 export default async function SettingsPage() {
-  const [cfg, prefs, policies, delivery, authStatus] = await Promise.all([
+  const [cfg, prefs, policies, delivery, authStatus, webhooks, webhookChannels] = await Promise.all([
     getConfig(),
     getAlertPreferences(),
     getPolicies(),
     getAlertDeliveryStatus(),
     getAuthStatus(),
+    getWebhooks(),
+    getWebhookChannels(),
   ]);
   const connected = cfg !== null;
   const events = deriveEvents(policies);
   const principal = await sessionPrincipal((await cookies()).get(SESSION_COOKIE)?.value);
   const isAdmin = principal?.role === "admin";
   const managedUsers = isAdmin ? (await listUsers()).map(toPublicUser) : [];
+
+  // ── Webhook 관리 서버 액션 (P2-T4, webhook 카드 영역) ──
+  // 별도 Next 프록시 라우트 없이 이 페이지 안에서 완결한다. API 키는 서버에만
+  // 존재하고, 액션마다 admin 역할을 재확인한다(proxy 1차 게이트의 2차 방어).
+  async function webhookActor(): Promise<string | null> {
+    const actorPrincipal = await sessionPrincipal(
+      (await cookies()).get(SESSION_COOKIE)?.value,
+    );
+    if (!actorPrincipal || !roleAtLeast(actorPrincipal.role, "admin")) return null;
+    if (actorPrincipal.userId === undefined) return "admin";
+    const user = await findUserById(actorPrincipal.userId);
+    if (!user || user === "error" || !user.enabled) return "system";
+    return user.username;
+  }
+
+  function engineDetail(data: unknown): string {
+    if (data && typeof data === "object" && "detail" in data) {
+      const detail = (data as { detail?: unknown }).detail;
+      if (typeof detail === "string" && detail.length > 0) return detail;
+    }
+    return "엔진 연결 실패";
+  }
+
+  // T3 백엔드 실형태: 생성·회전 응답은 {endpoint: {..., secret: 평문}}(중첩).
+  async function createWebhookEndpoint(input: {
+    name: string;
+    url: string;
+  }): Promise<WebhookActionResult<{ endpoint: WebhookEndpointView }>> {
+    "use server";
+    const actor = await webhookActor();
+    if (actor === null) return { ok: false, detail: "이 리소스에 접근할 권한이 없습니다." };
+    const r = await engineWrite<{ endpoint: WebhookEndpointView }>(
+      "/api/webhooks",
+      input,
+      "POST",
+      8000,
+      actor,
+    );
+    if (!r.ok || !r.data) return { ok: false, detail: engineDetail(r.data) };
+    return { ok: true, data: r.data };
+  }
+
+  async function updateWebhookEndpoint(
+    id: string,
+    patch: { name?: string; url?: string; enabled?: boolean },
+  ): Promise<WebhookActionResult<{ endpoint: WebhookEndpointView }>> {
+    "use server";
+    const actor = await webhookActor();
+    if (actor === null) return { ok: false, detail: "이 리소스에 접근할 권한이 없습니다." };
+    const r = await engineWrite<{ endpoint: WebhookEndpointView }>(
+      `/api/webhooks/${encodeURIComponent(id)}`,
+      patch,
+      "PUT",
+      8000,
+      actor,
+    );
+    if (!r.ok || !r.data) return { ok: false, detail: engineDetail(r.data) };
+    return { ok: true, data: r.data };
+  }
+
+  async function deleteWebhookEndpoint(id: string): Promise<WebhookActionResult> {
+    "use server";
+    const actor = await webhookActor();
+    if (actor === null) return { ok: false, detail: "이 리소스에 접근할 권한이 없습니다." };
+    const r = await engineWrite(
+      `/api/webhooks/${encodeURIComponent(id)}`,
+      {},
+      "DELETE",
+      8000,
+      actor,
+    );
+    if (!r.ok) return { ok: false, detail: engineDetail(r.data) };
+    return { ok: true, data: null };
+  }
+
+  async function rotateWebhookEndpoint(
+    id: string,
+  ): Promise<WebhookActionResult<{ endpoint: WebhookEndpointView }>> {
+    "use server";
+    const actor = await webhookActor();
+    if (actor === null) return { ok: false, detail: "이 리소스에 접근할 권한이 없습니다." };
+    const r = await engineWrite<{ endpoint: WebhookEndpointView }>(
+      `/api/webhooks/${encodeURIComponent(id)}/rotate`,
+      {},
+      "POST",
+      8000,
+      actor,
+    );
+    if (!r.ok || !r.data) return { ok: false, detail: engineDetail(r.data) };
+    return { ok: true, data: r.data };
+  }
+
+  async function testWebhookEndpoint(
+    id: string,
+  ): Promise<WebhookActionResult<{ ok: boolean; endpoint_id: string }>> {
+    "use server";
+    const actor = await webhookActor();
+    if (actor === null) return { ok: false, detail: "이 리소스에 접근할 권한이 없습니다." };
+    const r = await engineWrite<{ ok: boolean; endpoint_id: string }>(
+      `/api/webhooks/${encodeURIComponent(id)}/test`,
+      {},
+      "POST",
+      15000,
+      actor,
+    );
+    if (!r.ok || !r.data) return { ok: false, detail: engineDetail(r.data) };
+    return { ok: true, data: r.data };
+  }
+
+  async function saveWebhookChannels(
+    channels: Record<string, string[]>,
+    confirm: boolean,
+  ): Promise<WebhookActionResult<{ event_count: number; channels: Record<string, string[]> }>> {
+    "use server";
+    const actor = await webhookActor();
+    if (actor === null) return { ok: false, detail: "이 리소스에 접근할 권한이 없습니다." };
+    const r = await engineWrite<{ event_count: number; channels: Record<string, string[]> }>(
+      "/api/webhooks/channels",
+      { channels, confirm },
+      "PUT",
+      8000,
+      actor,
+    );
+    if (!r.ok || !r.data) return { ok: false, detail: engineDetail(r.data) };
+    return { ok: true, data: r.data };
+  }
+
+  const webhookActions: WebhookSettingsActions = {
+    createEndpoint: createWebhookEndpoint,
+    updateEndpoint: updateWebhookEndpoint,
+    deleteEndpoint: deleteWebhookEndpoint,
+    rotateEndpoint: rotateWebhookEndpoint,
+    testEndpoint: testWebhookEndpoint,
+    saveChannels: saveWebhookChannels,
+  };
+  const webhookActiveCount = (webhooks?.endpoints ?? []).filter((e) => e.enabled).length;
 
   return (
     <div className="space-y-4">
@@ -101,6 +254,31 @@ export default async function SettingsPage() {
                 <div><dt className="text-muted-foreground">Outbox</dt><dd><Badge variant={delivery.outbox.running ? "success" : "warning"}>{delivery.outbox.running ? "실행 중" : "중지"}</Badge></dd></div>
               </dl>
             )}
+            {webhooks && (
+              <div className="flex flex-wrap items-center gap-2 border-t pt-2">
+                <Badge variant={webhookActiveCount > 0 ? "success" : "outline"}>
+                  Webhook {webhookActiveCount}/{webhooks.count} 활성
+                </Badge>
+                <span>대기·전송 중·전달됨·실패 보관 수치는 이메일+Webhook 합산입니다.</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {connected && webhooks && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Webhook 알림</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <WebhookSettings
+              initialEndpoints={webhooks.endpoints}
+              // I2: 조회 실패(null)를 {}로 폴백하지 않는다 — 컴포넌트가 에러+차단 처리.
+              initialChannels={webhookChannels?.channels ?? null}
+              events={events}
+              actions={webhookActions}
+            />
           </CardContent>
         </Card>
       )}

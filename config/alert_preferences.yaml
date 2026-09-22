@@ -12,6 +12,25 @@ email_alert_level_threshold: medium
 # 값: true (발송) / false (차단)
 per_event_email_enabled: {}
 
+# 웹훅 발송 alert_level 임계값 (P2-T2)
+# 이 임계값 이상의 alert_level을 가진 이벤트만 웹훅을 발송합니다.
+# 허용 값: low, medium, high, critical (기본 medium)
+webhook_alert_level_threshold: medium
+
+# 이벤트×채널 매트릭스 (P2-T2)
+# 키: 이벤트 타입, 값: 발송 채널 목록 (email, webhook 조합)
+# 예: {intrusion: [email, webhook], person_detected: [email]}
+# 해당 타입이 등록됐는데 채널이 목록에 없으면 그 채널은 차단된다.
+# 미등록 타입은 기본 허용(임계값만 적용). 기존 per_event_email_enabled=false는
+# 매트릭스와 무관하게 이메일을 차단한다(하위호환).
+# 주의(R1/⚠️-1): 미등록 타입 기본 허용이므로 신규 이벤트 타입은 등록된 전체
+# 활성 엔드포인트로 fan-out된다. 차단이 필요하면 매트릭스에 명시 등록할 것.
+# 주의(R3): webhook-only 구성 시에도 전달 상태 조회(notification_status 계열)는
+# 이메일 중심 반환을 유지한다 — webhook 등록·활성은 GET /api/webhooks로 별도 확인.
+# 주의(M-2): 비활성 전환과 발송 경합 시 해당 attempt는 재시도 후 dead-letter로
+# 이동한다(조용한 드롭 아님). 운영 상세는 docs/operations.md "Webhook 알림 설정".
+per_event_channels: {}
+
 # ──────────────────────────────────────────────────────────────────────
 # SMTP 연결 설정 (환경변수로 주입 — 이 파일에 비밀번호 기입 금지)
 # ──────────────────────────────────────────────────────────────────────

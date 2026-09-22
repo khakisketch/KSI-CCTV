@@ -196,6 +196,12 @@ def build_pipeline(config: AppConfig) -> tuple[SafetyPipeline, AlertManager, Mul
     )
 
     alerts_cfg = config.get_alert_config()
+    # R9 C-1: 데몬 경로 AlertManager에 실제 엔드포인트 리더를 주입한다.
+    # 미주입(None)이면 _get_webhook_endpoints()가 항상 []라 실환경 webhook 영구 스킵.
+    # 함수-로컬 import — service가 alert_manager를 참조하므로 모듈-로드 시점 순환을 피한다
+    # (직접 주입 검증됨: `import src.run` + `from src.api.routes.webhooks import ...` 순환 없음).
+    from src.api.routes.webhooks import load_webhook_endpoints
+
     alert_manager = AlertManager(AlertConfig(
         enabled=bool(alerts_cfg.get("enabled", True)),
         log_file=alerts_cfg.get("log_file", "./logs/alerts.log"),
@@ -209,7 +215,8 @@ def build_pipeline(config: AppConfig) -> tuple[SafetyPipeline, AlertManager, Mul
         log_backup_count=int(alerts_cfg.get("log_backup_count", 5)),
         encrypt_images=bool(alerts_cfg.get("encrypt_images", True)),
         outbox_dir=alerts_cfg.get("outbox_dir", "./data/outbox"),
-    ), event_repository=event_repository, incident_store=incident_store)
+    ), event_repository=event_repository, incident_store=incident_store,
+       webhook_endpoint_provider=load_webhook_endpoints)
     pipeline.configure_snapshot_privacy(
         alert_manager.prepare_image_for_display,
         required=alert_manager.config.blur_faces,

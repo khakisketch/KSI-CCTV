@@ -24,6 +24,7 @@ const ADMIN_STAR_PREFIXES = [
   "/api/preflight",
   "/api/audit",
   "/api/alert-preferences",
+  "/api/webhooks",
   "/api/settings",
   "/settings",
 ];

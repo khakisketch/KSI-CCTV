@@ -402,6 +402,38 @@ export interface AlertDeliveryStatus {
 }
 export const getAlertDeliveryStatus = () => engineGet<AlertDeliveryStatus>("/api/alerts/status");
 
+// ── Webhook 수신 엔드포인트 + 이벤트×채널 매트릭스 (P2-T4, T3 API 8종 소비) ──
+// secret은 생성·회전 응답에서만 1회 평문, 그 외 목록·수정 응답은 "***" 마스킹.
+export interface WebhookEndpointItem {
+  id: string;
+  name: string;
+  url: string;
+  secret: string;
+  enabled: boolean;
+  created_at: string;
+  rotated_at: string | null;
+}
+export const getWebhooks = () =>
+  engineGet<{ count: number; endpoints: WebhookEndpointItem[] }>("/api/webhooks");
+export const getWebhookChannels = () =>
+  engineGet<{ channels: Record<string, string[]> }>("/api/webhooks/channels");
+
+/** 목록 state 저장 전 마스킹 — 생성·회전 응답의 중첩 평문이 목록에 남지 않도록(C2). */
+export function maskWebhookEndpoint<T extends { secret: string }>(ep: T): T {
+  return { ...ep, secret: "***" };
+}
+/** 목록·수정 응답의 마스킹 secret인지 판정 — 평문 1회 secret과 구분용. */
+export function isMaskedSecret(secret: unknown): boolean {
+  return typeof secret !== "string" || secret === "***" || secret === "";
+}
+
+/** 매트릭스 저장 시 confirm:true 필요 여부 — 빈 매트릭스({} 또는 전부 빈 목록). */
+export function shouldConfirmChannelsSave(channels: Record<string, string[]>): boolean {
+  const keys = Object.keys(channels ?? {});
+  if (keys.length === 0) return true;
+  return keys.every((k) => (channels[k] ?? []).length === 0);
+}
+
 export interface SystemMetrics {
   cpu_percent?: number;
   memory_percent?: number;

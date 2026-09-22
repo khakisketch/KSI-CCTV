@@ -1,0 +1,16 @@
+# Webhook 수신 엔드포인트 예시 (P2-T3)
+#
+# 실제 저장소 `config/webhooks.yaml`은 본 파일을 복사해 만든다:
+#   cp config/webhooks.example.yaml config/webhooks.yaml
+# `config/webhooks.yaml`은 시크릿을 포함하므로 0o600·git 미추적(.gitignore)이다.
+# secret은 직접 기입하지 않는다 — POST /api/webhooks(생성)·rotate(회전) 응답에서
+# 1회만 평문으로 발급되며, 이후 조회는 "***" 마스킹된다.
+version: 1
+endpoints: []
+# - id: "0123456789abcdef"  # hex 16 (생성 시 자동 발급)
+#   name: "관제실 수신기"
+#   url: "https://example.com/hook"  # http/https만, 자격정보(user:pass@) 금지
+#   secret: "(API 응답에서 1회 발급 — 직접 기입 금지)"
+#   enabled: true
+#   created_at: "2026-09-20T00:00:00+00:00"
+#   rotated_at: null

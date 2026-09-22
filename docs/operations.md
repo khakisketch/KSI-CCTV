@@ -287,6 +287,55 @@ KSI_CCTV_SMTP_RECIPIENTS=admin@example.com,security@example.com
 
 ---
 
+## Webhook 알림 설정
+
+이벤트 발생 시 등록된 엔드포인트로 JSON payload v1을 발송합니다.
+기존 이메일 동작(임계값·per-event 기본값·outbox 재시도 상수)은 불변입니다.
+웹 콘솔 "설정"의 Webhook 카드와 `PUT /api/webhooks/channels` 매트릭스로 관리하며, 전부 admin 전용입니다(단일 API 키 — 아래 I-3 주의).
+
+### 등록·회전·테스트
+
+- 등록: `POST /api/webhooks` (name+url) → secret이 응답에서 1회만 평문 발급됩니다. 복사 버튼으로 보관하고, 재조회는 불가(`"***"` 마스킹)합니다.
+- 회전: `POST /api/webhooks/{id}/rotate` → 신 secret 1회 평문 발급, 구 secret은 즉시 무효가 됩니다.
+- 수정·비활성: `PUT /api/webhooks/{id}` (name/url/enabled), 삭제: `DELETE /api/webhooks/{id}`.
+- 테스트 발송: `POST /api/webhooks/{id}/test` → `type:"test"` ping 발송, 결과 `{ok, endpoint_id}` 반환. 비활성 엔드포인트는 409입니다.
+- 저장소 `config/webhooks.yaml`은 0o600·git 미추적(`.gitignore`)입니다. secret을 파일에 직접 기입하지 마십시오. URL은 http/https만 허용, 자격정보(`user:pass@`) 포함 금지입니다. URL 검증은 scheme·호스트·자격정보만 확인하며 사설/내부망 대역을 차단하지 않으므로, 등록한 내부 주소로는 Appliance에서 직접 fetch가 발생합니다(R6). 사내 수신기 외 내부망 URL 등록에 주의하십시오.
+- 감사는 `webhook_created/updated/deleted/rotated/tested` + `webhook_channels_saved` 6종으로 남으며 URL만 기록하고 secret은 절대 기록하지 않습니다.
+
+### dead-letter 확인
+
+- 재시도·백오프·dead-letter·멱등은 outbox 계약을 재사용합니다(발송자는 단발 시도만, `idempotency_key = webhook_{endpoint_id}_{event_id}`).
+- 전달 상태는 웹 콘솔 전달 상태 카드의 webhook 합산(pending/inflight/delivered/dead_letter)으로 확인합니다.
+
+### 주의 (R1/⚠️-1): 미등록 타입 기본 허용 fan-out
+
+- `per_event_channels`에 미등록된 이벤트 타입은 기본 허용입니다(임계값만 적용).
+- 신규 이벤트 타입이 추가되면 등록된 모든 활성 엔드포인트로 fan-out되므로, 차단이 필요하면 매트릭스에 명시 등록하십시오.
+
+### 주의 (R3): webhook-only 구성 갭
+
+- 매트릭스에서 email을 제외한 webhook-only 구성도 발송 자체는 정상 동작합니다.
+- 다만 전달 상태 조회(`notification_status` 계열)는 이메일 설정 여부 중심 반환을 유지하므로, webhook 등록·활성 여부는 `GET /api/webhooks`로 별도 확인해야 합니다.
+- `handle_event()`의 반환값·`provisional_sent`는 이메일 enqueue 수락 기준이므로 webhook-only 구성의 발송 여부 판단에 사용하지 마십시오.
+
+### 주의 (M-2): 비활성 전환 경합 시 재시도
+
+- enqueue 시점에는 활성이었으나 dispatch 시점에 비활성으로 전환된 attempt는 실패로 처리되어 outbox 재시도 후 dead-letter로 이동합니다(조용한 드롭이 아니라 재시도 경로를 탑니다).
+- 의도적 비활성 전환 뒤 dead_letter에 쌓인 항목은 오탐이 아니며, dead-letter redrive 경로는 없으므로 재활성 후 신규 이벤트부터 정상 발송됩니다.
+
+### 주의 (I-3): 단일 API 키 = admin
+
+- `KSI_CCTV_API_KEY` 단일 키는 admin 등급입니다. webhook 관리 8종을 포함한 모든 보호 엔드포인트가 동일 키로 열리므로, 별도 읽기 전용 키는 없습니다.
+- 키 유출 시 전체 관리 권한이 노출됩니다. 키는 비밀 관리 시스템에 보관하고 저장소에 커밋하지 마십시오(P2 범위 밖 아키텍처 — 문서 고지로 커버).
+
+### 전송 범위·수신 검증 (R7)
+
+- 전송 범위: payload v1 `{version:"v1", event_id, idempotency_key, sent_at, type:"alert"|"test", event:{...}}` — `event`는 이벤트 dict 전체 스냅샷입니다. redaction 없이 전체를 보내므로(제품 관행: 전체 스냅샷이 주류), 수신측 접근 통제를 전제로 등록하십시오.
+- 수신 검증: `X-KSI-Signature` = HMAC-SHA256 hex(secret UTF-8, raw body). `X-KSI-Delivery`(idempotency_key)로 중복 제거, `X-KSI-Event`(event type) 참조, `X-KSI-Timestamp`(unix sec)는 리플레이 window 300초를 수신측 권고로 검증하십시오.
+- `event.evidence_image` 등 캡처 상대경로는 Appliance 로컬 경로이므로 수신측에서 무용합니다(직접 접근 불가). 이미지 원본이 필요하면 별도 절차로 제공하십시오.
+
+---
+
 ## 네트워크 보안 (HTTPS/TLS)
 
 Appliance는 Caddy HTTPS endpoint만 LAN/VPN에 공개하고, 웹, 엔진 API, MediaMTX HLS/control은 Compose 내부에 둡니다. 첫 릴리스는 HLS만 지원합니다.

@@ -39,6 +39,7 @@ build/
 !.env.example
 cameras.local.json
 config/cameras.local.json
+config/webhooks.yaml
 docker-compose.override.yml
 .vscode/
 .idea/

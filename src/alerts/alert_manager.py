@@ -21,6 +21,7 @@ import shutil
 import smtplib
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from email import policy
@@ -40,6 +41,8 @@ from src.alerts.outbox import (
     NotificationDispatcher,
     OutboxWorker,
 )
+from src.alerts.webhook import send_webhook
+from src.events.models import WebhookEndpoint
 from src.pipeline.pipeline import SafetyEvent
 from src.utils.config import mask_text  # Phase 8 M5.3 S3: URL masking
 from src.utils.privacy import blur_faces as _blur_faces  # #11: face blur SSOT
@@ -49,6 +52,12 @@ logger = logging.getLogger(__name__)
 
 _CAMERA_HEALTH_EVENTS = {"camera_disconnect", "tamper"}
 _CAMERA_RECOVERY_EVENTS = {"camera_recovered", "tamper_recovered"}
+_ALERT_LEVEL_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def _alert_level_meets(alert_level: str, threshold: str) -> bool:
+    """alert_level이 임계값 이상인지 판정 (미지 값은 low/medium 취급)."""
+    return _ALERT_LEVEL_ORDER.get(alert_level, 0) >= _ALERT_LEVEL_ORDER.get(threshold, 1)
 _SAFE_CAPTURE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # PII/credentials may appear in free-text fields. mask_text applied only to these
@@ -148,6 +157,8 @@ class AlertManager:
 
     # SMTP default connection timeout (seconds) - hang prevention
     SMTP_DEFAULT_TIMEOUT = 10
+    # Webhook default request timeout (seconds)
+    WEBHOOK_DEFAULT_TIMEOUT = 10
 
     def __init__(
         self,
@@ -155,11 +166,14 @@ class AlertManager:
         event_repository: EventRepository | None = None,
         incident_store: Any | None = None,
         durable_store_status: DurableStoreStatus | None = None,
+        webhook_endpoint_provider: Callable[[], list[WebhookEndpoint]] | None = None,
     ):
         self.config = config
         self.event_repository = event_repository
         self.incident_store = incident_store
         self.durable_store_status = durable_store_status
+        # Webhook endpoint loader (T3 저장소 리더와 공유 전제 — 호출 시점 조회)
+        self._webhook_endpoint_provider = webhook_endpoint_provider
         self.event_count = 0
 
         # Batch processing buffer (Phase 8 M5.2)
@@ -208,6 +222,7 @@ class AlertManager:
         # Notification outbox (Phase 1)
         self._dispatcher = NotificationDispatcher()
         self._dispatcher.register(NotificationChannel.EMAIL, self._send_email_direct)
+        self._dispatcher.register(NotificationChannel.WEBHOOK, self._send_webhook_direct)
         outbox_dir = config.outbox_dir or str(Path(config.log_file).parent / "outbox")
         self._outbox = OutboxWorker(
             outbox_dir=outbox_dir,
@@ -394,27 +409,98 @@ class AlertManager:
 
     def _load_alert_preferences(self) -> dict[str, Any]:
         """Load `config/alert_preferences.yaml` - defaults on failure"""
+        defaults: dict[str, Any] = {
+            "email_alert_level_threshold": "medium",
+            "webhook_alert_level_threshold": "medium",
+            "per_event_email_enabled": {},
+            "per_event_channels": {},
+        }
         prefs_path = Path("./config/alert_preferences.yaml")
         if not prefs_path.exists():
-            return {"email_alert_level_threshold": "medium", "per_event_email_enabled": {}}
+            return dict(defaults)
         try:
             from src.utils.config import ConfigLoader
-            return ConfigLoader.load_yaml(str(prefs_path))
+            loaded = ConfigLoader.load_yaml(str(prefs_path))
+            return loaded if isinstance(loaded, dict) else dict(defaults)
         except Exception:
-            return {"email_alert_level_threshold": "medium", "per_event_email_enabled": {}}
+            return dict(defaults)
+
+    def _event_channels(self, event_type: str) -> list[str] | None:
+        """per_event_channels 매트릭스 조회 — 미등록 타입은 None(기본 허용)."""
+        matrix = self._alert_prefs.get("per_event_channels", {}) or {}
+        if event_type in matrix:
+            return list(matrix[event_type] or [])
+        return None
 
     def _should_send_email(self, event: SafetyEvent) -> bool:
         """Decide whether to email - alert_level threshold + per-event setting"""
         alert_level = getattr(event, "alert_level", "low")
-        # alert_level ordering
-        level_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
         threshold = self._alert_prefs.get("email_alert_level_threshold", "medium")
-        if level_order.get(alert_level, 0) < level_order.get(threshold, 1):
+        if not _alert_level_meets(alert_level, threshold):
             return False
-        # per-event setting
+        # per-event setting (legacy key — False면 매트릭스와 무관하게 차단)
         event_type = getattr(event, "event_type", "")
-        per_event = self._alert_prefs.get("per_event_email_enabled", {})
-        return not (event_type in per_event and not per_event[event_type])
+        per_event = self._alert_prefs.get("per_event_email_enabled", {}) or {}
+        if event_type in per_event and not per_event[event_type]:
+            return False
+        # matrix email mapping (등록된 타입에서 email 누락이면 차단)
+        channels = self._event_channels(event_type)
+        return not (channels is not None and "email" not in channels)
+
+    def _should_send_webhook(self, event: SafetyEvent) -> bool:
+        """Decide whether to webhook - webhook threshold + matrix (webhook 포함)."""
+        alert_level = getattr(event, "alert_level", "low")
+        threshold = self._alert_prefs.get("webhook_alert_level_threshold", "medium") or "medium"
+        if not _alert_level_meets(alert_level, threshold):
+            return False
+        channels = self._event_channels(getattr(event, "event_type", ""))
+        if channels is not None:
+            return "webhook" in channels
+        return True
+
+    def _get_webhook_endpoints(self) -> list[WebhookEndpoint]:
+        """주입된 loader 경유 엔드포인트 목록 — T3 저장소 리더와 공유 전제."""
+        provider = self._webhook_endpoint_provider
+        if provider is None:
+            return []
+        try:
+            return list(provider() or [])
+        except Exception as exc:
+            logger.warning("webhook 엔드포인트 목록 조회 실패: %s", exc)
+            return []
+
+    def _enqueue_webhooks(self, event: SafetyEvent) -> int:
+        """활성 엔드포인트별 webhook attempt를 outbox에 추가 (enqueue 건수 반환).
+
+        미등록·비활성·endpoint 0개면 send_webhook 호출 없이 스킵한다.
+        """
+        if not self._should_send_webhook(event):
+            return 0
+        active = [ep for ep in self._get_webhook_endpoints() if getattr(ep, "enabled", True)]
+        if not active:
+            logger.debug(
+                "webhook 스킵 — 활성 엔드포인트 없음 (event=%s)",
+                getattr(event, "event_id", "?"),
+            )
+            return 0
+        payload = event.to_dict()
+        sent = 0
+        for ep in active:
+            attempt = NotificationAttempt(
+                decision_id=f"{event.event_id}",
+                channel=NotificationChannel.WEBHOOK,
+                recipient=ep.id,
+                idempotency_key=f"webhook_{ep.id}_{event.event_id}",
+                payload=dict(payload),
+            )
+            try:
+                if self._outbox.enqueue(attempt):
+                    sent += 1
+                else:
+                    logger.warning("webhook outbox enqueue 거부: %s", attempt.idempotency_key)
+            except Exception as exc:
+                logger.error("webhook outbox enqueue 실패: %s", exc)
+        return sent
 
     def _build_vlm_plain(self, event: SafetyEvent) -> str:
         """Format VLM analysis for plaintext email."""
@@ -517,12 +603,14 @@ class AlertManager:
             # Immediate mode. Persist provisional delivery before logging its state.
             if event.provisional_alert:
                 durable_accept = self._enqueue_email(event)
+                self._enqueue_webhooks(event)
                 if durable_accept and not event.provisional_sent:
                     event.provisional_sent = True
                     event.provisional_sent_at = datetime.now()
             self._log_event(event)
             if not event.provisional_alert:
                 durable_accept = self._enqueue_email(event)
+                self._enqueue_webhooks(event)
 
         # Cleanup old captures periodically
         self._maybe_cleanup_images()
@@ -612,6 +700,10 @@ class AlertManager:
 
         # Batch email
         self._enqueue_batch_email(events)
+
+        # Batch webhooks (per event, per endpoint)
+        for event in events:
+            self._enqueue_webhooks(event)
 
     def _log_batch(self, events: list[SafetyEvent]) -> None:
         """Batch log events (free-text fields PII/URL masked)."""
@@ -822,6 +914,32 @@ class AlertManager:
         except Exception as e:
             logger.error(f"Outbox email send failed [{attempt.attempt_id}]: {e}")
             return False
+
+    def _send_webhook_direct(self, attempt: NotificationAttempt) -> bool:
+        """OutboxWorker calls this to actually send webhook.
+
+        미등록·비활성 엔드포인트면 send_webhook 호출 없이 스킵한다
+        (T1 리뷰 I-4 — send_webhook의 False 반환에 의존하지 않음).
+        """
+        endpoint: WebhookEndpoint | None = None
+        for ep in self._get_webhook_endpoints():
+            if ep.id == attempt.recipient:
+                endpoint = ep
+                break
+        if endpoint is None:
+            logger.debug("webhook 스킵 — 미등록 엔드포인트: %s", attempt.recipient)
+            return False
+        if not endpoint.enabled:
+            logger.debug("webhook 스킵 — 비활성 엔드포인트: %s", endpoint.id)
+            return False
+        try:
+            ok = send_webhook(attempt, endpoint, self.WEBHOOK_DEFAULT_TIMEOUT)
+        except Exception as exc:
+            logger.error("webhook 발송 오류 [%s]: %s", endpoint.id, exc)
+            return False
+        if ok:
+            logger.info("Outbox webhook sent: %s", attempt.attempt_id)
+        return ok
 
     # ------------------------------------------------------------------
     # Event logging

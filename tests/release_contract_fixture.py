@@ -39,6 +39,7 @@ SOURCE_CONFIG_PATHS = (
     "config/prompts/school.yaml",
     "config/prompts/warehouse.yaml",
     "config/proximity.example.yaml",
+    "config/webhooks.example.yaml",
     "config/zones.example.yaml",
 )
 

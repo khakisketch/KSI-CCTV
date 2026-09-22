@@ -31,6 +31,7 @@ from src.api.routes import commissioning as commissioning_routes
 from src.api.routes import events as events_routes
 from src.api.routes import ops as ops_routes
 from src.api.routes import system as system_routes
+from src.api.routes import webhooks as webhooks_routes
 from src.cameras import (
     CameraRepository,
     CredentialStore,
@@ -229,6 +230,9 @@ def create_app(
     commissioning_routes.register(
         app, auth, build_checker=_build_checker, runtime_event_catalog=_runtime_event_catalog
     )
+
+    # ── 웹훅 엔드포인트 관리(P2-T3 — 신규 경로만 추가, 기존 불변) ──────────
+    webhooks_routes.register(app, auth)
 
     return app
 

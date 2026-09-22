@@ -11,11 +11,13 @@ VLM 검증(U6) 등 명시적 lifecycle이 필요할 때 사용하는 개념 모�
 """
 from __future__ import annotations
 
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from urllib.parse import urlparse
 
 
 class VerificationVerdict(str, Enum):
@@ -190,6 +192,45 @@ class NotificationAttempt:
 
 # 위험도 우선순위 (상태 전이 로직용)
 RISK_PRIORITY = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def validate_webhook_url(url: str) -> str:
+    """Webhook URL 검증 — http/https만 허용, 자격정보 포함 URL 거부."""
+    parsed = urlparse(url or "")
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"허용되지 않은 scheme: {parsed.scheme!r} (http/https만)")
+    if not parsed.hostname:
+        raise ValueError("호스트가 없는 URL은 허용되지 않습니다")
+    if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
+        raise ValueError("자격정보가 포함된 URL은 허용되지 않습니다")
+    return url
+
+
+@dataclass
+class WebhookEndpoint:
+    """Webhook 수신 엔드포인트 — secret은 to_public_dict()에서 마스킹."""
+
+    id: str = field(default_factory=lambda: secrets.token_hex(8))  # hex 16
+    name: str = ""
+    url: str = ""
+    secret: str = ""
+    enabled: bool = True
+    created_at: datetime = field(default_factory=datetime.now)
+    rotated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        validate_webhook_url(self.url)
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "url": self.url,
+            "secret": "***",
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat(),
+            "rotated_at": self.rotated_at.isoformat() if self.rotated_at else None,
+        }
 
 
 def compute_alert_state_from_verdicts(

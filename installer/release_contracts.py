@@ -87,6 +87,7 @@ DEFAULT_CONFIG_PATHS = {
     "defaults/config/prompts/school.yaml",
     "defaults/config/prompts/warehouse.yaml",
     "defaults/config/proximity.example.yaml",
+    "defaults/config/webhooks.example.yaml",
     "defaults/config/zones.example.yaml",
 }
 RUNTIME_PAYLOAD_PATHS = {
