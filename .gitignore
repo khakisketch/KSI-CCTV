@@ -21,6 +21,10 @@ reports/
 # P3 소스 예외 — 루트 산출물 reports/는 계속 무시, src/reports/ 소스만 추적
 !src/reports/
 !src/reports/**
+!frontend/src/app/reports/
+!frontend/src/app/reports/**
+!frontend/src/test/reports/
+!frontend/src/test/reports/**
 cache/
 weights/
 dist/
