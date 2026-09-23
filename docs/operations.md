@@ -404,6 +404,66 @@ cctv.example.internal {
 
 ---
 
+## 정기 보고서 운영 (P3)
+
+기본 비활성이다(`reports.enabled: false`, `models.report_llm.model_name: ""`).
+승인 없이 프로덕션 생성을 켜지 않는다. 활성화·모델 교체는 설정 변경 승인 후에만 수행한다.
+
+### 주기·스케줄 상태
+
+- 주기: `daily`(1일) · `weekly`(1주). `daily_enabled`/`weekly_enabled`로 개별 on/off
+  (둘 다 off면 스케줄러는 inert — 기동하지 않는다).
+- 발화: 백그라운드 daemon 스레드가 60초 간격으로 tick한다. 최초 tick은 즉시 발화한다.
+- 상태 노출: 주기별 `last_run` / `last_success` / `next_run` / `failure_count`.
+  콘솔 `보고서` 페이지의 "보고서 스케줄 상태" 카드와 `GET /api/reports`의 `status`로 확인한다.
+  데몬 미연결 시 `live: false`로 저장소 최신본 기준 추정치를 표시한다
+  (`last_run`·`failure_count`는 인메모리에만 있어 null).
+
+### 보존
+
+- `reports.retention_days` 기본 90일. 저장 성공 시 만료본을 prune한다.
+- 비정상 값(문자열·0 이하)은 기본 90일로 되돌린다 — 1일 과삭제(파괴적) 금지.
+- 저장소: `reports.db_path`(기본 `./data/reports.db`).
+
+### 모델 교체 절차
+
+1. `config/default.yaml`의 `models.report_llm`을 수정한다:
+   `provider: "ollama"` 고정, `model_name` 지정 필수(빈 문자열이면 기동 거부·fail-closed),
+   `base_url`은 loopback/private 리터럴 또는 `localhost`만 허용
+   (기본 `http://127.0.0.1:11434`, DNS 이름 거부 — 재바인딩 간극 방지).
+2. `timeout_sec` 비정상은 clamp된다(기본 60초, 허용 1~300초).
+   0·None·NaN/inf는 무제한 대기(hang) 방지를 위해 기본값으로 되돌린다.
+3. Ollama는 Appliance 내부 loopback만 사용한다. 외부 네트워크 LLM 호출 금지.
+4. 교체 후 데몬 재기동 → 콘솔 스케줄 상태 카드에서 `last_success` 갱신을 확인한다.
+
+### 실패 이월
+
+- LLM 실패(타임아웃·HTTP 오류·빈 응답)는 예외로 호출측에 전달되고 보고서 생성을 건너뛴다.
+  빈 보고서·플레이스홀더·환각 대체 저장을 금지한다.
+- 실패 시 미보고 윈도우(`window_start`)를 유지하고 `failure_count`를 +1,
+  `next_run = now + interval`로 다음 주기에 같은 구간을 재시도한다.
+  성공 시에만 윈도우를 전진시키고 `failure_count`를 0으로 리셋한다.
+- 연속 실패는 콘솔 상태 카드에 "연속 실패 N" 뱃지로 표시된다.
+- 스레드 정지 join은 best-effort(5초 초과 시 경고 후 반환, daemon이므로 프로세스 종료를 막지 않음).
+
+### 다운로드 이원화 (M-4)
+
+- UI Blob 저장: 콘솔 보고서 열람의 "Markdown 다운로드" 버튼은 열람 중인 markdown을
+  브라우저 `Blob(text/markdown)`으로 저장한다(서버 재요청 없음).
+- API 첨부 다운로드: `GET /api/reports/{id}/download`는 동일 markdown을
+  `Content-Disposition: attachment; filename="report-{id}.md"` 첨부로 반환한다.
+  스크립트·외부 보관용은 API 첨부를 사용한다.
+- 조회 3종(`GET /api/reports`, `GET /api/reports/{id}`,
+  `GET /api/reports/{id}/download`)은 읽기 전용이며 감사 로그를 남기지 않는다(기존 GET 관행).
+
+### 비활성 기본·컨텍스트 상한
+
+- 출하 기본은 전체 비활성(`reports.enabled: false`)이다. 승인 없이 켜지 않는다.
+- 컨텍스트 상한: `reports.max_context`(기본 8000, 근사 토큰 예산). 초과 시 버킷 요약부터 축소하고
+  원문 절단은 금지한다(축소 규칙은 테스트로 고정).
+
+---
+
 ## 재설치 / 업데이트
 
 ```bash

@@ -65,6 +65,12 @@ models:
     queue_soft_limit: 8
     queue_hard_limit: 16
     prompt_template: "./config/prompts/construction.yaml"
+  report_llm:
+    # P3 정기 보고서 LLM (T3). 기본 비활성 — model_name 없이는 기동 거부(fail-closed).
+    provider: "ollama"
+    model_name: ""
+    base_url: "http://127.0.0.1:11434"
+    timeout_sec: 60
 
 # 감지 설정
 # target_classes / vlm_trigger_classes는 legacy 경로 전용이다.
@@ -150,6 +156,16 @@ storage:
   # 운영상 분리가 필요하면 KSI_CCTV_EVENTS_DB 또는 events_db로 별도 파일을 지정한다.
   events_db: "./data/observations.db"
   event_retention_days: 30
+
+# P3 정기 보고서 스케줄러 (T3) — 기본 비활성. 승인 없이 프로덕션 생성 금지.
+reports:
+  enabled: false
+  daily_enabled: true
+  weekly_enabled: true
+  retention_days: 90
+  db_path: "./data/reports.db"
+  # 컨텍스트 상한 (근사 토큰 예산, estimator=ceil(len/4) — R7: secret 휴리스틱 회피용 개명, 값·의미 불변).
+  max_context: 8000
 
 # RTSP 설정
 rtsp:

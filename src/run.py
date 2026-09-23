@@ -557,6 +557,26 @@ def main() -> int:
     event_repository = alert_manager.event_repository
     incident_store = alert_manager.incident_store
 
+    # P3-T3: 정기 보고서 스케줄러 기동 (유일 배선 — C-1 교훈: 데몬 경로 실저장소
+    # 주입, tests/test_report_scheduler.py::test_run_wires_scheduler_at_single_site).
+    # 기본 비활성(reports.enabled:false)이면 None을 반환하고 스레드를 만들지 않는다.
+    from src.reports.scheduler import build_report_scheduler
+
+    # P3-T4 R8 I-1: 보고 설정 오류(enabled인데 모델 미지정·비로컬 등)는 탐지
+    # 파이프라인을 죽이지 않는다 — 경고 후 스케줄러 없이 계속(보고만 미생성).
+    try:
+        report_scheduler = build_report_scheduler(
+            config,
+            event_repository=event_repository,
+            observation_store=pipeline.observation_store,
+            incident_store=incident_store,
+        )
+    except ValueError as exc:
+        logger.warning("보고서 스케줄러 비활성 (설정 오류, 탐지는 계속): %s", exc)
+        report_scheduler = None
+    if report_scheduler is not None:
+        report_scheduler.start()
+
     camera_dir = Path(
         os.environ.get(
             "KSI_CCTV_CAMERA_DIR",
@@ -606,6 +626,12 @@ def main() -> int:
                 alert_manager=alert_manager,
                 incident_store=incident_store,
             )
+            # P3-T4 R5: 보고서 스케줄러를 API 상태에 주입 — /api/reports status live 경로.
+            # 비활성(None)이면 유도값(live:false) fallback이 동작한다.
+            api_app.state.report_scheduler = report_scheduler
+            # P3-T4 R6 I-3: 스케줄러의 실 저장소를 공유 — 읽기 GET의 이중 저장소·DB 생성을 막는다.
+            if report_scheduler is not None:
+                api_app.state.report_store = report_scheduler.store
             api_server = uvicorn.Server(
                 uvicorn.Config(api_app, host=health_host, port=health_port, log_level="warning")
             )
@@ -710,6 +736,10 @@ def main() -> int:
     finally:
         _sd_notify("STOPPING=1")
         logger.info("파이프라인 중지 중...")
+        # P3-T3 I-1: 보고서 스케줄러 정지 (비활성이면 None — 조기반환 경로도
+        # finally를 경유하므로 API 실패 시에도 close된다).
+        if report_scheduler is not None:
+            report_scheduler.close()
         _shutdown_runtime(pipeline, alert_manager, api_server, api_thread)
         logger.info("종료 완료.")
     return exit_code

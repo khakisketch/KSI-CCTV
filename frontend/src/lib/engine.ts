@@ -612,3 +612,124 @@ export const getCommissioning = () => engineGet<CommissioningData>("/api/commiss
 export const getPreflight = () => engineGet<PreflightData>("/api/preflight");
 export const getVideoSourceCapabilities = () => engineGet<VideoSourceCapabilities>("/api/video-sources/capabilities");
 export const getCommissioningReport = () => engineGet<Record<string, unknown>>("/api/commissioning/report");
+
+// ── 정기 보고서 조회 (P3-T4, 읽기 전용: 목록·열람 — 다운로드는 열람 markdown의 Blob 저장) ──
+// RBAC는 기존 기본값(/api/* GET → viewer)을 그대로 쓴다 — roles.ts 변경 없음.
+export type ReportPeriod = "daily" | "weekly";
+export interface ReportSummary {
+  id: number;
+  period: ReportPeriod;
+  since: string;
+  until: string;
+  model: string;
+  created_at: string;
+}
+export interface ReportDetail extends ReportSummary {
+  markdown: string;
+}
+export interface ReportPeriodStatus {
+  enabled: boolean;
+  last_run: string | null;
+  last_success: string | null;
+  next_run: string | null;
+  failure_count: number | null;
+}
+export interface ReportsStatus {
+  enabled: boolean;
+  live: boolean;
+  retention_days: number;
+  periods: Record<ReportPeriod, ReportPeriodStatus>;
+}
+export interface ReportsList {
+  count: number;
+  reports: ReportSummary[];
+  status: ReportsStatus | null;
+}
+function isReportPeriod(value: unknown): value is ReportPeriod {
+  return value === "daily" || value === "weekly";
+}
+function isReportSummary(value: unknown): value is ReportSummary {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.id === "number" && Number.isInteger(item.id) && item.id > 0 &&
+    isReportPeriod(item.period) &&
+    typeof item.since === "string" && typeof item.until === "string" &&
+    typeof item.model === "string" && typeof item.created_at === "string";
+}
+function isReportPeriodStatus(value: unknown): value is ReportPeriodStatus {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  const nullableString = (v: unknown) => v === null || v === undefined || typeof v === "string";
+  const nullableCount = (v: unknown) =>
+    v === null || v === undefined || (typeof v === "number" && Number.isInteger(v) && v >= 0);
+  return typeof item.enabled === "boolean" &&
+    nullableString(item.last_run) && nullableString(item.last_success) && nullableString(item.next_run) &&
+    nullableCount(item.failure_count);
+}
+export function parseReportsStatus(value: unknown): ReportsStatus | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const periods = record.periods;
+  if (!periods || typeof periods !== "object") return null;
+  const table = periods as Record<string, unknown>;
+  if (!isReportPeriodStatus(table.daily) || !isReportPeriodStatus(table.weekly)) return null;
+  if (typeof record.enabled !== "boolean" || typeof record.live !== "boolean") return null;
+  if (typeof record.retention_days !== "number") return null;
+  return {
+    enabled: record.enabled,
+    live: record.live,
+    retention_days: record.retention_days,
+    periods: { daily: table.daily, weekly: table.weekly },
+  };
+}
+export function parseReportsList(value: unknown): ReportsList | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.count !== "number" || !Array.isArray(record.reports)) return null;
+  if (!record.reports.every(isReportSummary)) return null;
+  return {
+    count: record.count,
+    reports: record.reports,
+    status: record.status === undefined || record.status === null
+      ? null
+      : parseReportsStatus(record.status),
+  };
+}
+export function parseReportDetail(value: unknown): ReportDetail | null {
+  if (!value || typeof value !== "object") return null;
+  const report = (value as { report?: unknown }).report;
+  if (!isReportSummary(report)) return null;
+  const markdown = (report as unknown as Record<string, unknown>).markdown;
+  if (typeof markdown !== "string") return null;
+  return { ...report, markdown };
+}
+export const REPORTS_LIST_MAX_LIMIT = 200;
+/** 목록 쿼리 문자열 — 비정상 limit(0 이하·NaN 등)은 서버 422→연결오류 오표시를 막기 위해 생략한다 (M-3). */
+export function buildReportsQuery(options: { limit?: number; period?: ReportPeriod } = {}): string {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) {
+    const count = Math.floor(Number(options.limit));
+    if (Number.isFinite(count) && count >= 1) {
+      params.set("limit", String(Math.min(count, REPORTS_LIST_MAX_LIMIT)));
+    }
+  }
+  if (options.period) params.set("period", options.period);
+  return params.size ? `?${params.toString()}` : "";
+}
+export const getReports = async (options: { limit?: number; period?: ReportPeriod } = {}) => {
+  return parseReportsList(await engineGet<unknown>(`/api/reports${buildReportsQuery(options)}`));
+};
+export const getReport = async (reportId: number) => {
+  if (!Number.isInteger(reportId) || reportId <= 0) return null;
+  return parseReportDetail(await engineGet<unknown>(`/api/reports/${reportId}`));
+};
+/** 주기 한글 표기 — 주간/일간 (API period 원형은 유지). */
+export function formatReportPeriod(period: ReportPeriod): string {
+  return period === "daily" ? "일간" : "주간";
+}
+/** 다운로드 파일명 — `report-<id>-<period>-<yyyymmdd>.md` (created_at 파싱 실패 시 날짜 생략). */
+export function reportDownloadFilename(report: Pick<ReportSummary, "id" | "period" | "created_at">): string {
+  const date = /^(\d{4})-(\d{2})-(\d{2})/.exec(report.created_at ?? "");
+  const stamp = date ? `${date[1]}${date[2]}${date[3]}` : "nodate";
+  return `report-${report.id}-${report.period}-${stamp}.md`;
+}

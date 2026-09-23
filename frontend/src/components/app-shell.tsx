@@ -6,6 +6,7 @@ import {
   Camera,
   ClipboardCheck,
   FileCheck2,
+  FileText,
   LayoutDashboard,
   MonitorPlay,
   MoreHorizontal,
@@ -37,6 +38,7 @@ const INSTALLER_NAV = [
   { href: "/events", label: "이벤트 기록", icon: Bell },
   { href: "/diagnostics", label: "진단", icon: ShieldCheck },
   { href: "/handoff", label: "인수인계", icon: FileCheck2 },
+  { href: "/reports", label: "정기 보고서", icon: FileText },
 ];
 const ADMIN_NAV = [
   { href: "/models", label: "모델·프롬프트", icon: Boxes },
@@ -48,7 +50,7 @@ const ADMIN_NAV = [
 const DEFAULT_PRIMARY_NAV = [INSTALLER_NAV[0], INSTALLER_NAV[1], INSTALLER_NAV[2], INSTALLER_NAV[3]];
 const DEFAULT_SECONDARY_NAV = [INSTALLER_NAV[4], INSTALLER_NAV[5], INSTALLER_NAV[6], INSTALLER_NAV[7], ...ADMIN_NAV];
 // R7: operator/viewer는 조회 5항목만 노출(설치 진행·진단·인수인계·모델·감사·설정 숨김).
-const READONLY_HREFS = new Set(["/", "/incidents", "/live", "/cameras", "/events"]);
+const READONLY_HREFS = new Set(["/", "/incidents", "/live", "/cameras", "/events", "/reports"]);
 
 export type ShellRole = "admin" | "operator" | "viewer";
 

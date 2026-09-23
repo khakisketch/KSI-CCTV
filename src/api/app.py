@@ -30,6 +30,7 @@ from src.api.routes import cameras as cameras_routes
 from src.api.routes import commissioning as commissioning_routes
 from src.api.routes import events as events_routes
 from src.api.routes import ops as ops_routes
+from src.api.routes import reports as reports_routes
 from src.api.routes import system as system_routes
 from src.api.routes import webhooks as webhooks_routes
 from src.cameras import (
@@ -233,6 +234,9 @@ def create_app(
 
     # ── 웹훅 엔드포인트 관리(P2-T3 — 신규 경로만 추가, 기존 불변) ──────────
     webhooks_routes.register(app, auth)
+
+    # ── 정기 보고서 조회(P3-T4 — 읽기 전용 3종, 기존 불변) ─────────────────
+    reports_routes.register(app, auth)
 
     return app
 
