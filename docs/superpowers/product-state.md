@@ -1,6 +1,6 @@
 # Product State - KSI-CCTV
 
-Updated: 2026-09-18
+Updated: 2026-09-22
 
 ## Goal
 
@@ -26,15 +26,15 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 
 ## Next slices
 
-- [next] M7-T1 ARM64 CUDA 휠 빌드+GPU 자격 — `scripts/build_onnxruntime_wheel.sh`(이 호스트=DGX Spark GB10; 수 시간·docker) → wheel+`qualification.json`+`manifest.json`
-- [next] M7-T2 VLM 자격 실측 — `scripts/qualify_vlm.py` + 소형/양자화 VL 모델 → `reports/vlm-qualification.json`
+- [done] M7-T1 ARM64 CUDA 휠 빌드+GPU 자격 — `BUILD_EXIT:0`·ninja 1986/1986 (2026-09-20, `dist/onnxruntime/` gitignored; wheel sha `559e0382…`, 3모델 CUDA-only)
+- [done] M7-T2 VLM 자격 실측 — `qwen3-vl:2b-instruct` qualified:true, success 1.0·p95 25.8s≤60s (2026-09-20, `reports/vlm-qualification.json` gitignored)
 - [done] P1 RBAC/다중관리자(관리자·관제원·뷰어) — 구현 완료(R1–R8, 커밋 `47961a0`·`b302ef8`·`e66f9fe`·`a4c2248`·`7b8ef80`·`334aa02`·`16231f4`·`f8189eb`·`1592ad4`; 계획서 `docs/superpowers/plans/2026-09-18-rbac.md`)
-- [proposed] P2 알림 채널 확장(webhook/SMS) — 현재 email(outbox)만; 요구 확인 후 설계
-- [proposed] P3 LLM 보고 — 이벤트/인시던트 데이터는 있으나 보고 서브시스템 없음; 요구 정의 필요
+- [done] P2 Webhook 알림 채널(webhook만, SMS 제외) — Endpoint 레지스트리+매트릭스+HMAC, 커밋 `0296611`, 게이트 1135 통과; 계획서 `docs/superpowers/plans/2026-09-20-p2-webhook.md`
+- [done] P3 정기 LLM 보고 — 데몬 스케줄러+provider 추상화+콘솔, 커밋 `cbb4c81`, 게이트 1217 통과; 계획서 `docs/superpowers/plans/2026-09-22-p3-reports.md`
 - [data/legal] theft/weapons/smoking·production open-vocab — 모델·라이선스·정확도 자격 의존(코드-only 불가)
 
 ## Backlog
 
-- [2026-09-16] VLM `runtime_qualified=false` — qwen3-vl 214s/frame timeout. 자격 하네스 추가됨(`scripts/qualify_vlm.py`); 타깃 실측(소형/양자화 모델) 대기 - source(release-gate) - not blocking
+- [done 2026-09-22] VLM `runtime_qualified=false` — qwen3-vl 214s/frame timeout이었으나 M7-T2에서 `qwen3-vl:2b-instruct` qualified:true로 해소(해석 bounds는 checkpoint 참조). config는 fail-closed 유지 - source(release-gate) - not blocking
 - [2026-09-18] `requestActor` 이중 읽기(TOCTOU) — 비활성 전환 순간 감사 actor가 `system`으로 기록될 수 있음(일시적) - source(review) - not blocking
 - [2026-09-18] 테스트 갭 잔여 — proxy 수준 비활성/삭제 세션 회귀(라우트 강제 매트릭스는 B4로 해소) - source(review) - not blocking
