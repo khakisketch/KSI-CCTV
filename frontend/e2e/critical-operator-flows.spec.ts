@@ -79,7 +79,7 @@ test("saves alert preferences and downloads the support bundle", async ({ page }
   await login(page);
   await page.goto("/settings");
   await page.getByRole("button", { name: "critical" }).click();
-  await page.getByRole("checkbox", { name: /person/ }).uncheck();
+  await page.getByRole("checkbox", { name: "person high", exact: true }).uncheck();
   await page.getByRole("button", { name: "알림 설정 저장" }).click();
   await expect(page.getByText("알림 설정을 저장했습니다 (파이프라인 재시작 후 적용).")).toBeVisible();
 

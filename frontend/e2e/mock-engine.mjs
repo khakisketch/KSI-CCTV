@@ -375,6 +375,14 @@ const server = createServer(async (request, response) => {
     send(response, 200, { available: true, email_configured: false });
     return;
   }
+  if (method === "GET" && pathname === "/api/webhooks") {
+    send(response, 200, { count: 0, endpoints: [] });
+    return;
+  }
+  if (method === "GET" && pathname === "/api/webhooks/channels") {
+    send(response, 200, { channels: {} });
+    return;
+  }
   if (method === "GET" && pathname === "/api/support/bundle") {
     sendBinary(response, 200, Buffer.from("PK\x03\x04e2e-support-bundle"), "application/zip");
     return;

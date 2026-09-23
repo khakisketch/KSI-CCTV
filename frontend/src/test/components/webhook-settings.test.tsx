@@ -360,6 +360,21 @@ describe("WebhookSettings", () => {
     // 미등록 타입은 기본 허용이므로 체크박스가 켜진 상태
     expect(screen.getByRole("checkbox", { name: "fire webhook" })).toBeChecked();
   });
+
+  it("H1: initialEndpoints 비정상 형상(undefined·null)에서도 렌더 유지(빈 목록)", () => {
+    for (const bad of [undefined, null, {} as unknown]) {
+      const { unmount } = render(
+        <WebhookSettings
+          {...BASE_PROPS}
+          initialEndpoints={bad as unknown as WebhookEndpointView[]}
+          actions={makeActions()}
+        />,
+      );
+      expect(screen.getByText("등록된 엔드포인트가 없습니다.")).toBeInTheDocument();
+      expect(screen.getByText("이벤트 × 채널 매트릭스")).toBeInTheDocument();
+      unmount();
+    }
+  });
 });
 
 describe("webhook engine 헬퍼", () => {

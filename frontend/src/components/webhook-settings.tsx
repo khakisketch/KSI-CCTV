@@ -85,7 +85,9 @@ export function WebhookSettings({
   oneTimeTtlMs?: number;
 }) {
   const channelsFailed = initialChannels === null;
-  const [endpoints, setEndpoints] = useState<WebhookEndpointView[]>(initialEndpoints);
+  // H1 가드: /api/webhooks 비정상 형상({}·null·endpoints 부재)에서도 렌더 유지.
+  const safeInitialEndpoints = Array.isArray(initialEndpoints) ? initialEndpoints : [];
+  const [endpoints, setEndpoints] = useState<WebhookEndpointView[]>(safeInitialEndpoints);
   const [channels, setChannels] = useState<Record<string, string[]>>(initialChannels ?? {});
   // 마지막 서버 확정값 — 저장 실패 시 롤백 대상(M5).
   const [savedChannels, setSavedChannels] = useState<Record<string, string[]>>(
