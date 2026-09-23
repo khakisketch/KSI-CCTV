@@ -377,6 +377,56 @@ describe("WebhookSettings", () => {
   });
 });
 
+describe("WebhookSettings D-1~D-4 (Design v1)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("D-1: 이벤트명은 전행 표시( truncate 없음 ) + 컨트롤은 하행 분리", () => {
+    render(
+      <WebhookSettings
+        {...BASE_PROPS}
+        initialChannels={{ fire: ["email", "webhook"] }}
+        actions={makeActions()}
+      />,
+    );
+    const nameEl = screen.getByText("fire");
+    // 전행: truncate 클래스로 잘리면 안 된다
+    expect(nameEl.className).not.toMatch(/truncate/);
+    expect(nameEl.className).toMatch(/break-all/);
+    // 하행: 체크박스 영역이 이름 행과 분리된 하행 컨테이너에 있다
+    const checkbox = screen.getByRole("checkbox", { name: "fire webhook" });
+    const ctl = checkbox.closest("div.flex.flex-wrap") ?? checkbox.parentElement?.parentElement;
+    expect(ctl?.className).toMatch(/border-t/);
+    // 이름 행과 컨트롤 행은 서로 다른 div다
+    expect(nameEl.closest("div")).not.toBe(checkbox.closest("div.flex.flex-wrap"));
+  });
+
+  it("D-2: 0개 상태에서 미등록 배지를 보인다", () => {
+    render(<WebhookSettings {...BASE_PROPS} initialEndpoints={[]} actions={makeActions()} />);
+    expect(screen.getByText("미등록")).toBeInTheDocument();
+    expect(screen.queryByText("0/0 활성")).not.toBeInTheDocument();
+  });
+
+  it("D-3: 도움말은 2행으로 분리된다", () => {
+    render(<WebhookSettings {...BASE_PROPS} actions={makeActions()} />);
+    expect(
+      screen.getByText(/매트릭스에 없는 타입은 기본 허용됩니다/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/이메일 기존 설정에서 끈 타입은 매트릭스와 무관하게 차단됩니다/),
+    ).toBeInTheDocument();
+  });
+
+  it("D-4: 체크박스는 h-5 w-5 + 라벨 간격", () => {
+    render(<WebhookSettings {...BASE_PROPS} actions={makeActions()} />);
+    const checkbox = screen.getByRole("checkbox", { name: "fire webhook" });
+    expect(checkbox.className).toMatch(/h-5/);
+    expect(checkbox.className).toMatch(/w-5/);
+    expect(checkbox.parentElement?.className).toMatch(/gap-1\.5/);
+  });
+});
+
 describe("webhook engine 헬퍼", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

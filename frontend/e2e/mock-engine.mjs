@@ -142,6 +142,89 @@ const auditEntries = [
   },
 ];
 
+// D-5 렌더용 reports fixture — Design v1 C섹션 목표 렌더 + 실 API 계약 형상 준수
+// (목록: {count, reports[], status} · 열람: {report} · 상태는 목록에 포함).
+const mockReportMarkdown7 = `# 일일 안전 요약 (09-22)
+
+## 개요
+- 총 이벤트 14건 (high 3, medium 11)
+- 인시던트 1건 종결, 0건 미결
+
+## 채널별
+- A동 출입구: person 9건
+- 창고 남측: fire 오탐 2건 (민감도 검토 필요)
+
+## 조치 사항
+1. 창고 남측 fire 민감도 하향 검토
+2. B동 카메라 재부팅 스케줄 확인
+
+## 내일 주의
+- 우천 예보: 야외 카메라 오탐 가능
+
+---
+생성: minicpm4.5 · 범위 09-22 00:00~09-23 00:00`;
+
+const mockReportMarkdown6 = `# 주간 안전 요약 (09-15~09-21)
+
+## 개요
+- 총 이벤트 62건 (high 8, medium 54)
+- 인시던트 3건 종결, 0건 미결
+
+## 조치 사항
+1. 주간 오탐 Top 채널 민감도 점검
+
+---
+생성: minicpm4.5 · 범위 09-15 00:00~09-22 00:00`;
+
+const mockReports = [
+  {
+    id: 7,
+    period: "daily",
+    since: "2026-09-22T00:00:00+09:00",
+    until: "2026-09-23T00:00:00+09:00",
+    model: "minicpm4.5",
+    created_at: "2026-09-23T00:05:12+09:00",
+    markdown: mockReportMarkdown7,
+  },
+  {
+    id: 6,
+    period: "weekly",
+    since: "2026-09-15T00:00:00+09:00",
+    until: "2026-09-22T00:00:00+09:00",
+    model: "",
+    created_at: "2026-09-22T00:05:03+09:00",
+    markdown: mockReportMarkdown6,
+  },
+];
+
+const mockReportsStatus = {
+  enabled: true,
+  live: false,
+  retention_days: 90,
+  periods: {
+    daily: {
+      enabled: true,
+      last_run: "2026-09-23T00:05:12+09:00",
+      last_success: "2026-09-23T00:05:12+09:00",
+      next_run: "2026-09-24T00:00:00+09:00",
+      failure_count: 2,
+    },
+    weekly: {
+      enabled: false,
+      last_run: null,
+      last_success: null,
+      next_run: null,
+      failure_count: 0,
+    },
+  },
+};
+
+function mockReportMeta(report) {
+  const meta = { ...report };
+  delete meta.markdown;
+  return meta;
+}
+
 function send(response, status, body) {
   response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
   response.end(JSON.stringify(body));
@@ -381,6 +464,45 @@ const server = createServer(async (request, response) => {
   }
   if (method === "GET" && pathname === "/api/webhooks/channels") {
     send(response, 200, { channels: {} });
+    return;
+  }
+  if (method === "GET" && pathname === "/api/reports") {
+    const period = url.searchParams.get("period");
+    if (period !== null && period !== "daily" && period !== "weekly") {
+      send(response, 400, { detail: "period는 daily/weekly 중 하나여야 합니다." });
+      return;
+    }
+    const filtered = period ? mockReports.filter((r) => r.period === period) : mockReports;
+    send(response, 200, {
+      count: filtered.length,
+      reports: filtered.map(mockReportMeta),
+      status: mockReportsStatus,
+    });
+    return;
+  }
+  if (method === "GET" && /^\/api\/reports\/\d+\/download$/.test(pathname)) {
+    const id = Number(pathname.split("/")[3]);
+    const report = mockReports.find((r) => r.id === id);
+    if (!report) {
+      send(response, 404, { detail: "보고서를 찾을 수 없습니다." });
+      return;
+    }
+    response.writeHead(200, {
+      "Content-Type": "text/markdown; charset=utf-8",
+      "Content-Disposition": `attachment; filename="report-${id}.md"`,
+      "Cache-Control": "no-store",
+    });
+    response.end(report.markdown);
+    return;
+  }
+  if (method === "GET" && /^\/api\/reports\/\d+$/.test(pathname)) {
+    const id = Number(pathname.split("/")[3]);
+    const report = mockReports.find((r) => r.id === id);
+    if (!report) {
+      send(response, 404, { detail: "보고서를 찾을 수 없습니다." });
+      return;
+    }
+    send(response, 200, { report });
     return;
   }
   if (method === "GET" && pathname === "/api/support/bundle") {

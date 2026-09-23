@@ -325,7 +325,7 @@ export function WebhookSettings({
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <p className="text-sm font-medium">Webhook 엔드포인트</p>
-          <Badge variant="secondary">{endpoints.filter((e) => e.enabled).length}/{endpoints.length} 활성</Badge>
+          <Badge variant="secondary">{endpoints.length === 0 ? "미등록" : `${endpoints.filter((e) => e.enabled).length}/${endpoints.length} 활성`}</Badge>
         </div>
         <p className="text-xs text-muted-foreground" style={{ wordBreak: "keep-all" }}>
           secret은 생성·회전 응답에서만 1회 표시되며, 저장 후에는 재조회할 수 없습니다.
@@ -468,11 +468,10 @@ export function WebhookSettings({
           <p className="text-sm font-medium">이벤트 × 채널 매트릭스</p>
           <Badge variant="secondary">{rows.length} 타입</Badge>
         </div>
-        <p className="text-xs text-muted-foreground" style={{ wordBreak: "keep-all" }}>
-          매트릭스에 등록되지 않은 이벤트 타입은 기본 허용됩니다
-          (임계값·활성 엔드포인트 조건 충족 시 발송).
-          이메일은 기존 per-event 설정에서 끈 타입은 매트릭스와 무관하게 차단됩니다.
-        </p>
+        <div className="space-y-1 text-xs text-muted-foreground" style={{ wordBreak: "keep-all" }}>
+          <p>매트릭스에 없는 타입은 기본 허용됩니다 (임계값·활성 엔드포인트 충족 시 발송).</p>
+          <p>이메일 기존 설정에서 끈 타입은 매트릭스와 무관하게 차단됩니다.</p>
+        </div>
         {channelsFailed && (
           <p className="rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive" style={{ wordBreak: "keep-all" }}>
             채널 매트릭스를 불러오지 못했습니다. 새로고침 후 다시 시도하세요 — 복구 전까지 저장은 차단됩니다.
@@ -482,25 +481,29 @@ export function WebhookSettings({
           {rows.map((name) => (
             <div
               key={name}
-              className="flex items-center gap-3 rounded border px-2 py-1.5 text-sm"
+              className="rounded border px-2.5 py-2 text-sm"
               style={{ wordBreak: "keep-all" }}
             >
-              <span className="min-w-0 flex-1 truncate">{name}</span>
-              {levelOf(name) && <Badge variant="outline">{levelOf(name)}</Badge>}
-              {!isListed(name) && <Badge variant="secondary">기본 허용</Badge>}
-              {CHANNELS.map((ch) => (
-                <label key={ch} className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-primary"
-                    aria-label={`${name} ${ch}`}
-                    checked={effective(name).includes(ch)}
-                    disabled={matrixLocked}
-                    onChange={() => toggleChannel(name, ch)}
-                  />
-                  {CHANNEL_LABEL[ch]}
-                </label>
-              ))}
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 font-medium break-all">{name}</span>
+                {levelOf(name) && <Badge variant="outline">{levelOf(name)}</Badge>}
+                {!isListed(name) && <Badge variant="secondary">기본 허용</Badge>}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-3.5 gap-y-1.5 border-t pt-2">
+                {CHANNELS.map((ch) => (
+                  <label key={ch} className="flex min-h-7 items-center gap-1.5 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5 accent-primary"
+                      aria-label={`${name} ${ch}`}
+                      checked={effective(name).includes(ch)}
+                      disabled={matrixLocked}
+                      onChange={() => toggleChannel(name, ch)}
+                    />
+                    {CHANNEL_LABEL[ch]}
+                  </label>
+                ))}
+              </div>
             </div>
           ))}
         </div>

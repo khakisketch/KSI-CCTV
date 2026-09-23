@@ -257,7 +257,7 @@ export default async function SettingsPage() {
             {webhooks && (
               <div className="flex flex-wrap items-center gap-2 border-t pt-2">
                 <Badge variant={webhookActiveCount > 0 ? "success" : "outline"}>
-                  Webhook {webhookActiveCount}/{webhooks.count} 활성
+                  {webhooks.count === 0 ? "Webhook 미등록" : `Webhook ${webhookActiveCount}/${webhooks.count} 활성`}
                 </Badge>
                 <span>대기·전송 중·전달됨·실패 보관 수치는 이메일+Webhook 합산입니다.</span>
               </div>
