@@ -46,6 +46,8 @@ build/
 !.env.example
 cameras.local.json
 config/cameras.local.json
+# 설치 업자가 등록한 카메라 런타임 저장소 — 현장 데이터이므로 커밋하지 않는다.
+config/cameras/
 config/webhooks.yaml
 docker-compose.override.yml
 .vscode/
