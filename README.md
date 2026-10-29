@@ -133,6 +133,7 @@ KSI_CCTV_DEMO=1 bash scripts/run_web.sh   # http://127.0.0.1:3100
 - 전용 포트: 웹 `3100` · 엔진 `8181` · HLS `8910` / RTSP `8954` (env로 override).
 - 데모 모드는 합성 파이프라인·이벤트로 콘솔을 채우고, 랩에 `data/sample.mp4`가 있으면 `cam_001` 라이브로 송출합니다.
 - RTSP 계정·비밀번호는 커밋 금지 — `.env` 또는 현장 보안저장소 사용.
+- **새 컴퓨터에서 이어서 개발한다면 [`docs/development-handoff.md`](docs/development-handoff.md)** 를 먼저 읽으세요. Git에 없는 모델·`.env`·현장 설정을 어떻게 재생성/이전하는지 정리되어 있습니다.
 - 운영 설치는 `docs/offline-appliance.md` (doctor → 서명검증 → activation health → site CA) 절차만 사용.
 - Docker Compose로 띄울 때는 프로젝트 루트 `.env`가 자동 적용됩니다 (compose 변수 치환).
 
@@ -141,7 +142,7 @@ KSI_CCTV_DEMO=1 bash scripts/run_web.sh   # http://127.0.0.1:3100
 
 - 탐지 데몬: `./.venv/bin/python src/run.py` (파이프라인 + 엔진 API)
 - 헬스: `./.venv/bin/python scripts/healthcheck.py --json` → `/health`, `/healthz`, `/health/live`, `/health/ready`
-- 게이트: `python3 -B -m pytest tests/ -p no:cacheprovider`, `cd frontend && npm run build`
+- 게이트: `./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider`, `cd frontend && npm run build`
 - 릴리스 후보: `bash scripts/verify_release_candidate.sh --strict` (`docs/internal-ci.md`)
 - 설정: `config/default.yaml` · `config/cameras.json` · `config/model_profiles.yaml` · `config/event_policies.yaml` · `config/camera_profiles.yaml`
 
@@ -180,7 +181,7 @@ docs/assets/    포트폴리오용 공개 스크린샷 (데모 실실행 캡처)
 | `docs/installer-camera-onboarding.md` | ONVIF/수동 등록·현장 인수 절차 |
 | `docs/offline-appliance.md` | 오프라인 Appliance 설치·업그레이드·롤백 |
 
-**개발·운영용**: `docs/configuration.md` · `docs/operations.md` · `docs/troubleshooting.md` · `docs/deployment-guide.md` · `docs/model-sourcing.md` · `docs/event-policy-engine.md` · `docs/release-gate.md` · `docs/internal-ci.md`
+**개발·운영용**: `docs/development-handoff.md` · `docs/configuration.md` · `docs/operations.md` · `docs/troubleshooting.md` · `docs/deployment-guide.md` · `docs/model-sourcing.md` · `docs/event-policy-engine.md` · `docs/release-gate.md` · `docs/internal-ci.md`
 
 ---
 

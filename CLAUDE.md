@@ -23,9 +23,12 @@ DGX Spark 기반 지능형 CCTV 안전 관제 시스템.
 ## "완료" 게이트 — 모두 통과해야 함
 
 ```bash
-pip install -r requirements-dev.txt        # pytest·ruff·mypy·pip-audit (최초 1회)
-python3 -B -m pytest tests/ -p no:cacheprovider
+./.venv/bin/python -m pip install -r requirements-dev.txt   # pytest·ruff·mypy·pip-audit (최초 1회)
+./.venv/bin/python -B -m pytest tests/ -p no:cacheprovider
 ```
+
+> 반드시 `.venv`를 사용한다. 시스템 `python3`로 돌리면 `cv2` 등 의존성이 없어
+> collection 단계에서 `NameError`로 실패한다. 새 컴퓨터 셋업은 `docs/development-handoff.md`.
 
 > `-B -p no:cacheprovider`를 붙여라. 그냥 `pytest`로 돌리면 `src/**/__pycache__`가 생기고,
 > 릴리스 게이트가 "production Docker context에 ignored 파일이 있다"며 실행 전에 차단된다.

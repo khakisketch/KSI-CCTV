@@ -1,10 +1,12 @@
 # Product State - KSI-CCTV
 
-Updated: 2026-09-22
+Updated: 2026-10-29
 
 ## Goal
 
 DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장비 미착용·화재/연기·침입/배회를 감지·알림하는 설치형 AI 안전관리 솔루션. `config/*`(camera_profiles·event_policies·model_profiles)로 현장별 커스터마이징하고, Next.js 단일 웹 콘솔로 운영한다.
+
+> 새 컴퓨터에서 이어서 개발: `docs/development-handoff.md`
 
 ## Milestones
 
@@ -23,6 +25,11 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 - Name: M7 출고 증거 — 소프트웨어 게이트 완료, 하드웨어·법률 증거 대기
 - Acceptance (user-visible end-to-end): (1) strict release gate가 클린 커밋에서 통과 — 달성(코드 리비전 `459943b`, attestation `passed:true`·`strict:true`, evidence `reports/release-candidate/` on-disk) (2) DGX Spark ARM64 실측(CUDA provider·실 RTSP/HLS·전원/복구·채널별 soak) — 휠·VLM 자격 완료, 실카메라 soak 대기 (3) 법률 승인·4-image 서명 provenance
 - Plan ledger: `docs/superpowers/plans/2026-09-13-ksi-code-hardening.md`
+
+## Verification
+
+- 2026-10-29 로컬 재검증 (코드 HEAD `6edc92a` + 인계 문서): `pytest 1217 passed / 5 skipped`, `vitest 351 passed`, `eslint`·`next build` 통과.
+- 마지막 strict gate attestation: `459943b` (2026-09-23, `passed:true`·`strict:true`·`clean_tree:true`). 이후 `a89ef2d` 프론트 변경이 있으므로 출고 전 재실행이 필요하다.
 
 ## Next slices
 

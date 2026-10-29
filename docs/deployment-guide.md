@@ -61,16 +61,16 @@ nano .env
 
 ```bash
 # 기본 YOLO 모델 다운로드 (없는 경우)
-python scripts/prepare_yolo26.py --model yolo26n.pt
+./.venv/bin/python scripts/prepare_yolo26.py --model yolo26n.pt --device cpu
 
 # 사전학습 안전 모델 다운로드 (선택)
-python scripts/fetch_safety_models.py --all
+./.venv/bin/python scripts/fetch_safety_models.py --all
 ```
 
 ### 4. 상태 확인
 
 ```bash
-python scripts/healthcheck.py --json
+./.venv/bin/python scripts/healthcheck.py --json
 ```
 
 ### 5. 실행
