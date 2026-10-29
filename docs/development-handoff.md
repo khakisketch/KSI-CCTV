@@ -15,7 +15,9 @@
 - **코드/문서 상태**: 작업 트리 clean, `master`가 `origin/master`와 동일. 미푸시 커밋 없음.
 - **2026-10-29 로컬 기준선**:
   - Python: `1217 passed, 5 skipped` (`pytest`, 49 subtests)
+  - `bash scripts/test.sh`: ruff lint·coverage(86.53%)·mypy 차단/점검 통과
   - Frontend: `vitest 351 passed` (63 files), `eslint` 통과, `next build` 통과
+  - 정책 모드 E2E: `scripts/e2e_smoke_test.py --policy-mode` exit 0
   - 실행 환경: Python 3.12.3 · Node 24.19.0 · npm 11.17.0 · Docker 29.6.2
 - **출고 상태**: M7 진행 중. 소프트웨어 strict gate는 코드 리비전 `459943b`(2026-09-23)에서
   `passed:true`·`strict:true`·`clean_tree:true`로 통과했다. 이후 `a89ef2d`(웹훅 UX)와 문서 커밋이

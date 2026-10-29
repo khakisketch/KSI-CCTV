@@ -28,7 +28,7 @@ DGX Spark ARM64 오프라인 Appliance에서 CCTV 영상을 분석해 안전장�
 
 ## Verification
 
-- 2026-10-29 로컬 재검증 (코드 HEAD `6edc92a` + 인계 문서): `pytest 1217 passed / 5 skipped`, `vitest 351 passed`, `eslint`·`next build` 통과.
+- 2026-10-29 로컬 재검증 (코드 HEAD `6edc92a` + 인계 문서): `pytest 1217 passed / 5 skipped`, `vitest 351 passed`, `eslint`·`next build` 통과. `scripts/test.sh`(ruff·coverage 86.53%·mypy)와 `e2e_smoke_test.py --policy-mode`(exit 0)도 통과.
 - 마지막 strict gate attestation: `459943b` (2026-09-23, `passed:true`·`strict:true`·`clean_tree:true`). 이후 `a89ef2d` 프론트 변경이 있으므로 출고 전 재실행이 필요하다.
 
 ## Next slices
